@@ -1,48 +1,87 @@
 import streamlit as st
 
+# ==================================================
+# PAGE CONFIG
+# ==================================================
 st.set_page_config(
-    page_title="Bayut Competitor Multi-Agent System",
+    page_title="Bayut AI Competitor Analysis",
     layout="wide"
 )
 
-st.title("Bayut Competitor Multi-Agent System")
-st.caption("SEO & editorial analysis against the market standard")
+# ==================================================
+# GLOBAL STYLES
+# ==================================================
+st.markdown(
+    """
+    <style>
+    .center {
+        text-align: center;
+    }
+    .mode-btn button {
+        width: 100%;
+        height: 60px;
+        font-size: 18px;
+        font-weight: 600;
+        border-radius: 14px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+# ==================================================
+# HEADER
+# ==================================================
+st.markdown("<h1 class='center'>Bayut AI Competitor Analysis</h1>", unsafe_allow_html=True)
+st.markdown(
+    "<p class='center'>SEO & editorial analysis against the market standard</p>",
+    unsafe_allow_html=True
+)
 
 st.divider()
 
 # ==================================================
-# SESSION STATE INIT
+# SESSION STATE
 # ==================================================
+if "mode" not in st.session_state:
+    st.session_state.mode = None
+
 if "competitor_urls" not in st.session_state:
     st.session_state.competitor_urls = []
 
 # ==================================================
-# MODE SELECTION
+# MODE SELECTION (CENTERED BUTTONS)
 # ==================================================
-st.subheader("Select tool")
+st.markdown("<h3 class='center'>Choose your mode</h3>", unsafe_allow_html=True)
 
-mode = st.radio(
-    "What do you want to do?",
-    [
-        "Update existing Bayut article",
-        "Plan a new article (title only)"
-    ]
-)
+col1, col2, col3, col4 = st.columns([1, 2, 2, 1])
+
+with col2:
+    st.markdown("<div class='mode-btn'>", unsafe_allow_html=True)
+    if st.button("🛠 Update Mode"):
+        st.session_state.mode = "update"
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with col3:
+    st.markdown("<div class='mode-btn'>", unsafe_allow_html=True)
+    if st.button("🆕 New Post Mode"):
+        st.session_state.mode = "new"
+    st.markdown("</div>", unsafe_allow_html=True)
 
 st.divider()
 
 # ==================================================
 # MODE-SPECIFIC INPUTS
 # ==================================================
-if mode == "Update existing Bayut article":
-    st.subheader("Update published article")
+if st.session_state.mode == "update":
+    st.subheader("Update existing Bayut article")
 
     bayut_url = st.text_input(
         "Bayut article URL",
         placeholder="https://www.bayut.com/mybayut/..."
     )
 
-else:
+elif st.session_state.mode == "new":
     st.subheader("Plan new article from title")
 
     article_title = st.text_input(
@@ -50,11 +89,14 @@ else:
         placeholder="Pros and Cons of Living in Business Bay"
     )
 
-st.divider()
+else:
+    st.info("Please choose a mode to continue.")
+    st.stop()
 
 # ==================================================
-# COMPETITOR INPUT (DYNAMIC)
+# COMPETITOR INPUT
 # ==================================================
+st.divider()
 st.subheader("Competitors")
 
 new_competitor = st.text_input(
@@ -62,18 +104,17 @@ new_competitor = st.text_input(
     placeholder="https://example.com/blog/..."
 )
 
-col1, col2 = st.columns([1, 5])
+col_a, col_b = st.columns([1, 4])
 
-with col1:
-    if st.button("➕ Add"):
+with col_a:
+    if st.button("➕ Add competitor"):
         if new_competitor:
             st.session_state.competitor_urls.append(new_competitor)
 
-with col2:
-    if st.button("🧹 Clear all"):
+with col_b:
+    if st.button("🧹 Clear competitors"):
         st.session_state.competitor_urls = []
 
-# Show current competitors
 if st.session_state.competitor_urls:
     st.markdown("**Current competitors:**")
     for i, url in enumerate(st.session_state.competitor_urls, start=1):
@@ -81,17 +122,16 @@ if st.session_state.competitor_urls:
 else:
     st.info("No competitors added yet")
 
+# ==================================================
+# DEBUG (TEMP)
+# ==================================================
 st.divider()
-
-# ==================================================
-# DEBUG OUTPUT (TEMPORARY)
-# ==================================================
 if st.button("Run analysis"):
-    st.subheader("Debug – Current inputs")
+    st.subheader("Debug – Inputs")
 
-    st.write("Mode:", mode)
+    st.write("Mode:", st.session_state.mode)
 
-    if mode == "Update existing Bayut article":
+    if st.session_state.mode == "update":
         st.write("Bayut URL:")
         st.code(bayut_url or "❌ Not provided")
     else:
@@ -99,8 +139,5 @@ if st.button("Run analysis"):
         st.code(article_title or "❌ Not provided")
 
     st.write("Competitors:")
-    if st.session_state.competitor_urls:
-        for u in st.session_state.competitor_urls:
-            st.code(u)
-    else:
-        st.write("❌ No competitors provided")
+    for u in st.session_state.competitor_urls:
+        st.code(u)
