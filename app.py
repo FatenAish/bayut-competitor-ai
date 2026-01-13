@@ -2,52 +2,94 @@ import streamlit as st
 import requests
 import re
 from bs4 import BeautifulSoup
-from collections import Counter
 
 # =========================
 # PAGE CONFIG
 # =========================
-st.set_page_config(page_title="Bayut Content Gap Analyzer", layout="wide")
+st.set_page_config(page_title="Bayut Dynamic Content Gap Analyzer", layout="wide")
 
 # =========================
-# INGESTION
+# INGESTION (SAFE)
 # =========================
 IGNORE = {"nav","footer","header","aside","script","style"}
 
-def clean(t):
-    return re.sub(r"\s+", " ", t or "").strip()
+def clean(text):
+    return re.sub(r"\s+", " ", text or "").strip()
 
-def fetch_text(url):
-    r = requests.get(url, headers={"User-Agent":"Mozilla/5.0"}, timeout=20)
-    r.raise_for_status()
-    soup = BeautifulSoup(r.text, "lxml")
-    for t in soup.find_all(list(IGNORE)):
-        t.decompose()
-    article = soup.find("article")
-    text = article.get_text(" ") if article else soup.get_text(" ")
-    return clean(text)
+def fetch_text_safe(url):
+    try:
+        r = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=20
+        )
+
+        if r.status_code != 200:
+            return {
+                "url": url,
+                "ok": False,
+                "error": f"HTTP {r.status_code}",
+                "text": ""
+            }
+
+        soup = BeautifulSoup(r.text, "lxml")
+        for t in soup.find_all(list(IGNORE)):
+            t.decompose()
+
+        article = soup.find("article")
+        text = article.get_text(" ") if article else soup.get_text(" ")
+        text = clean(text)
+
+        if len(text) < 300:
+            return {
+                "url": url,
+                "ok": False,
+                "error": "Content too short / blocked",
+                "text": ""
+            }
+
+        return {
+            "url": url,
+            "ok": True,
+            "error": None,
+            "text": text
+        }
+
+    except Exception as e:
+        return {
+            "url": url,
+            "ok": False,
+            "error": str(e),
+            "text": ""
+        }
 
 def split_sentences(text):
-    return [s.strip() for s in re.split(r"[.!?]", text) if len(s.strip()) > 40]
+    return [
+        s.strip()
+        for s in re.split(r"[.!?]", text)
+        if len(s.strip()) > 40
+    ]
 
 # =========================
-# SEMANTIC NORMALIZATION
+# SIMPLE SEMANTIC MATCHING
 # =========================
-def normalize_sentence(s):
+def normalize(s):
     s = s.lower()
     s = re.sub(r"[^a-z0-9\s]", "", s)
     return s
 
-def similar(a, b):
+def similarity(a, b):
     a_set = set(a.split())
     b_set = set(b.split())
-    return len(a_set & b_set) / max(len(a_set), 1)
+    if not a_set or not b_set:
+        return 0
+    return len(a_set & b_set) / max(len(a_set), len(b_set))
 
 # =========================
 # UI
 # =========================
 st.title("Bayut Dynamic Content Gap Analysis")
-st.caption("Competitor-driven content gaps (no fixed checklist)")
+st.caption("Competitor-driven content gaps (robust & editor-ready)")
 
 bayut_url = st.text_input("Bayut article URL")
 
@@ -57,32 +99,59 @@ competitors = st.text_area(
 ).splitlines()
 
 if st.button("Run content gap analysis"):
-    if not bayut_url or len([c for c in competitors if c.strip()]) == 0:
+    if not bayut_url or not any(c.strip() for c in competitors):
         st.error("Bayut URL and at least one competitor are required.")
         st.stop()
 
-    with st.spinner("Analyzing competitor-driven content gaps..."):
-        bayut_text = fetch_text(bayut_url)
-        bayut_sents = [normalize_sentence(s) for s in split_sentences(bayut_text)]
+    with st.spinner("Fetching content safely..."):
+        bayut = fetch_text_safe(bayut_url)
 
-        competitor_sentences = []
+        if not bayut["ok"]:
+            st.error(f"Bayut URL failed: {bayut['error']}")
+            st.stop()
 
+        bayut_sentences = [
+            normalize(s)
+            for s in split_sentences(bayut["text"])
+        ]
+
+        competitor_results = []
         for url in competitors:
             if not url.strip():
                 continue
-            text = fetch_text(url)
-            sents = split_sentences(text)
-            competitor_sentences.extend(sents)
+            competitor_results.append(fetch_text_safe(url))
 
-        # Normalize competitor ideas
-        normalized = [normalize_sentence(s) for s in competitor_sentences]
+    # Show fetch status
+    st.subheader("Fetch status")
+    for c in competitor_results:
+        if c["ok"]:
+            st.success(f"✔ {c['url']}")
+        else:
+            st.warning(f"⚠ {c['url']} — {c['error']}")
 
-        # Cluster similar competitor ideas
+    valid_competitors = [c for c in competitor_results if c["ok"]]
+
+    if not valid_competitors:
+        st.error("No competitor content could be fetched. Try different URLs.")
+        st.stop()
+
+    # =========================
+    # GAP ANALYSIS
+    # =========================
+    with st.spinner("Detecting competitor-driven gaps..."):
+        competitor_sentences = []
+        for c in valid_competitors:
+            competitor_sentences.extend(
+                split_sentences(c["text"])
+            )
+
+        normalized_comp = [normalize(s) for s in competitor_sentences]
+
         clusters = []
-        for s in normalized:
+        for s in normalized_comp:
             placed = False
             for c in clusters:
-                if similar(s, c[0]) > 0.5:
+                if similarity(s, c[0]) > 0.55:
                     c.append(s)
                     placed = True
                     break
@@ -90,28 +159,31 @@ if st.button("Run content gap analysis"):
                 clusters.append([s])
 
         rows = []
-
         for cluster in clusters:
             idea = cluster[0]
-            covered = False
+
+            found = False
             weak = False
 
-            for b in bayut_sents:
-                sim = similar(idea, b)
-                if sim > 0.6:
-                    covered = True
+            for b in bayut_sentences:
+                sim = similarity(idea, b)
+                if sim > 0.65:
+                    found = True
                     break
-                elif sim > 0.3:
+                elif sim > 0.35:
                     weak = True
 
-            if not covered:
+            if not found:
                 rows.append({
                     "Competitor Topic": idea[:120] + "...",
-                    "Found in Bayut": "⚠️ Weak" if weak else "❌ No",
-                    "Gap Type": "Expand" if weak else "Missing",
-                    "What Bayut Should Add": "Add a clear paragraph covering this point"
+                    "Bayut Coverage": "⚠️ Weak" if weak else "❌ Missing",
+                    "Gap Type": "Expand" if weak else "Add",
+                    "What to Add": "Add a clear paragraph addressing this point"
                 })
 
+    # =========================
+    # OUTPUT
+    # =========================
     if not rows:
         st.success("No competitor-driven content gaps detected.")
     else:
