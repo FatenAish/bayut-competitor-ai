@@ -26,8 +26,7 @@ if "competitor_urls" not in st.session_state:
 IGNORE_TAGS = {"nav", "footer", "header", "aside", "form", "noscript", "script", "style"}
 
 def _clean_text(s: str) -> str:
-    s = re.sub(r"\s+", " ", (s or "")).strip()
-    return s
+    return re.sub(r"\s+", " ", (s or "")).strip()
 
 def extract_main_text(html: str) -> str:
     soup = BeautifulSoup(html, "lxml")
@@ -36,11 +35,7 @@ def extract_main_text(html: str) -> str:
         tag.decompose()
 
     article = soup.find("article")
-    if article:
-        text = article.get_text(" ")
-    else:
-        text = soup.get_text(" ")
-
+    text = article.get_text(" ") if article else soup.get_text(" ")
     return _clean_text(text)
 
 @st.cache_data(show_spinner=False, ttl=60 * 60)
@@ -67,8 +62,7 @@ def ingest_url(url: str) -> dict:
     }
 
 def normalize_competitors(urls: list[str], max_n: int = 5) -> list[str]:
-    clean = []
-    seen = set()
+    clean, seen = [], set()
     for u in urls:
         u = (u or "").strip()
         if not u or u in seen:
@@ -76,6 +70,59 @@ def normalize_competitors(urls: list[str], max_n: int = 5) -> list[str]:
         seen.add(u)
         clean.append(u)
     return clean[:max_n]
+
+# ==================================================
+# SEO COMPLIANCE AGENT
+# ==================================================
+def seo_compliance_check(text: str, title: str | None = None) -> dict:
+    text_lower = text.lower()
+    checks = {}
+
+    # Rule 1: Minimum length
+    checks["min_length"] = {
+        "passed": len(text) >= 1200,
+        "value": len(text),
+        "required": 1200
+    }
+
+    # Rule 2: Headings / structure signals
+    checks["has_sections"] = {
+        "passed": any(k in text_lower for k in [
+            "pros", "cons", "overview", "price", "prices",
+            "cost", "transport", "metro", "family"
+        ])
+    }
+
+    # Rule 3: Keyword coverage (from title)
+    if title:
+        terms = [w.lower() for w in title.split() if len(w) > 3]
+        hits = sum(1 for w in terms if w in text_lower)
+        checks["keyword_coverage"] = {
+            "passed": hits >= max(2, len(terms) // 3),
+            "hits": hits,
+            "terms": terms
+        }
+
+    # Rule 4: Lists / scannability
+    checks["uses_lists"] = {
+        "passed": any(sym in text for sym in ["•", "-", "–"])
+    }
+
+    # Rule 5: Question answering
+    checks["answers_questions"] = {
+        "passed": "?" in text
+    }
+
+    passed = sum(1 for c in checks.values() if c["passed"])
+    total = len(checks)
+    score = round((passed / total) * 10, 1)
+
+    return {
+        "score": score,
+        "passed": passed,
+        "total": total,
+        "checks": checks
+    }
 
 # ==================================================
 # HEADER
@@ -150,12 +197,12 @@ else:
     st.info("No competitors added yet")
 
 # ==================================================
-# RUN ANALYSIS — INGESTION
+# RUN ANALYSIS
 # ==================================================
 st.markdown("---")
 
 if st.button("Run analysis"):
-    competitor_urls = normalize_competitors(st.session_state.competitor_urls, max_n=5)
+    competitor_urls = normalize_competitors(st.session_state.competitor_urls)
 
     if st.session_state.mode == "update":
         if not bayut_url or not bayut_url.strip():
@@ -169,17 +216,11 @@ if st.button("Run analysis"):
     results = {"mode": st.session_state.mode}
 
     with st.spinner("Fetching & cleaning content..."):
-        # Bayut (update mode)
         if st.session_state.mode == "update":
-            try:
-                results["bayut"] = ingest_url(bayut_url.strip())
-            except Exception as e:
-                st.error(f"Failed to fetch Bayut article: {e}")
-                st.stop()
+            results["bayut"] = ingest_url(bayut_url.strip())
         else:
             results["title"] = (article_title or "").strip()
 
-        # Competitors
         comps = []
         for i, url in enumerate(competitor_urls, start=1):
             try:
@@ -198,7 +239,7 @@ if st.button("Run analysis"):
         results["competitors"] = comps
 
     # ==================================================
-    # OUTPUT — DEBUG VIEW
+    # OUTPUT — INGESTION
     # ==================================================
     st.success("Ingestion complete ✅")
 
@@ -218,3 +259,27 @@ if st.button("Run analysis"):
         else:
             st.write("Text length:", c["text_len"])
             st.text_area(f"Preview ({c['id']})", c["preview"], height=180)
+
+    # ==================================================
+    # OUTPUT — SEO COMPLIANCE
+    # ==================================================
+    st.markdown("---")
+    st.subheader("SEO Compliance Results")
+
+    if results["mode"] == "update":
+        bayut_seo = seo_compliance_check(results["bayut"]["text"])
+        st.markdown("### Bayut SEO Score")
+        st.metric("Score (out of 10)", bayut_seo["score"])
+        with st.expander("Bayut SEO checks"):
+            st.json(bayut_seo["checks"])
+
+    st.markdown("### Competitor SEO Scores")
+    for c in results["competitors"]:
+        if c.get("error"):
+            continue
+        comp_seo = seo_compliance_check(
+            c["text"],
+            title=results.get("title")
+        )
+        st.markdown(f"**{c['id']}** — {c['url']}")
+        st.metric("Score (out of 10)", comp_seo["score"])
