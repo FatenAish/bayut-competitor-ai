@@ -2,6 +2,7 @@ import streamlit as st
 import re
 import requests
 from bs4 import BeautifulSoup
+from collections import Counter
 
 # ==================================================
 # PAGE CONFIG
@@ -21,33 +22,27 @@ if "competitor_urls" not in st.session_state:
     st.session_state.competitor_urls = []
 
 # ==================================================
-# INGESTION HELPERS
+# INGESTION AGENT
 # ==================================================
 IGNORE_TAGS = {"nav", "footer", "header", "aside", "form", "noscript", "script", "style"}
 
-def _clean_text(s: str) -> str:
+def clean_text(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "")).strip()
 
 def extract_main_text(html: str) -> str:
     soup = BeautifulSoup(html, "lxml")
-
     for tag in soup.find_all(list(IGNORE_TAGS)):
         tag.decompose()
-
     article = soup.find("article")
     text = article.get_text(" ") if article else soup.get_text(" ")
-    return _clean_text(text)
+    return clean_text(text)
 
-@st.cache_data(show_spinner=False, ttl=60 * 60)
-def fetch_html(url: str, timeout: int = 25) -> str:
+@st.cache_data(show_spinner=False, ttl=3600)
+def fetch_html(url: str) -> str:
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0 Safari/537.36"
-        )
+        "User-Agent": "Mozilla/5.0 Chrome/120.0"
     }
-    r = requests.get(url, headers=headers, timeout=timeout)
+    r = requests.get(url, headers=headers, timeout=25)
     r.raise_for_status()
     return r.text
 
@@ -57,75 +52,91 @@ def ingest_url(url: str) -> dict:
     return {
         "url": url,
         "text": text,
-        "text_len": len(text),
-        "preview": text[:700] + ("..." if len(text) > 700 else "")
+        "length": len(text)
     }
 
-def normalize_competitors(urls: list[str], max_n: int = 5) -> list[str]:
-    clean, seen = [], set()
+def normalize_competitors(urls, max_n=5):
+    seen, out = set(), []
     for u in urls:
         u = (u or "").strip()
-        if not u or u in seen:
-            continue
-        seen.add(u)
-        clean.append(u)
-    return clean[:max_n]
+        if u and u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out[:max_n]
+
+# ==================================================
+# INTENT & SECTION SIGNAL AGENT
+# ==================================================
+INTENT_KEYWORDS = {
+    "overview": ["overview", "about", "introduction"],
+    "pros": ["pros", "advantages", "benefits"],
+    "cons": ["cons", "disadvantages", "drawbacks"],
+    "pricing": ["price", "prices", "cost", "rent"],
+    "transport": ["transport", "metro", "bus", "connectivity"],
+    "family": ["family", "families", "schools", "nursery"],
+    "lifestyle": ["lifestyle", "restaurants", "cafes", "shopping"]
+}
+
+def detect_intents(text: str) -> set:
+    t = text.lower()
+    intents = set()
+    for intent, keywords in INTENT_KEYWORDS.items():
+        if any(k in t for k in keywords):
+            intents.add(intent)
+    return intents
+
+# ==================================================
+# COMPETITOR NORMALIZER AGENT
+# ==================================================
+def build_market_baseline(competitor_intents: list[set]) -> dict:
+    counter = Counter()
+    for intents in competitor_intents:
+        counter.update(intents)
+    return dict(counter)
+
+# ==================================================
+# GAP DETECTION AGENT
+# ==================================================
+def detect_gaps(bayut_intents: set, market_baseline: dict, competitor_count: int):
+    critical, optional = [], []
+
+    for intent, freq in market_baseline.items():
+        coverage_ratio = freq / competitor_count
+        if intent not in bayut_intents:
+            if coverage_ratio >= 0.6:
+                critical.append((intent, freq))
+            elif coverage_ratio >= 0.3:
+                optional.append((intent, freq))
+
+    return {
+        "critical": critical,
+        "optional": optional
+    }
 
 # ==================================================
 # SEO COMPLIANCE AGENT
 # ==================================================
-def seo_compliance_check(text: str, title: str | None = None) -> dict:
-    text_lower = text.lower()
+def seo_compliance(text: str, title: str | None = None) -> dict:
     checks = {}
 
-    # Rule 1: Minimum length
-    checks["min_length"] = {
-        "passed": len(text) >= 1200,
-        "value": len(text),
-        "required": 1200
-    }
+    checks["min_length"] = len(text) >= 1200
+    checks["has_sections"] = any(k in text.lower() for k in [
+        "pros", "cons", "price", "transport", "family"
+    ])
+    checks["uses_lists"] = any(sym in text for sym in ["•", "-", "–"])
+    checks["answers_questions"] = "?" in text
 
-    # Rule 2: Headings / structure signals
-    checks["has_sections"] = {
-        "passed": any(k in text_lower for k in [
-            "pros", "cons", "overview", "price", "prices",
-            "cost", "transport", "metro", "family"
-        ])
-    }
-
-    # Rule 3: Keyword coverage (from title)
     if title:
         terms = [w.lower() for w in title.split() if len(w) > 3]
-        hits = sum(1 for w in terms if w in text_lower)
-        checks["keyword_coverage"] = {
-            "passed": hits >= max(2, len(terms) // 3),
-            "hits": hits,
-            "terms": terms
-        }
+        hits = sum(1 for w in terms if w in text.lower())
+        checks["keyword_coverage"] = hits >= max(2, len(terms)//3)
 
-    # Rule 4: Lists / scannability
-    checks["uses_lists"] = {
-        "passed": any(sym in text for sym in ["•", "-", "–"])
-    }
+    score = round((sum(checks.values()) / len(checks)) * 10, 1)
 
-    # Rule 5: Question answering
-    checks["answers_questions"] = {
-        "passed": "?" in text
-    }
-
-    passed = sum(1 for c in checks.values() if c["passed"])
-    total = len(checks)
-    score = round((passed / total) * 10, 1)
-
-    return {
-        "score": score,
-        "passed": passed,
-        "total": total,
-        "checks": checks
-    }
+    return {"score": score, "checks": checks}
 
 # ==================================================
-# HEADER
+# UI — HEADER
 # ==================================================
 st.markdown("<h1 style='text-align:center;'>Bayut AI Competitor Analysis</h1>", unsafe_allow_html=True)
 st.markdown(
@@ -138,13 +149,11 @@ st.markdown(
 # ==================================================
 st.markdown("<h3 style='text-align:center;'>Choose your mode</h3>", unsafe_allow_html=True)
 
-col1, col2, col3 = st.columns([3, 2, 2])
-
-with col2:
+c1, c2, c3 = st.columns([3, 2, 2])
+with c2:
     if st.button("✏️ Update Mode"):
         st.session_state.mode = "update"
-
-with col3:
+with c3:
     if st.button("🆕 New Post Mode"):
         st.session_state.mode = "new"
 
@@ -157,129 +166,74 @@ if st.session_state.mode is None:
 st.markdown("---")
 
 if st.session_state.mode == "update":
-    st.subheader("Update existing Bayut article")
-    bayut_url = st.text_input(
-        "Bayut article URL",
-        placeholder="https://www.bayut.com/mybayut/..."
-    )
+    bayut_url = st.text_input("Bayut article URL")
 else:
-    st.subheader("Plan a new article")
-    article_title = st.text_input(
-        "Article title",
-        placeholder="Pros and Cons of Living in Business Bay"
-    )
+    article_title = st.text_input("Article title")
 
 # ==================================================
-# COMPETITORS
+# COMPETITORS INPUT
 # ==================================================
-st.subheader("Competitors")
-
-new_competitor = st.text_input(
-    "Add competitor URL",
-    placeholder="https://example.com/blog/..."
-)
+new_comp = st.text_input("Add competitor URL")
 
 col_a, col_b = st.columns([1, 3])
-
 with col_a:
-    if st.button("➕ Add competitor"):
-        if new_competitor:
-            st.session_state.competitor_urls.append(new_competitor)
-
+    if st.button("Add competitor") and new_comp:
+        st.session_state.competitor_urls.append(new_comp)
 with col_b:
-    if st.button("🧹 Clear competitors"):
+    if st.button("Clear competitors"):
         st.session_state.competitor_urls = []
 
-if st.session_state.competitor_urls:
-    for i, url in enumerate(st.session_state.competitor_urls, start=1):
-        st.write(f"{i}. {url}")
-else:
-    st.info("No competitors added yet")
+for i, u in enumerate(st.session_state.competitor_urls, 1):
+    st.write(f"{i}. {u}")
 
 # ==================================================
-# RUN ANALYSIS
+# RUN ORCHESTRATOR
 # ==================================================
-st.markdown("---")
-
 if st.button("Run analysis"):
-    competitor_urls = normalize_competitors(st.session_state.competitor_urls)
+    competitors = normalize_competitors(st.session_state.competitor_urls)
 
-    if st.session_state.mode == "update":
-        if not bayut_url or not bayut_url.strip():
-            st.error("Please provide the Bayut article URL.")
-            st.stop()
-
-    if not competitor_urls:
-        st.error("Please add at least one competitor (max 5).")
+    if not competitors:
+        st.error("Add at least one competitor.")
         st.stop()
 
-    results = {"mode": st.session_state.mode}
+    with st.spinner("Running multi-agent analysis..."):
+        comp_docs = [ingest_url(u) for u in competitors]
+        comp_intents = [detect_intents(d["text"]) for d in comp_docs]
 
-    with st.spinner("Fetching & cleaning content..."):
+        market = build_market_baseline(comp_intents)
+
         if st.session_state.mode == "update":
-            results["bayut"] = ingest_url(bayut_url.strip())
-        else:
-            results["title"] = (article_title or "").strip()
-
-        comps = []
-        for i, url in enumerate(competitor_urls, start=1):
-            try:
-                item = ingest_url(url)
-                item["id"] = f"c{i}"
-                comps.append(item)
-            except Exception as e:
-                comps.append({
-                    "id": f"c{i}",
-                    "url": url,
-                    "error": str(e),
-                    "text_len": 0,
-                    "preview": ""
-                })
-
-        results["competitors"] = comps
+            bayut = ingest_url(bayut_url)
+            bayut_intents = detect_intents(bayut["text"])
+            gaps = detect_gaps(bayut_intents, market, len(comp_docs))
+            bayut_seo = seo_compliance(bayut["text"])
 
     # ==================================================
-    # OUTPUT — INGESTION
+    # OUTPUT
     # ==================================================
-    st.success("Ingestion complete ✅")
+    st.success("Analysis complete")
 
-    if results["mode"] == "update":
-        st.subheader("Bayut article (cleaned)")
-        st.write("Text length:", results["bayut"]["text_len"])
-        st.text_area("Preview", results["bayut"]["preview"], height=200)
-    else:
-        st.subheader("New post title")
-        st.write(results.get("title") or "❌ No title provided")
+    st.subheader("Market standard (competitor coverage)")
+    st.json(market)
 
-    st.subheader("Competitors (cleaned)")
-    for c in results["competitors"]:
-        st.markdown(f"**{c['id']}** — {c['url']}")
-        if c.get("error"):
-            st.error(c["error"])
-        else:
-            st.write("Text length:", c["text_len"])
-            st.text_area(f"Preview ({c['id']})", c["preview"], height=180)
+    if st.session_state.mode == "update":
+        st.subheader("Bayut gaps vs market")
 
-    # ==================================================
-    # OUTPUT — SEO COMPLIANCE
-    # ==================================================
-    st.markdown("---")
-    st.subheader("SEO Compliance Results")
+        st.markdown("### 🔴 Critical gaps")
+        for g in gaps["critical"]:
+            st.write(f"- {g[0]} (covered by {g[1]} competitors)")
 
-    if results["mode"] == "update":
-        bayut_seo = seo_compliance_check(results["bayut"]["text"])
-        st.markdown("### Bayut SEO Score")
-        st.metric("Score (out of 10)", bayut_seo["score"])
-        with st.expander("Bayut SEO checks"):
+        st.markdown("### 🟡 Optional gaps")
+        for g in gaps["optional"]:
+            st.write(f"- {g[0]} (covered by {g[1]} competitors)")
+
+        st.subheader("Bayut SEO score")
+        st.metric("SEO score (out of 10)", bayut_seo["score"])
+        with st.expander("SEO checks"):
             st.json(bayut_seo["checks"])
 
-    st.markdown("### Competitor SEO Scores")
-    for c in results["competitors"]:
-        if c.get("error"):
-            continue
-        comp_seo = seo_compliance_check(
-            c["text"],
-            title=results.get("title")
-        )
-        st.markdown(f"**{c['id']}** — {c['url']}")
-        st.metric("Score (out of 10)", comp_seo["score"])
+    st.subheader("Competitor SEO scores")
+    for d in comp_docs:
+        score = seo_compliance(d["text"], article_title if st.session_state.mode=="new" else None)
+        st.markdown(f"**{d['url']}**")
+        st.metric("Score", score["score"])
