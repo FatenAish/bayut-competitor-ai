@@ -94,7 +94,7 @@ def fetch_best_effort(url: str) -> dict:
     return {"ok": False, "source": None, "html": "", "text": ""}
 
 # =========================
-# HEADING TREE
+# HEADING TREE + FILTERS
 # =========================
 def norm_header(h: str) -> str:
     h = clean(h).lower()
@@ -102,14 +102,82 @@ def norm_header(h: str) -> str:
     h = re.sub(r"\s+", " ", h).strip()
     return h
 
-def brief_text(content: str) -> str:
-    content = clean(content)
-    parts = re.split(r"(?<=[.!?])\s+", content)
-    parts = [p.strip() for p in parts if len(p.strip()) > 30]
-    out = " ".join(parts[:2])
-    if len(out) > 220:
-        out = out[:220].rstrip() + "..."
-    return out
+NOISE_PATTERNS = [
+    # CTA / property widgets
+    r"\blooking to rent\b",
+    r"\blooking to buy\b",
+    r"\bexplore all available\b",
+    r"\bview all\b",
+    r"\bfind (a|an) (home|property|apartment|villa)\b",
+    r"\bbrowse\b",
+    r"\bsearch\b",
+    r"\bproperties for (rent|sale)\b",
+    r"\bavailable (rental|properties)\b",
+    r"\bget in touch\b",
+    r"\bcontact (us|agent)\b",
+    r"\bcall (us|now)\b",
+    r"\bwhatsapp\b",
+    r"\benquire\b",
+    r"\binquire\b",
+    r"\bbook a viewing\b",
+
+    # social/share/meta
+    r"\bshare\b",
+    r"\bshare this\b",
+    r"\bfollow us\b",
+    r"\blike\b",
+    r"\bsubscribe\b",
+    r"\bnewsletter\b",
+    r"\bsign up\b",
+    r"\blogin\b",
+    r"\bregister\b",
+
+    # site sections / related content
+    r"\brelated (posts|articles)\b",
+    r"\byou may also like\b",
+    r"\brecommended\b",
+    r"\bpopular posts\b",
+    r"\bmore articles\b",
+    r"\blatest (blogs|blog|podcasts|podcast|insights)\b",
+    r"\breal estate insights\b",
+
+    # navigation / widgets
+    r"\btable of contents\b",
+    r"\bcontents\b",
+    r"\bback to top\b",
+    r"\bread more\b",
+    r"\bnext\b",
+    r"\bprevious\b",
+    r"\bcomments\b",
+]
+
+def is_noise_header(h: str) -> bool:
+    """
+    Filters out CTA / navigation / widget junk.
+    """
+    s = clean(h)
+    if not s:
+        return True
+
+    hn = norm_header(s)
+
+    # too short / too generic
+    if len(hn) < 4:
+        return True
+
+    # extremely long "headers" are usually widget copy
+    if len(s) > 90:
+        return True
+
+    # contains too many non-letters (button-like)
+    if sum(1 for c in s if c.isalnum()) / max(len(s), 1) < 0.6:
+        return True
+
+    for pat in NOISE_PATTERNS:
+        if re.search(pat, hn):
+            return True
+
+    return False
 
 def level_of(tag_name: str) -> int:
     try:
@@ -146,6 +214,10 @@ def build_tree_from_html(html: str) -> list[dict]:
         if not header or len(header) < 3:
             continue
 
+        # FILTER HERE
+        if is_noise_header(header):
+            continue
+
         lvl = level_of(h.name)
         pop_to_level(lvl)
 
@@ -176,7 +248,9 @@ def build_tree_from_reader_text(text: str) -> list[dict]:
         m = re.match(r"^(#{1,4})\s+(.*)$", line.strip())
         if not m:
             return None
-        return len(m.group(1)), clean(m.group(2))
+        lvl = len(m.group(1))
+        header = clean(m.group(2))
+        return lvl, header
 
     def pop_to_level(lvl):
         while stack and stack[-1]["level"] >= lvl:
@@ -198,6 +272,12 @@ def build_tree_from_reader_text(text: str) -> list[dict]:
         ml = md_level(s)
         if ml:
             lvl, header = ml
+
+            # FILTER HERE
+            if is_noise_header(header):
+                current = None
+                continue
+
             pop_to_level(lvl)
             node = {"level": lvl, "header": header, "content": "", "children": []}
             add_node(node)
@@ -225,23 +305,20 @@ def get_tree(url: str) -> dict:
     return {"ok": True, "source": fetched["source"], "nodes": build_tree_from_reader_text(fetched["text"])}
 
 # =========================
-# FORCE GROUPING LOGIC
+# GROUP SUBPOINTS (PLACE LISTS ETC.)
 # =========================
 def is_subpoint_heading(h: str) -> bool:
-    """
-    Treat as "should be grouped under parent" even if it's H3.
-    Examples: 'Dubai Marina:' 'Downtown Dubai:' 'JLT (Jumeirah Lakes Towers):'
-    """
     s = clean(h)
     if not s:
         return False
+    if is_noise_header(s):
+        return False
 
-    # ends with colon
+    # ends with colon -> classic sub-item label
     if s.endswith(":"):
         return True
 
-    # very short place-like headings
-    # (2-6 words, mostly capitalized words)
+    # looks like a short place label
     words = s.split()
     if 2 <= len(words) <= 6:
         cap_ratio = sum(1 for w in words if w[:1].isupper()) / len(words)
@@ -263,23 +340,13 @@ def collect_headers_norm(nodes: list[dict], keep_levels=(2, 3)) -> set:
         walk(n)
     return out
 
-def gather_child_titles(node: dict) -> list[str]:
-    titles = []
-    def walk(n):
-        for ch in n.get("children", []):
-            t = clean(ch.get("header", ""))
-            if t:
-                titles.append(t)
-            walk(ch)
-    walk(node)
-    # dedupe
-    seen = set()
-    out = []
-    for t in titles:
-        nt = norm_header(t)
-        if nt and nt not in seen:
-            seen.add(nt)
-            out.append(t)
+def brief_text(content: str) -> str:
+    content = clean(content)
+    parts = re.split(r"(?<=[.!?])\s+", content)
+    parts = [p.strip() for p in parts if len(p.strip()) > 30]
+    out = " ".join(parts[:2])
+    if len(out) > 220:
+        out = out[:220].rstrip() + "..."
     return out
 
 def rows_missing_headers(bayut_nodes, comp_nodes, comp_url):
@@ -289,26 +356,19 @@ def rows_missing_headers(bayut_nodes, comp_nodes, comp_url):
     def walk(node: dict, parent: dict | None):
         lvl = node["level"]
 
-        # Only output rows for H2/H3, BUT:
-        # - If it's subpoint heading, NEVER output it (merge into parent)
+        # Only output for H2/H3 (content headers), skip subpoints
         if lvl in (2, 3):
             hn = norm_header(node["header"])
             if hn and hn not in bayut_norm:
-                # if this node is a subpoint, skip row; parent will include it
                 if parent and is_subpoint_heading(node["header"]):
                     pass
                 else:
                     base = brief_text(node.get("content", ""))
 
-                    # Include subpoints under this header (any child headings that are subpoints)
                     subs = []
                     for ch in node.get("children", []):
                         if is_subpoint_heading(ch.get("header", "")):
                             subs.append(clean(ch["header"]))
-                    # Also include deeper subpoints
-                    if not subs:
-                        # gather any child titles if there are no "subpoint" marked children
-                        pass
 
                     extra = ""
                     if subs:
@@ -316,12 +376,7 @@ def rows_missing_headers(bayut_nodes, comp_nodes, comp_url):
 
                     brief_full = (base + (" " if base and extra else "") + extra).strip()
                     if not brief_full:
-                        # fallback: show child titles if no content
-                        child_titles = gather_child_titles(node)
-                        if child_titles:
-                            brief_full = "Includes: " + "; ".join(child_titles[:12])
-                        else:
-                            brief_full = "Section present in competitor."
+                        brief_full = extra.strip() or "Section present in competitor."
 
                     rows.append({
                         "Missing Header": node["header"],
@@ -329,7 +384,6 @@ def rows_missing_headers(bayut_nodes, comp_nodes, comp_url):
                         "Source": comp_url
                     })
 
-        # traverse children, but pass current as parent
         for ch in node.get("children", []):
             walk(ch, node)
 
@@ -342,7 +396,7 @@ def rows_missing_headers(bayut_nodes, comp_nodes, comp_url):
 # UI
 # =========================
 st.title("Bayut Header Gap Analysis")
-st.caption("Per competitor: Missing headers in Bayut • subpoint headings get grouped under the parent section (not separate rows).")
+st.caption("Per competitor: Missing editorial headers in Bayut • filters out CTA/share/widgets • groups subpoints under parent.")
 
 bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
 competitors_text = st.text_area(
@@ -378,12 +432,7 @@ if st.button("Run analysis"):
             continue
 
         fetch_report.append((comp_url, f"ok ({comp_data['source']})"))
-
-        rows.extend(rows_missing_headers(
-            bayut_nodes=bayut_data["nodes"],
-            comp_nodes=comp_data["nodes"],
-            comp_url=comp_url
-        ))
+        rows.extend(rows_missing_headers(bayut_nodes=bayut_data["nodes"], comp_nodes=comp_data["nodes"], comp_url=comp_url))
 
     st.subheader("Fetch status")
     for u, status in fetch_report:
@@ -394,6 +443,6 @@ if st.button("Run analysis"):
 
     st.subheader("Missing headers in Bayut (per competitor)")
     if not rows:
-        st.info("No missing headers found (or competitors blocked / headings not extractable).")
+        st.info("No missing editorial headers found (or competitors blocked / headings not extractable).")
     else:
         st.dataframe(rows, use_container_width=True)
