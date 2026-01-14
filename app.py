@@ -1,8 +1,9 @@
 import streamlit as st
 import requests
 import re
+import pandas as pd
 from bs4 import BeautifulSoup
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 
 # =========================
 # PAGE CONFIG
@@ -343,40 +344,50 @@ def collect_headers_norm(nodes: list[dict], keep_levels=(2, 3)) -> set:
     return out
 
 # =========================
-# DISCUSSION-STYLE BRIEF
+# HUMAN GAP-FOCUSED BRIEF
 # =========================
-STOP = {
-    "the","and","for","with","that","this","from","you","your","are","was","were","will","have","has","had",
-    "but","not","can","may","more","most","into","than","then","they","them","their","our","out","about",
-    "also","over","under","between","within","near","where","when","what","why","how","who","which",
-    "a","an","to","of","in","on","at","as","is","it","be","or","by","we","i","us",
-    "business","bay","dubai"
-}
-
-def extract_key_phrases(text: str, top_n: int = 6) -> list[str]:
-    words = re.findall(r"[a-zA-Z]{3,}", (text or "").lower())
-    words = [w for w in words if w not in STOP]
-    freq = {}
-    for w in words:
-        freq[w] = freq.get(w, 0) + 1
-    ranked = sorted(freq.items(), key=lambda x: (x[1], len(x[0])), reverse=True)
-    return [w for w, _ in ranked[:top_n]]
-
-def brief_text(content: str) -> str:
+def first_sentence(content: str) -> str:
     content = clean(content)
     if not content:
         return ""
     sents = re.split(r"(?<=[.!?])\s+", content)
-    sents = [s.strip() for s in sents if len(s.strip()) > 40]
-    base = sents[0] if sents else (content[:180] + ("..." if len(content) > 180 else ""))
-    keys = extract_key_phrases(content, top_n=6)
-    if keys:
-        brief = f"Competitor discusses {', '.join(keys)}. {base}"
-    else:
-        brief = f"Competitor discusses this section. {base}"
+    sents = [s.strip() for s in sents if len(s.strip()) > 35]
+    if not sents:
+        return content[:180] + ("..." if len(content) > 180 else "")
+    s = sents[0]
+    if len(s) > 220:
+        s = s[:220].rstrip() + "..."
+    return s
+
+def make_gap_brief(header: str, content: str, subpoints: list[str]) -> str:
+    """
+    Returns: human, gap-focused explanation of what to add and why.
+    """
+    h = clean(header)
+    base = first_sentence(content)
+
+    # Start with a simple instruction: "Add X"
+    brief = f"Add a section on **{h}**."
+
+    # If we have any real competitor sentence, use it as "what competitor covers"
+    if base:
+        brief += f" Competitor covers this by explaining: {base}"
+
+    # If subpoints exist, fold them into the brief (NOT as separate headers)
+    if subpoints:
+        sp = "; ".join(subpoints[:10])
+        brief += f" Include sub-coverage such as: {sp}"
+        if len(subpoints) > 10:
+            brief += f" (+{len(subpoints)-10} more)"
+
+    # Make it about benefit / gap
+    brief += " This is missing in Bayut and would help readers make a clearer decision."
+
     brief = clean(brief)
-    if len(brief) > 320:
-        brief = brief[:320].rstrip() + "..."
+
+    # Keep it compact
+    if len(brief) > 420:
+        brief = brief[:420].rstrip() + "..."
     return brief
 
 # =========================
@@ -390,14 +401,19 @@ def is_question(s: str) -> bool:
         return False
     if s.endswith("?"):
         return True
-    # common question starters
     return bool(re.match(r"^(what|why|how|where|when|who|which|is|are|can|do|does|did|should|will)\b", s.lower()))
 
 def normalize_q(s: str) -> str:
     s = clean(s).lower()
+    s = re.sub(r"^\d+\s*[\.\)]\s*", "", s)  # remove leading "1." or "1)"
     s = re.sub(r"\s+", " ", s)
     s = s.strip(" .!?")
     return s
+
+def prettify_question(q: str) -> str:
+    q = clean(q)
+    q = re.sub(r"^\d+\s*[\.\)]\s*", "", q).strip()
+    return q
 
 def find_faq_node(nodes: list[dict]) -> dict | None:
     def walk(n: dict):
@@ -420,24 +436,23 @@ def extract_faq_questions(node: dict) -> list[str]:
 
     qs = []
 
-    # child headings often contain questions
     def walk(n: dict):
         h = clean(n.get("header", ""))
         if h and is_question(h):
-            qs.append(h)
-        # also: sometimes content contains questions in a list-like manner
+            qs.append(prettify_question(h))
+
         content = n.get("content", "")
         if content:
             for part in re.split(r"[•\n]", content):
                 p = clean(part)
                 if is_question(p) and 6 <= len(p) <= 140:
-                    qs.append(p)
+                    qs.append(prettify_question(p))
+
         for c in n.get("children", []):
             walk(c)
 
     walk(node)
 
-    # dedupe preserving order
     seen = set()
     out = []
     for q in qs:
@@ -448,13 +463,31 @@ def extract_faq_questions(node: dict) -> list[str]:
     return out
 
 # =========================
+# SOURCE AS WEBSITE NAME LINK
+# =========================
+def site_name_and_link(url: str) -> str:
+    try:
+        netloc = urlparse(url).netloc.lower()
+        netloc = netloc.replace("www.", "")
+        name = netloc.split(":")[0]
+        # prettify a bit
+        name = name.replace(".ae", "").replace(".com", "").replace(".net", "").replace(".org", "")
+        name = name.replace("-", " ").strip()
+        name = " ".join([w.capitalize() if w.lower() not in {"ae"} else w.upper() for w in name.split()])
+        if not name:
+            name = "Source"
+    except Exception:
+        name = "Source"
+    return f'<a href="{url}" target="_blank">{name}</a>'
+
+# =========================
 # MAIN OUTPUT
 # =========================
 def rows_missing_headers(bayut_nodes, comp_nodes, comp_url):
     bayut_norm = collect_headers_norm(bayut_nodes, keep_levels=(2, 3))
     rows = []
 
-    # FAQ special: build question sets once
+    # FAQ special: compare questions
     bayut_faq = find_faq_node(bayut_nodes)
     comp_faq = find_faq_node(comp_nodes)
     bayut_qs = extract_faq_questions(bayut_faq) if bayut_faq else []
@@ -462,19 +495,17 @@ def rows_missing_headers(bayut_nodes, comp_nodes, comp_url):
 
     bayut_q_norm = {normalize_q(q) for q in bayut_qs}
     comp_q_norm = [(q, normalize_q(q)) for q in comp_qs]
-
     missing_faq_qs = [q for q, nq in comp_q_norm if nq and nq not in bayut_q_norm]
 
     def walk(node: dict, parent: dict | None):
         lvl = node["level"]
         header = node.get("header", "")
 
-        # FAQ section row: show missing questions instead of generic brief
+        # FAQ row: show missing questions, not generic sentence
         if FAQ_HEAD_RE.search(header):
-            # only add row if competitor has FAQ and Bayut is missing some questions or missing section entirely
             if missing_faq_qs or not bayut_faq:
                 if missing_faq_qs:
-                    brief = "Missing questions in Bayut: " + "; ".join(missing_faq_qs[:10])
+                    brief = "Add an FAQ block and answer these questions (competitor covers them): " + "; ".join(missing_faq_qs[:10])
                     if len(missing_faq_qs) > 10:
                         brief += f" (+{len(missing_faq_qs) - 10} more)"
                 else:
@@ -482,36 +513,29 @@ def rows_missing_headers(bayut_nodes, comp_nodes, comp_url):
                 rows.append({
                     "Missing Header": "FAQs",
                     "What it contains (brief)": brief,
-                    "Source": comp_url
+                    "Source": site_name_and_link(comp_url),
                 })
-            return  # don't further list FAQ children as headers
+            return
 
-        # Normal rows for H2/H3, skip subpoints
+        # Normal rows: output only H2/H3
         if lvl in (2, 3):
             hn = norm_header(header)
             if hn and hn not in bayut_norm:
                 if parent and is_subpoint_heading(header):
                     pass
                 else:
-                    base = brief_text(node.get("content", ""))
-
+                    # fold H4 subpoints into the brief (NOT as separate headers)
                     subs = []
                     for ch in node.get("children", []):
                         if is_subpoint_heading(ch.get("header", "")):
-                            subs.append(clean(ch["header"]))
+                            subs.append(clean(ch["header"]).rstrip(":"))
 
-                    extra = ""
-                    if subs:
-                        extra = " Subpoints: " + "; ".join(subs[:12])
-
-                    brief_full = (base + (" " if base and extra else "") + extra).strip()
-                    if not brief_full:
-                        brief_full = extra.strip() or "Section present in competitor."
+                    brief_full = make_gap_brief(header, node.get("content", ""), subs)
 
                     rows.append({
-                        "Missing Header": header,
-                        "What it contains (brief)": brief_full[:320] + ("..." if len(brief_full) > 320 else ""),
-                        "Source": comp_url
+                        "Missing Header": clean(header),
+                        "What it contains (brief)": brief_full,
+                        "Source": site_name_and_link(comp_url),
                     })
 
         for ch in node.get("children", []):
@@ -520,28 +544,13 @@ def rows_missing_headers(bayut_nodes, comp_nodes, comp_url):
     for n in comp_nodes:
         walk(n, None)
 
-    # If competitor has FAQ but our walk didn't add it (rare), add it here
-    if comp_faq and not any(r["Missing Header"] == "FAQs" and r["Source"] == comp_url for r in rows):
-        if missing_faq_qs or not bayut_faq:
-            if missing_faq_qs:
-                brief = "Missing questions in Bayut: " + "; ".join(missing_faq_qs[:10])
-                if len(missing_faq_qs) > 10:
-                    brief += f" (+{len(missing_faq_qs) - 10} more)"
-            else:
-                brief = "Competitor includes an FAQ section; Bayut should add FAQs relevant to this topic."
-            rows.append({
-                "Missing Header": "FAQs",
-                "What it contains (brief)": brief,
-                "Source": comp_url
-            })
-
     return rows
 
 # =========================
 # UI
 # =========================
 st.title("Bayut Header Gap Analysis")
-st.caption("Per competitor: Missing editorial headers in Bayut • filters out CTA/share/widgets • groups subpoints under parent • FAQs show missing questions.")
+st.caption("Per competitor: Missing editorial headers in Bayut • filters out CTA/share/widgets • groups H4 inside the brief • FAQs compare missing questions • Source is clickable site name.")
 
 bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
 competitors_text = st.text_area(
@@ -594,4 +603,20 @@ if st.button("Run analysis"):
     if not rows:
         st.info("No missing editorial headers found (or competitors blocked / headings not extractable).")
     else:
-        st.dataframe(rows, use_container_width=True)
+        df = pd.DataFrame(rows)
+
+        # Render as HTML so Source hyperlinks are clickable
+        st.markdown(
+            """
+            <style>
+              table { width: 100%; border-collapse: collapse; }
+              th, td { border: 1px solid #eee; padding: 10px; vertical-align: top; }
+              th { background: #fafafa; text-align: left; }
+              td { font-size: 14px; }
+              a { text-decoration: none; }
+              a:hover { text-decoration: underline; }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+        st.markdown(df.to_html(escape=False, index=False), unsafe_allow_html=True)
