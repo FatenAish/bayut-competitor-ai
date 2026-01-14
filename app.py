@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import re
 from bs4 import BeautifulSoup
-from urllib.parse import quote_plus
+from urllib.parse import quote_plusbrief_text
 
 # =========================
 # PAGE CONFIG
@@ -340,14 +340,51 @@ def collect_headers_norm(nodes: list[dict], keep_levels=(2, 3)) -> set:
         walk(n)
     return out
 
+STOP = {
+    "the","and","for","with","that","this","from","you","your","are","was","were","will","have","has","had",
+    "but","not","can","may","more","most","into","than","then","they","them","their","our","out","about",
+    "also","over","under","between","within","near","where","when","what","why","how","who","which",
+    "a","an","to","of","in","on","at","as","is","it","be","or","by","we","i","us",
+    "business","bay","dubai"  # avoid repeating obvious terms too much
+}
+
+def extract_key_phrases(text: str, top_n: int = 6) -> list[str]:
+    # simple keyword-ish extraction (no AI)
+    words = re.findall(r"[a-zA-Z]{3,}", (text or "").lower())
+    words = [w for w in words if w not in STOP]
+    freq = {}
+    for w in words:
+        freq[w] = freq.get(w, 0) + 1
+    # sort by frequency then length
+    ranked = sorted(freq.items(), key=lambda x: (x[1], len(x[0])), reverse=True)
+    return [w for w, _ in ranked[:top_n]]
+
 def brief_text(content: str) -> str:
+    """
+    Discussion-style brief:
+    'Competitor discusses X, Y, Z... and explains ...'
+    """
     content = clean(content)
-    parts = re.split(r"(?<=[.!?])\s+", content)
-    parts = [p.strip() for p in parts if len(p.strip()) > 30]
-    out = " ".join(parts[:2])
-    if len(out) > 220:
-        out = out[:220].rstrip() + "..."
-    return out
+    if not content:
+        return ""
+
+    # pick 1 solid sentence as base (still useful as a "discussion")
+    sents = re.split(r"(?<=[.!?])\s+", content)
+    sents = [s.strip() for s in sents if len(s.strip()) > 40]
+    base = sents[0] if sents else (content[:180] + ("..." if len(content) > 180 else ""))
+
+    # add topic hints
+    keys = extract_key_phrases(content, top_n=6)
+    if keys:
+        brief = f"Competitor discusses {', '.join(keys)}. {base}"
+    else:
+        brief = f"Competitor discusses this section. {base}"
+
+    # keep it tight
+    brief = clean(brief)
+    if len(brief) > 320:
+        brief = brief[:320].rstrip() + "..."
+    return brief
 
 def rows_missing_headers(bayut_nodes, comp_nodes, comp_url):
     bayut_norm = collect_headers_norm(bayut_nodes, keep_levels=(2, 3))
