@@ -4,11 +4,12 @@ import re
 import pandas as pd
 from bs4 import BeautifulSoup
 from urllib.parse import quote_plus, urlparse
+import hashlib
 
 # =========================
 # PAGE CONFIG
 # =========================
-st.set_page_config(page_title="Bayut Header Gap (Per Competitor)", layout="wide")
+st.set_page_config(page_title="Bayut Competitor Gap Analysis", layout="wide")
 
 # =========================
 # FETCH (ROBUST FALLBACKS)
@@ -165,7 +166,6 @@ def is_noise_header(h: str) -> bool:
         return True
 
     hn = norm_header(s)
-
     if len(hn) < 4:
         return True
 
@@ -306,92 +306,229 @@ def get_tree(url: str) -> dict:
     return {"ok": True, "source": fetched["source"], "nodes": build_tree_from_reader_text(fetched["text"])}
 
 # =========================
-# GROUP SUBPOINTS
+# SECTION EXTRACTION (H2/H3) + FOLD H4
 # =========================
 def is_subpoint_heading(h: str) -> bool:
     s = clean(h)
-    if not s:
+    if not s or is_noise_header(s):
         return False
-    if is_noise_header(s):
-        return False
-
     if s.endswith(":"):
         return True
-
     words = s.split()
     if 2 <= len(words) <= 6:
         cap_ratio = sum(1 for w in words if w[:1].isupper()) / len(words)
         if cap_ratio >= 0.6:
             return True
-
     return False
 
 
-def collect_headers_norm(nodes: list[dict], keep_levels=(2, 3)) -> set:
-    out = set()
+def flatten_sections(nodes: list[dict]) -> list[dict]:
+    """
+    Returns sections for H2/H3 only:
+    - header
+    - norm
+    - text (content + selected child content)
+    - subpoints (H4-like child headers folded in)
+    """
+    sections = []
+
+    def collect_text(n: dict) -> str:
+        pieces = []
+        if n.get("content"):
+            pieces.append(n["content"])
+        # include child paragraph content (but not treat as separate headers)
+        for c in n.get("children", []):
+            if c.get("content"):
+                pieces.append(c["content"])
+        return clean(" ".join(pieces))
 
     def walk(n: dict):
-        if n["level"] in keep_levels:
-            hn = norm_header(n["header"])
-            if hn:
-                out.add(hn)
-        for c in n["children"]:
+        if n["level"] in (2, 3):
+            subs = []
+            for ch in n.get("children", []):
+                if is_subpoint_heading(ch.get("header", "")):
+                    subs.append(clean(ch["header"]).rstrip(":"))
+            sections.append({
+                "header": clean(n["header"]),
+                "norm": norm_header(n["header"]),
+                "text": collect_text(n),
+                "subpoints": subs
+            })
+        for c in n.get("children", []):
             walk(c)
 
     for n in nodes:
         walk(n)
-
-    return out
+    return sections
 
 # =========================
-# HUMAN GAP-FOCUSED BRIEF
+# GENERAL MATCHING (NOT PROS/CONS ONLY)
 # =========================
-def first_sentence(content: str) -> str:
-    content = clean(content)
-    if not content:
-        return ""
-    sents = re.split(r"(?<=[.!?])\s+", content)
-    sents = [s.strip() for s in sents if len(s.strip()) > 35]
-    if not sents:
-        return content[:180] + ("..." if len(content) > 180 else "")
-    s = sents[0]
-    if len(s) > 220:
-        s = s[:220].rstrip() + "..."
-    return s
+BUCKETS = {
+    "overview": ["overview", "introduction", "about", "area overview", "community overview", "neighborhood overview", "where is", "location overview"],
+    "pros_cons": ["pros", "cons", "pros and cons", "advantages", "disadvantages", "benefits", "drawbacks", "why live", "should you live", "is it worth", "good to live"],
+    "transport": ["transport", "getting around", "metro", "connectivity", "commute", "public transport", "bus", "roads", "parking", "traffic"],
+    "cost": ["cost", "prices", "rent", "rental", "sale prices", "affordability", "living expenses", "cost of living", "price range"],
+    "lifestyle": ["lifestyle", "things to do", "attractions", "restaurants", "cafes", "nightlife", "shopping", "entertainment", "leisure", "amenities"],
+    "family": ["family", "schools", "nurseries", "education", "kids", "playgrounds", "family friendly"],
+    "safety": ["safety", "safe", "security", "crime"],
+    "work": ["work", "business", "offices", "professionals", "jobs"],
+    "nearby": ["nearby", "close to", "near", "around", "alternatives", "other areas", "similar areas", "compare", "comparison"],
+    "faqs": ["faq", "faqs", "frequently asked questions"]
+}
 
-def make_gap_brief(header: str, content: str, subpoints: list[str]) -> str:
+BUCKET_TITLES = {
+    "overview": "Overview",
+    "pros_cons": "Pros & Cons",
+    "transport": "Transport & Connectivity",
+    "cost": "Cost of Living & Prices",
+    "lifestyle": "Lifestyle & Amenities",
+    "family": "Family & Schools",
+    "safety": "Safety",
+    "work": "Work & Business",
+    "nearby": "Nearby Areas & Alternatives",
+    "faqs": "FAQs"
+}
+
+def bucket_for_header(header: str) -> str | None:
+    h = norm_header(header)
+    for b, keys in BUCKETS.items():
+        for k in keys:
+            if k in h:
+                return b
+    return None
+
+STOPWORDS = {
+    "the","and","for","with","that","this","from","you","your","are","was","were","will","have","has","had",
+    "but","not","can","may","more","most","into","than","then","they","them","their","our","out","about",
+    "also","over","under","between","within","near","where","when","what","why","how","who","which",
+    "a","an","to","of","in","on","at","as","is","it","be","or","by","we","i","us",
+    "dubai","business","bay"
+}
+
+def tokens(s: str) -> set:
+    ws = re.findall(r"[a-z0-9]{3,}", norm_header(s))
+    return {w for w in ws if w not in STOPWORDS}
+
+def jaccard(a: set, b: set) -> float:
+    if not a and not b:
+        return 0.0
+    return len(a & b) / max(1, len(a | b))
+
+def best_match(comp_sec: dict, bayut_secs: list[dict]) -> dict:
     """
-    Returns: human, gap-focused explanation of what to add and why.
+    Returns:
+      {
+        matched: bool,
+        bayut_section: dict|None,
+        bucket: str|None,
+        score: float
+      }
     """
-    h = clean(header)
-    base = first_sentence(content)
+    c_norm = comp_sec["norm"]
+    c_bucket = bucket_for_header(comp_sec["header"])
 
-    # Start with a simple instruction: "Add X"
-    brief = f"Add a section on **{h}**."
+    # 1) exact/near-normalized match
+    for b in bayut_secs:
+        if b["norm"] == c_norm:
+            return {"matched": True, "bayut_section": b, "bucket": c_bucket, "score": 1.0}
 
-    # If we have any real competitor sentence, use it as "what competitor covers"
-    if base:
-        brief += f" Competitor covers this by explaining: {base}"
+    # 2) bucket match (if Bayut has any section in same bucket)
+    if c_bucket:
+        candidates = []
+        for b in bayut_secs:
+            if bucket_for_header(b["header"]) == c_bucket:
+                candidates.append(b)
+        if candidates:
+            # pick the most similar within the bucket
+            c_t = tokens(comp_sec["header"])
+            best = None
+            best_s = 0.0
+            for b in candidates:
+                s = jaccard(c_t, tokens(b["header"]))
+                if s > best_s:
+                    best_s = s
+                    best = b
+            # bucket match counts as matched even if score is low
+            return {"matched": True, "bayut_section": best or candidates[0], "bucket": c_bucket, "score": max(0.55, best_s)}
 
-    # If subpoints exist, fold them into the brief (NOT as separate headers)
-    if subpoints:
-        sp = "; ".join(subpoints[:10])
-        brief += f" Include sub-coverage such as: {sp}"
-        if len(subpoints) > 10:
-            brief += f" (+{len(subpoints)-10} more)"
+    # 3) fuzzy match (token overlap)
+    c_t = tokens(comp_sec["header"])
+    best = None
+    best_s = 0.0
+    for b in bayut_secs:
+        s = jaccard(c_t, tokens(b["header"]))
+        if s > best_s:
+            best_s = s
+            best = b
+    if best and best_s >= 0.40:
+        return {"matched": True, "bayut_section": best, "bucket": None, "score": best_s}
 
-    # Make it about benefit / gap
-    brief += " This is missing in Bayut and would help readers make a clearer decision."
-
-    brief = clean(brief)
-
-    # Keep it compact
-    if len(brief) > 420:
-        brief = brief[:420].rstrip() + "..."
-    return brief
+    return {"matched": False, "bayut_section": None, "bucket": c_bucket, "score": best_s}
 
 # =========================
-# FAQ QUESTION GAP
+# GAP EXTRACTION (keep it short)
+# =========================
+def split_points(text: str) -> list[str]:
+    """
+    Extracts candidate talking points: short bullets + sentences.
+    """
+    text = clean(text)
+    if not text:
+        return []
+
+    # bullets / list-like fragments
+    raw = re.split(r"[•\n]|(?<=;)\s+", text)
+    candidates = []
+
+    for r in raw:
+        r = clean(r)
+        if 40 <= len(r) <= 220:
+            candidates.append(r)
+
+    # sentences
+    sents = re.split(r"(?<=[.!?])\s+", text)
+    for s in sents:
+        s = clean(s)
+        if 45 <= len(s) <= 220:
+            candidates.append(s)
+
+    # dedupe preserve order by normalized fingerprint
+    seen = set()
+    out = []
+    for c in candidates:
+        fp = re.sub(r"[^a-z0-9]+", "", c.lower())
+        fp = fp[:140]
+        if fp and fp not in seen:
+            seen.add(fp)
+            out.append(c)
+    return out[:30]
+
+def approx_in(text: str, point: str) -> bool:
+    """
+    Cheap "is this already covered?" check:
+    - if many keywords from point exist in text
+    """
+    t = norm_header(text)
+    p = norm_header(point)
+    p_tokens = [w for w in re.findall(r"[a-z0-9]{4,}", p) if w not in STOPWORDS]
+    if not p_tokens:
+        return False
+    hit = sum(1 for w in set(p_tokens) if w in t)
+    return hit >= max(2, int(0.45 * len(set(p_tokens))))
+
+def top_missing_points(bayut_text: str, comp_text: str, limit: int = 5) -> list[str]:
+    points = split_points(comp_text)
+    missing = []
+    for p in points:
+        if not approx_in(bayut_text, p):
+            missing.append(p)
+        if len(missing) >= limit:
+            break
+    return missing
+
+# =========================
+# FAQs: compare missing questions
 # =========================
 FAQ_HEAD_RE = re.compile(r"\b(faq|faqs|frequently asked questions)\b", re.I)
 
@@ -405,7 +542,7 @@ def is_question(s: str) -> bool:
 
 def normalize_q(s: str) -> str:
     s = clean(s).lower()
-    s = re.sub(r"^\d+\s*[\.\)]\s*", "", s)  # remove leading "1." or "1)"
+    s = re.sub(r"^\d+\s*[\.\)]\s*", "", s)
     s = re.sub(r"\s+", " ", s)
     s = s.strip(" .!?")
     return s
@@ -433,7 +570,6 @@ def find_faq_node(nodes: list[dict]) -> dict | None:
 def extract_faq_questions(node: dict) -> list[str]:
     if not node:
         return []
-
     qs = []
 
     def walk(n: dict):
@@ -463,94 +599,177 @@ def extract_faq_questions(node: dict) -> list[str]:
     return out
 
 # =========================
-# SOURCE AS WEBSITE NAME LINK
+# HUMAN TONE (no repeated lines)
+# =========================
+TEMPLATES_GAP = [
+    "Bayut covers this topic, but it skips {missing}. Adding this would make the section more useful for readers.",
+    "This is already mentioned on Bayut, but the competitor adds {missing}. Worth weaving these points into the same section.",
+    "The structure exists on Bayut; the gap is the detail: {missing}. Adding a short paragraph here would strengthen the coverage.",
+    "Competitor goes further by addressing {missing}. Bayut can keep the current section, but add these missing angles.",
+    "To match the market standard, Bayut should add {missing} under the same section (no new header needed).",
+]
+
+TEMPLATES_MISSING = [
+    "Competitor includes this section and explains {summary}. Bayut doesn’t cover it yet, so adding it would fill a clear reader gap.",
+    "This section is missing on Bayut. Competitor focuses on {summary} — worth adding as a dedicated section.",
+    "Competitor covers {summary}. Since Bayut doesn’t address it directly, add this section to complete the article.",
+]
+
+def pick_template(templates: list[str], key: str) -> str:
+    h = hashlib.md5(key.encode("utf-8")).hexdigest()
+    idx = int(h[:6], 16) % len(templates)
+    return templates[idx]
+
+def summarize_section(text: str) -> str:
+    text = clean(text)
+    if not text:
+        return "key practical points"
+    sents = re.split(r"(?<=[.!?])\s+", text)
+    sents = [s.strip() for s in sents if len(s.strip()) > 40]
+    s = sents[0] if sents else (text[:160] + ("..." if len(text) > 160 else ""))
+    if len(s) > 220:
+        s = s[:220].rstrip() + "..."
+    return s
+
+def format_missing_points(points: list[str]) -> str:
+    if not points:
+        return "a few practical angles the competitor covers"
+    # keep it readable: short list (not huge)
+    short = []
+    for p in points[:5]:
+        # shorten point if too long
+        if len(p) > 140:
+            p = p[:140].rstrip() + "..."
+        short.append(p)
+    return " / ".join(short)
+
+# =========================
+# SOURCE LINKS
 # =========================
 def site_name_and_link(url: str) -> str:
     try:
-        netloc = urlparse(url).netloc.lower()
-        netloc = netloc.replace("www.", "")
-        name = netloc.split(":")[0]
-        # prettify a bit
-        name = name.replace(".ae", "").replace(".com", "").replace(".net", "").replace(".org", "")
+        netloc = urlparse(url).netloc.lower().replace("www.", "")
+        base = netloc.split(":")[0]
+        name = base
+        # remove common suffixes for nicer names
+        for suf in [".ae", ".com", ".net", ".org"]:
+            name = name.replace(suf, "")
         name = name.replace("-", " ").strip()
-        name = " ".join([w.capitalize() if w.lower() not in {"ae"} else w.upper() for w in name.split()])
+        name = " ".join(w.capitalize() for w in name.split())
         if not name:
-            name = "Source"
+            name = base
     except Exception:
         name = "Source"
     return f'<a href="{url}" target="_blank">{name}</a>'
 
 # =========================
-# MAIN OUTPUT
+# BUILD ROWS (PER COMPETITOR)
 # =========================
-def rows_missing_headers(bayut_nodes, comp_nodes, comp_url):
-    bayut_norm = collect_headers_norm(bayut_nodes, keep_levels=(2, 3))
-    rows = []
+def build_rows_for_competitor(bayut_nodes, comp_nodes, comp_url):
+    bayut_secs = flatten_sections(bayut_nodes)
+    comp_secs = flatten_sections(comp_nodes)
 
-    # FAQ special: compare questions
+    # FAQ question gap
     bayut_faq = find_faq_node(bayut_nodes)
     comp_faq = find_faq_node(comp_nodes)
     bayut_qs = extract_faq_questions(bayut_faq) if bayut_faq else []
     comp_qs = extract_faq_questions(comp_faq) if comp_faq else []
-
     bayut_q_norm = {normalize_q(q) for q in bayut_qs}
-    comp_q_norm = [(q, normalize_q(q)) for q in comp_qs]
-    missing_faq_qs = [q for q, nq in comp_q_norm if nq and nq not in bayut_q_norm]
+    missing_faq_qs = [q for q in comp_qs if normalize_q(q) not in bayut_q_norm]
 
-    def walk(node: dict, parent: dict | None):
-        lvl = node["level"]
-        header = node.get("header", "")
+    rows = []
 
-        # FAQ row: show missing questions, not generic sentence
-        if FAQ_HEAD_RE.search(header):
-            if missing_faq_qs or not bayut_faq:
-                if missing_faq_qs:
-                    brief = "Add an FAQ block and answer these questions (competitor covers them): " + "; ".join(missing_faq_qs[:10])
-                    if len(missing_faq_qs) > 10:
-                        brief += f" (+{len(missing_faq_qs) - 10} more)"
-                else:
-                    brief = "Competitor includes an FAQ section; Bayut should add FAQs relevant to this topic."
-                rows.append({
-                    "Missing Header": "FAQs",
-                    "What it contains (brief)": brief,
-                    "Source": site_name_and_link(comp_url),
-                })
-            return
+    # Add FAQ row if relevant
+    if comp_faq:
+        if not bayut_faq:
+            rows.append({
+                "Header (Gap)": "FAQs",
+                "What to add (human brief)": (
+                    "Competitor includes an FAQ block. Bayut doesn’t have FAQs here — add a short FAQ section to answer the most common reader questions."
+                ),
+                "Source": site_name_and_link(comp_url),
+            })
+        elif missing_faq_qs:
+            qs = "; ".join(missing_faq_qs[:8])
+            if len(missing_faq_qs) > 8:
+                qs += f" (+{len(missing_faq_qs) - 8} more)"
+            rows.append({
+                "Header (Gap)": "FAQs (Content Gap)",
+                "What to add (human brief)": f"Bayut has FAQs, but it’s missing these questions that the competitor answers: {qs}.",
+                "Source": site_name_and_link(comp_url),
+            })
 
-        # Normal rows: output only H2/H3
-        if lvl in (2, 3):
-            hn = norm_header(header)
-            if hn and hn not in bayut_norm:
-                if parent and is_subpoint_heading(header):
-                    pass
-                else:
-                    # fold H4 subpoints into the brief (NOT as separate headers)
-                    subs = []
-                    for ch in node.get("children", []):
-                        if is_subpoint_heading(ch.get("header", "")):
-                            subs.append(clean(ch["header"]).rstrip(":"))
+    # For each competitor section, match and output either missing section or content-gap
+    for c in comp_secs:
+        # skip FAQ section header itself (handled above)
+        if bucket_for_header(c["header"]) == "faqs" or FAQ_HEAD_RE.search(c["header"]):
+            continue
 
-                    brief_full = make_gap_brief(header, node.get("content", ""), subs)
+        m = best_match(c, bayut_secs)
+        comp_bucket = bucket_for_header(c["header"])
 
-                    rows.append({
-                        "Missing Header": clean(header),
-                        "What it contains (brief)": brief_full,
-                        "Source": site_name_and_link(comp_url),
-                    })
+        # If matched -> produce "Content Gap" based on missing points
+        if m["matched"] and m["bayut_section"]:
+            b = m["bayut_section"]
 
-        for ch in node.get("children", []):
-            walk(ch, node)
+            # choose a clean display title
+            bucket = m["bucket"] or comp_bucket or bucket_for_header(b["header"])
+            display = (BUCKET_TITLES.get(bucket) if bucket in BUCKET_TITLES else b["header"])
+            display_header = f"{display} (Content Gap)"
 
-    for n in comp_nodes:
-        walk(n, None)
+            # gap points
+            bayut_text = b.get("text", "")
+            comp_text = c.get("text", "")
+            missing_points = top_missing_points(bayut_text, comp_text, limit=5)
 
-    return rows
+            # if nothing missing, skip (keeps output focused)
+            if not missing_points:
+                continue
+
+            missing_str = format_missing_points(missing_points)
+            tmpl = pick_template(TEMPLATES_GAP, key=f"{comp_url}|{display_header}")
+            brief = tmpl.format(missing=missing_str)
+
+            rows.append({
+                "Header (Gap)": display_header,
+                "What to add (human brief)": brief,
+                "Source": site_name_and_link(comp_url),
+            })
+        else:
+            # Not matched -> truly missing section
+            display_header = c["header"]
+            summary = summarize_section(c.get("text", ""))
+            tmpl = pick_template(TEMPLATES_MISSING, key=f"{comp_url}|{display_header}")
+            brief = tmpl.format(summary=summary)
+
+            # fold subpoints into brief lightly (not as separate headers)
+            subs = c.get("subpoints", [])
+            if subs:
+                brief += f" It also covers: {', '.join(subs[:6])}."
+                if len(subs) > 6:
+                    brief += f" (+{len(subs) - 6} more)"
+
+            rows.append({
+                "Header (Gap)": display_header,
+                "What to add (human brief)": brief,
+                "Source": site_name_and_link(comp_url),
+            })
+
+    # Deduplicate rows by (Header, Source) keeping the first
+    seen = set()
+    out = []
+    for r in rows:
+        k = (r["Header (Gap)"], r["Source"])
+        if k not in seen:
+            seen.add(k)
+            out.append(r)
+    return out
 
 # =========================
 # UI
 # =========================
-st.title("Bayut Header Gap Analysis")
-st.caption("Per competitor: Missing editorial headers in Bayut • filters out CTA/share/widgets • groups H4 inside the brief • FAQs compare missing questions • Source is clickable site name.")
+st.title("Bayut Competitor Gap Analysis")
+st.caption("General logic: if Bayut already covers a section → show Content Gap (what’s missing). If not → show Missing section. Each competitor is shown separately, in a table. Source is a clickable site name.")
 
 bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
 competitors_text = st.text_area(
@@ -574,38 +793,34 @@ if st.button("Run analysis"):
         st.error("Could not extract headings from Bayut page (blocked or no headings found).")
         st.stop()
 
-    rows = []
-    fetch_report = []
-
+    st.subheader("Fetch status")
     for comp_url in competitors:
         with st.spinner(f"Fetching competitor: {comp_url}"):
             comp_data = get_tree(comp_url)
 
         if not comp_data["ok"] or not comp_data["nodes"]:
-            fetch_report.append((comp_url, "blocked/no headings"))
+            st.warning(f"⚠ {comp_url} — blocked/no headings")
             continue
 
-        fetch_report.append((comp_url, f"ok ({comp_data['source']})"))
-        rows.extend(rows_missing_headers(
+        st.success(f"✔ {comp_url} — ok ({comp_data['source']})")
+
+        rows = build_rows_for_competitor(
             bayut_nodes=bayut_data["nodes"],
             comp_nodes=comp_data["nodes"],
             comp_url=comp_url
-        ))
+        )
 
-    st.subheader("Fetch status")
-    for u, status in fetch_report:
-        if status.startswith("ok"):
-            st.success(f"✔ {u} — {status}")
-        else:
-            st.warning(f"⚠ {u} — {status}")
+        # If nothing to show, keep it simple
+        site_link = site_name_and_link(comp_url)
+        st.markdown(f"### Results for {site_link}", unsafe_allow_html=True)
 
-    st.subheader("Missing headers in Bayut (per competitor)")
-    if not rows:
-        st.info("No missing editorial headers found (or competitors blocked / headings not extractable).")
-    else:
+        if not rows:
+            st.info("No meaningful gaps detected for this competitor (or the overlap is very high).")
+            continue
+
         df = pd.DataFrame(rows)
 
-        # Render as HTML so Source hyperlinks are clickable
+        # HTML table for clickable links
         st.markdown(
             """
             <style>
