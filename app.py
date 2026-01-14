@@ -51,16 +51,11 @@ def looks_blocked(text: str) -> bool:
     ])
 
 def fetch_best_effort(url: str) -> dict:
-    """
-    Returns: { ok, source, html, text }
-    - html is provided only when we have real HTML.
-    - text provided for reader-style fallbacks.
-    """
     url = (url or "").strip()
     if not url:
         return {"ok": False, "source": None, "html": "", "text": ""}
 
-    # 1) direct HTML
+    # direct HTML
     try:
         code, html = fetch_direct(url)
         if code == 200 and html:
@@ -74,7 +69,7 @@ def fetch_best_effort(url: str) -> dict:
     except Exception:
         pass
 
-    # 2) jina reader
+    # jina reader
     try:
         code, txt = fetch_jina(url)
         if code == 200 and txt:
@@ -84,7 +79,7 @@ def fetch_best_effort(url: str) -> dict:
     except Exception:
         pass
 
-    # 3) textise (encoded)
+    # textise
     try:
         encoded = quote_plus(url)
         t_url = f"https://textise.org/showtext.aspx?strURL={encoded}"
@@ -99,7 +94,7 @@ def fetch_best_effort(url: str) -> dict:
     return {"ok": False, "source": None, "html": "", "text": ""}
 
 # =========================
-# HIERARCHY-AWARE HEADINGS
+# HEADING TREE
 # =========================
 def norm_header(h: str) -> str:
     h = clean(h).lower()
@@ -107,12 +102,7 @@ def norm_header(h: str) -> str:
     h = re.sub(r"\s+", " ", h).strip()
     return h
 
-def is_faq_header(h: str) -> bool:
-    hn = norm_header(h)
-    return "faq" in hn or "frequently asked" in hn
-
 def brief_text(content: str) -> str:
-    # 1–2 sentences max
     content = clean(content)
     parts = re.split(r"(?<=[.!?])\s+", content)
     parts = [p.strip() for p in parts if len(p.strip()) > 30]
@@ -121,12 +111,13 @@ def brief_text(content: str) -> str:
         out = out[:220].rstrip() + "..."
     return out
 
-def build_heading_tree_from_html(html: str) -> list[dict]:
-    """
-    Build hierarchical nodes from H2/H3/H4.
-    Output: list of nodes:
-      { level, header, content, children:[...] }
-    """
+def level_of(tag_name: str) -> int:
+    try:
+        return int(tag_name[1])
+    except:
+        return 9
+
+def build_tree_from_html(html: str) -> list[dict]:
     soup = BeautifulSoup(html, "lxml")
     for t in soup.find_all(list(IGNORE)):
         t.decompose()
@@ -136,43 +127,31 @@ def build_heading_tree_from_html(html: str) -> list[dict]:
     if not headings:
         headings = root.find_all(["h1", "h2", "h3", "h4"])
 
-    def level_of(tag_name: str) -> int:
-        # map h1->1, h2->2, h3->3, h4->4
-        try:
-            return int(tag_name[1])
-        except:
-            return 9
-
     nodes = []
-    stack = []  # stack of nodes
+    stack = []
 
-    def push_node(node):
-        nonlocal nodes, stack
-        # attach to parent if exists
+    def pop_to_level(lvl):
+        while stack and stack[-1]["level"] >= lvl:
+            stack.pop()
+
+    def add_node(node):
         if stack:
             stack[-1]["children"].append(node)
         else:
             nodes.append(node)
         stack.append(node)
 
-    def pop_to_level(lvl):
-        nonlocal stack
-        while stack and stack[-1]["level"] >= lvl:
-            stack.pop()
-
-    # Walk headings, gather content until next heading
     for h in headings:
         header = clean(h.get_text(" "))
         if not header or len(header) < 3:
             continue
-        lvl = level_of(h.name)
 
+        lvl = level_of(h.name)
         pop_to_level(lvl)
 
         node = {"level": lvl, "header": header, "content": "", "children": []}
-        push_node(node)
+        add_node(node)
 
-        # collect content until next heading
         content_parts = []
         for sib in h.find_all_next():
             if sib == h:
@@ -186,65 +165,29 @@ def build_heading_tree_from_html(html: str) -> list[dict]:
 
         node["content"] = clean(" ".join(content_parts))
 
-    # drop tiny content-only nodes (keep header + children though)
-    def prune(n: dict) -> dict | None:
-        # prune children first
-        kept_children = []
-        for ch in n["children"]:
-            pr = prune(ch)
-            if pr:
-                kept_children.append(pr)
-        n["children"] = kept_children
+    return nodes
 
-        # keep if it has children (even if short content)
-        if n["children"]:
-            return n
-
-        # keep if content is meaningful
-        if len(n["content"]) >= 80:
-            return n
-
-        return None
-
-    pruned = []
-    for n in nodes:
-        p = prune(n)
-        if p:
-            pruned.append(p)
-
-    return pruned
-
-def build_heading_tree_from_reader_text(text: str) -> list[dict]:
-    """
-    For Jina markdown-like text.
-    Headings look like:
-      ## Header
-      ### Subheader
-      #### Question
-    """
+def build_tree_from_reader_text(text: str) -> list[dict]:
     lines = [l.rstrip() for l in (text or "").splitlines()]
-
-    def level_from_md(line: str) -> int | None:
-        m = re.match(r"^(#{1,4})\s+(.*)$", line.strip())
-        if not m:
-            return None
-        return len(m.group(1))
-
     nodes = []
     stack = []
 
-    def push_node(node):
-        nonlocal nodes, stack
+    def md_level(line: str):
+        m = re.match(r"^(#{1,4})\s+(.*)$", line.strip())
+        if not m:
+            return None
+        return len(m.group(1)), clean(m.group(2))
+
+    def pop_to_level(lvl):
+        while stack and stack[-1]["level"] >= lvl:
+            stack.pop()
+
+    def add_node(node):
         if stack:
             stack[-1]["children"].append(node)
         else:
             nodes.append(node)
         stack.append(node)
-
-    def pop_to_level(lvl):
-        nonlocal stack
-        while stack and stack[-1]["level"] >= lvl:
-            stack.pop()
 
     current = None
     for line in lines:
@@ -252,146 +195,146 @@ def build_heading_tree_from_reader_text(text: str) -> list[dict]:
         if not s:
             continue
 
-        lvl = level_from_md(s)
-        if lvl is not None:
-            header = clean(re.sub(r"^#{1,4}\s+", "", s))
-            if not header:
-                continue
+        ml = md_level(s)
+        if ml:
+            lvl, header = ml
             pop_to_level(lvl)
             node = {"level": lvl, "header": header, "content": "", "children": []}
-            push_node(node)
+            add_node(node)
             current = node
         else:
             if current:
                 current["content"] += " " + s
 
-    # clean contents
-    def post(n):
+    # cleanup
+    def walk(n):
         n["content"] = clean(n["content"])
-        n["children"] = [post(c) for c in n["children"]]
+        n["children"] = [walk(c) for c in n["children"]]
         return n
-    nodes = [post(n) for n in nodes]
 
-    # prune like HTML version
-    def prune(n: dict) -> dict | None:
-        kept_children = []
-        for ch in n["children"]:
-            pr = prune(ch)
-            if pr:
-                kept_children.append(pr)
-        n["children"] = kept_children
-
-        if n["children"]:
-            return n
-        if len(n["content"]) >= 80:
-            return n
-        return None
-
-    pruned = []
-    for n in nodes:
-        p = prune(n)
-        if p:
-            pruned.append(p)
-
-    return pruned
+    return [walk(n) for n in nodes]
 
 def get_tree(url: str) -> dict:
-    """
-    Returns:
-      { ok, source, nodes:[...] }
-    """
     fetched = fetch_best_effort(url)
     if not fetched["ok"]:
         return {"ok": False, "source": None, "nodes": []}
 
     if fetched["html"]:
-        nodes = build_heading_tree_from_html(fetched["html"])
-        return {"ok": True, "source": fetched["source"], "nodes": nodes}
+        return {"ok": True, "source": fetched["source"], "nodes": build_tree_from_html(fetched["html"])}
 
-    nodes = build_heading_tree_from_reader_text(fetched["text"])
-    return {"ok": True, "source": fetched["source"], "nodes": nodes}
+    return {"ok": True, "source": fetched["source"], "nodes": build_tree_from_reader_text(fetched["text"])}
 
 # =========================
-# FLATTEN FOR OUTPUT
+# FORCE GROUPING LOGIC
 # =========================
-def collect_headers_norm(nodes: list[dict], keep_levels=(2,3)) -> set:
-    s = set()
+def is_subpoint_heading(h: str) -> bool:
+    """
+    Treat as "should be grouped under parent" even if it's H3.
+    Examples: 'Dubai Marina:' 'Downtown Dubai:' 'JLT (Jumeirah Lakes Towers):'
+    """
+    s = clean(h)
+    if not s:
+        return False
+
+    # ends with colon
+    if s.endswith(":"):
+        return True
+
+    # very short place-like headings
+    # (2-6 words, mostly capitalized words)
+    words = s.split()
+    if 2 <= len(words) <= 6:
+        cap_ratio = sum(1 for w in words if w[:1].isupper()) / len(words)
+        if cap_ratio >= 0.6:
+            return True
+
+    return False
+
+def collect_headers_norm(nodes: list[dict], keep_levels=(2, 3)) -> set:
+    out = set()
     def walk(n):
         if n["level"] in keep_levels:
             hn = norm_header(n["header"])
             if hn:
-                s.add(hn)
+                out.add(hn)
         for c in n["children"]:
             walk(c)
     for n in nodes:
         walk(n)
-    return s
+    return out
 
-def output_rows_missing_headers_per_comp(bayut_nodes, comp_nodes, comp_url):
-    """
-    Output rows for missing H2/H3 only.
-    If missing header is H3, include H4 titles inside the brief (not separate rows).
-    FAQs: show one row with the list of questions (H4) in the brief.
-    """
-    bayut_norm = collect_headers_norm(bayut_nodes, keep_levels=(2,3))
+def gather_child_titles(node: dict) -> list[str]:
+    titles = []
+    def walk(n):
+        for ch in n.get("children", []):
+            t = clean(ch.get("header", ""))
+            if t:
+                titles.append(t)
+            walk(ch)
+    walk(node)
+    # dedupe
+    seen = set()
+    out = []
+    for t in titles:
+        nt = norm_header(t)
+        if nt and nt not in seen:
+            seen.add(nt)
+            out.append(t)
+    return out
 
+def rows_missing_headers(bayut_nodes, comp_nodes, comp_url):
+    bayut_norm = collect_headers_norm(bayut_nodes, keep_levels=(2, 3))
     rows = []
 
-    def h4_titles(node: dict) -> list[str]:
-        titles = []
-        for ch in node.get("children", []):
-            if ch["level"] == 4:
-                t = clean(ch["header"])
-                if t:
-                    titles.append(t)
-            # sometimes H4 might be nested differently; collect any level-4 in subtree
-            titles.extend(h4_titles(ch))
-        # dedupe preserve order
-        out = []
-        seen = set()
-        for t in titles:
-            nt = norm_header(t)
-            if nt and nt not in seen:
-                seen.add(nt)
-                out.append(t)
-        return out
-
-    def walk(node: dict):
+    def walk(node: dict, parent: dict | None):
         lvl = node["level"]
 
-        # only consider H2/H3 as "headers" rows
-        if lvl in (2,3):
+        # Only output rows for H2/H3, BUT:
+        # - If it's subpoint heading, NEVER output it (merge into parent)
+        if lvl in (2, 3):
             hn = norm_header(node["header"])
             if hn and hn not in bayut_norm:
-                base = brief_text(node.get("content", ""))
+                # if this node is a subpoint, skip row; parent will include it
+                if parent and is_subpoint_heading(node["header"]):
+                    pass
+                else:
+                    base = brief_text(node.get("content", ""))
 
-                # attach H4 questions/subheaders inside the brief for H3
-                extra = ""
-                if lvl == 3:
-                    subs = h4_titles(node)
+                    # Include subpoints under this header (any child headings that are subpoints)
+                    subs = []
+                    for ch in node.get("children", []):
+                        if is_subpoint_heading(ch.get("header", "")):
+                            subs.append(clean(ch["header"]))
+                    # Also include deeper subpoints
+                    if not subs:
+                        # gather any child titles if there are no "subpoint" marked children
+                        pass
+
+                    extra = ""
                     if subs:
-                        if is_faq_header(node["header"]):
-                            extra = " FAQs: " + "; ".join(subs[:12])
+                        extra = " Subpoints: " + "; ".join(subs[:12])
+
+                    brief_full = (base + (" " if base and extra else "") + extra).strip()
+                    if not brief_full:
+                        # fallback: show child titles if no content
+                        child_titles = gather_child_titles(node)
+                        if child_titles:
+                            brief_full = "Includes: " + "; ".join(child_titles[:12])
                         else:
-                            extra = " Subpoints: " + "; ".join(subs[:10])
+                            brief_full = "Section present in competitor."
 
-                brief_full = (base + (" " if base and extra else "") + extra).strip()
-                if not brief_full:
-                    # if no content, at least show subpoints
-                    brief_full = extra.strip() or "Section present in competitor."
+                    rows.append({
+                        "Missing Header": node["header"],
+                        "What it contains (brief)": brief_full[:320] + ("..." if len(brief_full) > 320 else ""),
+                        "Source": comp_url
+                    })
 
-                rows.append({
-                    "Missing Header": node["header"],
-                    "What it contains (brief)": brief_full[:300] + ("..." if len(brief_full) > 300 else ""),
-                    "Source": comp_url
-                })
-
-        # continue traversal
+        # traverse children, but pass current as parent
         for ch in node.get("children", []):
-            walk(ch)
+            walk(ch, node)
 
     for n in comp_nodes:
-        walk(n)
+        walk(n, None)
 
     return rows
 
@@ -399,7 +342,7 @@ def output_rows_missing_headers_per_comp(bayut_nodes, comp_nodes, comp_url):
 # UI
 # =========================
 st.title("Bayut Header Gap Analysis")
-st.caption("Per competitor: Missing H2/H3 headers in Bayut • H4 gets grouped under its parent H3 (e.g., FAQs questions).")
+st.caption("Per competitor: Missing headers in Bayut • subpoint headings get grouped under the parent section (not separate rows).")
 
 bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
 competitors_text = st.text_area(
@@ -436,8 +379,7 @@ if st.button("Run analysis"):
 
         fetch_report.append((comp_url, f"ok ({comp_data['source']})"))
 
-        # ✅ run competitor alone: missing headers only
-        rows.extend(output_rows_missing_headers_per_comp(
+        rows.extend(rows_missing_headers(
             bayut_nodes=bayut_data["nodes"],
             comp_nodes=comp_data["nodes"],
             comp_url=comp_url
@@ -452,6 +394,6 @@ if st.button("Run analysis"):
 
     st.subheader("Missing headers in Bayut (per competitor)")
     if not rows:
-        st.info("No missing H2/H3 headers found (or competitors blocked / headings not extractable).")
+        st.info("No missing headers found (or competitors blocked / headings not extractable).")
     else:
         st.dataframe(rows, use_container_width=True)
