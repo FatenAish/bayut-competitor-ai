@@ -51,7 +51,7 @@ st.markdown(
         font-size: 16px;
       }}
 
-      /* light green labels */
+      /* light green labels / section headers */
       .section-pill {{
         background: {LIGHT_GREEN};
         border: 1px solid {LIGHT_GREEN_2};
@@ -75,6 +75,20 @@ st.markdown(
         border-radius: 12px !important;
         padding: 0.6rem 1rem !important;
         font-weight: 700 !important;
+      }}
+
+      /* MODE BUTTONS - centered + pill look */
+      .mode-wrap {{
+        display:flex;
+        justify-content:center;
+        margin: 10px 0 6px 0;
+      }}
+      .mode-note {{
+        text-align:center;
+        color:#6B7280;
+        font-size: 13px;
+        margin-top: -2px;
+        margin-bottom: 6px;
       }}
 
       /* tables */
@@ -413,9 +427,19 @@ def get_tree(url: str) -> dict:
         return {"ok": False, "source": None, "nodes": [], "status": fetched.get("status")}
 
     if fetched["html"]:
-        return {"ok": True, "source": fetched["source"], "nodes": build_tree_from_html(fetched["html"]), "status": fetched.get("status")}
+        return {
+            "ok": True,
+            "source": fetched["source"],
+            "nodes": build_tree_from_html(fetched["html"]),
+            "status": fetched.get("status"),
+        }
 
-    return {"ok": True, "source": fetched["source"], "nodes": build_tree_from_reader_text(fetched["text"]), "status": fetched.get("status")}
+    return {
+        "ok": True,
+        "source": fetched["source"],
+        "nodes": build_tree_from_reader_text(fetched["text"]),
+        "status": fetched.get("status"),
+    }
 
 # =====================================================
 # HELPERS
@@ -426,7 +450,6 @@ def site_name(url: str) -> str:
         host = host.replace("www.", "")
         base = host.split(":")[0]
         name = base.split(".")[0]
-        # nicer
         return name[:1].upper() + name[1:]
     except Exception:
         return "Source"
@@ -449,9 +472,6 @@ def list_headers(nodes: list[dict], level: int) -> list[str]:
     return [x["header"] for x in flatten(nodes) if x["level"] == level and not is_noise_header(x["header"])]
 
 def group_h4_under_h3(nodes: list[dict]) -> dict[str, list[str]]:
-    """
-    Returns mapping: H3 header -> list of H4 child headers (direct children).
-    """
     mapping = {}
     def walk(n: dict):
         if n["level"] == 3:
@@ -465,7 +485,6 @@ def group_h4_under_h3(nodes: list[dict]) -> dict[str, list[str]]:
 
 # =====================================================
 # UPDATE MODE (existing article) - keep current logic
-# (Gap table: missing headers + content gaps)
 # =====================================================
 STOP = {
     "the","and","for","with","that","this","from","you","your","are","was","were","will","have","has","had",
@@ -510,20 +529,19 @@ def index_by_norm(nodes: list[dict], levels=(2,3)) -> dict[str, dict]:
 
 def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: str) -> list[dict]:
     """
-    Produce merged, low-noise rows:
+    Rows:
     - Missing header rows for competitor H2/H3 not in Bayut
     - Content gap rows for headers present in both where competitor has meaningful extra coverage
-    H4 are never separate rows; they're merged into the parent row.
+    H4 are never separate rows; they are merged inside the parent row.
     """
     rows = []
     bayut_norm = collect_norm_set(bayut_nodes, keep_levels=(2,3))
     bayut_idx = index_by_norm(bayut_nodes, levels=(2,3))
     comp_idx = index_by_norm(comp_nodes, levels=(2,3))
 
-    # 1) Missing headers (H2/H3)
-    # merge any H4 under the missing parent (if present)
     h4_map = group_h4_under_h3(comp_nodes)
 
+    # 1) Missing headers (H2/H3)
     for x in flatten(comp_nodes):
         if x["level"] not in (2,3):
             continue
@@ -532,16 +550,16 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
             continue
 
         brief = first_two_sentences(x.get("content",""), max_len=220)
+
         extra = ""
         if x["level"] == 3:
             h4s = h4_map.get(x["header"], [])
             if h4s:
                 extra = " Includes: " + "; ".join(h4s[:10]) + "."
         else:
-            # if H2 has H3 children, mention a few (but do NOT list each as separate row)
             h3s = [c["header"] for c in (x.get("children", []) or []) if c["level"] == 3 and not is_noise_header(c["header"])]
             if h3s:
-                extra = " Covers: " + "; ".join(h3s[:10]) + "."
+                extra = " Covers: " + "; ".join(h3s[:10]) + ("…" if len(h3s) > 10 else "") + "."
 
         if not brief and not extra:
             brief = "Competitor includes this section — adding it would close a clear reader gap."
@@ -550,15 +568,15 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
             f"Competitor includes this section. {brief} "
             f"Bayut doesn’t cover it yet, so adding it would fill a clear gap.{extra}"
         )
+
         rows.append({
             "Header (Gap)": x["header"],
             "What to add": text,
             "Source": source_link(comp_url),
-            "_type": "missing",
-            "_key": f"missing::{nh}"
+            "_key": f"missing::{nh}::{comp_url}"
         })
 
-    # 2) Content gaps (header exists in Bayut but competitor has meaningful extra)
+    # 2) Content gaps (present header, competitor has extra)
     content_gap_rows = []
     for nh, comp_item in comp_idx.items():
         if nh not in bayut_idx:
@@ -568,7 +586,6 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
         comp_text = (comp_item.get("content","") or "")
         bayut_text = (b.get("content","") or "")
 
-        # quick heuristics
         if len(comp_text) < 180:
             continue
 
@@ -576,12 +593,10 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
         bay_tok = tokens(bayut_text)
         new_terms = [t for t in (comp_tok - bay_tok) if len(t) > 3]
 
-        # if Bayut is much shorter and competitor introduces more ideas
         if (len(comp_text) > max(260, len(bayut_text) * 1.35)) and len(new_terms) >= 6:
             example = first_two_sentences(comp_text, max_len=240)
-            # make it human, not repeated
             msg = (
-                f"Bayut covers this topic, but it misses some useful depth that the competitor adds. "
+                f"Bayut covers this topic, but it misses some useful depth the competitor adds. "
                 f"For example, the competitor explains: {example} "
                 f"Add a short paragraph (or bullets) inside the existing section to cover the missing angles."
             )
@@ -590,8 +605,7 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
                 "Header (Gap)": f"{b['header']} (Content Gap)",
                 "What to add": msg,
                 "Source": source_link(comp_url),
-                "_type": "content",
-                "_key": f"content::{nh}"
+                "_key": f"content::{nh}::{comp_url}"
             })
 
     # dedupe content gaps per (competitor, header)
@@ -602,6 +616,10 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
         seen.add(r["_key"])
         rows.append(r)
 
+    # final: strip internal keys
+    for r in rows:
+        r.pop("_key", None)
+
     return rows
 
 # =====================================================
@@ -610,41 +628,38 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
 def new_post_coverage_rows(comp_nodes: list[dict], comp_url: str) -> list[dict]:
     """
     SHORT + DIRECT:
-    one row for H1, one row for H2 (all H2s), one row for H3 (all H3s, with H4 merged in phrasing).
+    - one row H1
+    - one row H2 (all H2s)
+    - one row H3 (all H3s with H4 merged)
     """
     h1s = list_headers(comp_nodes, 1)
     h2s = list_headers(comp_nodes, 2)
     h3s = list_headers(comp_nodes, 3)
     h4_map = group_h4_under_h3(comp_nodes)
 
-    # H1
     h1 = h1s[0] if h1s else ""
-    if h1:
-        h1_brief = "Competitors frame the article’s main promise in the H1. Use a clear, reader-friendly main angle."
-    else:
-        h1_brief = "No clean H1 detected (site layout differs). Use a clear, reader-friendly main promise."
+    h1_brief = (
+        "Competitors frame the article’s main promise in the H1. Use a clear, reader-friendly main angle."
+        if h1 else
+        "No clean H1 detected (site layout differs). Use a clear, reader-friendly main promise."
+    )
 
-    # H2 summary
-    h2_list = "; ".join(h2s[:10]) + ("…" if len(h2s) > 10 else "")
     if h2s:
-        h2_brief = (
-            f"Covers: {h2_list}. "
-            f"Overall flow: intro/context → structured sections → wrap-up/FAQ (when present)."
-        )
+        h2_list = "; ".join(h2s[:12]) + ("…" if len(h2s) > 12 else "")
+        h2_brief = f"Covers: {h2_list}."
     else:
         h2_brief = "No clear H2 sections detected."
 
-    # H3 summary (merge H4 under their parent)
     def h3_label(h3: str) -> str:
         h4s = h4_map.get(h3, [])
         if h4s:
-            small = "; ".join(h4s[:4]) + ("…" if len(h4s) > 4 else "")
+            small = "; ".join(h4s[:5]) + ("…" if len(h4s) > 5 else "")
             return f"{h3} (includes: {small})"
         return h3
 
-    h3_labeled = [h3_label(x) for x in h3s[:12]]
-    h3_list = "; ".join(h3_labeled) + ("…" if len(h3s) > 12 else "")
     if h3s:
+        h3_labeled = [h3_label(x) for x in h3s[:14]]
+        h3_list = "; ".join(h3_labeled) + ("…" if len(h3s) > 14 else "")
         h3_brief = f"Covers: {h3_list}."
     else:
         h3_brief = "No clear H3 subsections detected."
@@ -666,21 +681,53 @@ def render_table(df: pd.DataFrame):
     st.markdown(html, unsafe_allow_html=True)
 
 # =====================================================
-# UI - MODE SELECTOR
+# MODE SELECTOR (CENTERED BUTTONS) + INTERNAL FETCH HIDDEN
 # =====================================================
-mode = st.radio(
-    "Mode",
-    ["Update Mode (existing Bayut article)", "New Post Mode (coverage outline)"],
-    horizontal=True
-)
+if "mode" not in st.session_state:
+    st.session_state.mode = "update"  # "update" or "new"
 
-st.markdown("<div class='helper'>Tip: add competitors one per line (as many as you want).</div>", unsafe_allow_html=True)
+# Centered mode buttons
+st.markdown("<div class='mode-wrap'>", unsafe_allow_html=True)
+outer_l, outer_m, outer_r = st.columns([1, 2.2, 1])
+with outer_m:
+    b1, b2 = st.columns(2)
 
-if mode.startswith("Update Mode"):
+    with b1:
+        if st.button(
+            "Update Mode",
+            type="primary" if st.session_state.mode == "update" else "secondary",
+            use_container_width=True,
+            key="mode_update_btn",
+        ):
+            st.session_state.mode = "update"
+
+    with b2:
+        if st.button(
+            "New Post Mode",
+            type="primary" if st.session_state.mode == "new" else "secondary",
+            use_container_width=True,
+            key="mode_new_btn",
+        ):
+            st.session_state.mode = "new"
+st.markdown("</div>", unsafe_allow_html=True)
+
+st.markdown("<div class='mode-note'>Tip: add competitors one per line (as many as you want).</div>", unsafe_allow_html=True)
+
+# Optional INTERNAL ONLY (hidden by default)
+show_internal_fetch = st.sidebar.checkbox("Admin: show internal fetch log", value=False)
+
+# =====================================================
+# UI - UPDATE MODE
+# =====================================================
+if st.session_state.mode == "update":
     st.markdown("<div class='section-pill'>Update Mode</div>", unsafe_allow_html=True)
 
     bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
-    competitors_text = st.text_area("Competitor URLs (one per line)", height=120, placeholder="https://example.com/article\nhttps://example.com/another")
+    competitors_text = st.text_area(
+        "Competitor URLs (one per line)",
+        height=120,
+        placeholder="https://example.com/article\nhttps://example.com/another"
+    )
     competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
 
     run = st.button("Run analysis", type="primary")
@@ -704,7 +751,7 @@ if mode.startswith("Update Mode"):
         internal_fetch = []
 
         for comp_url in competitors:
-            with st.spinner(f"Fetching competitor…"):
+            with st.spinner("Fetching competitor…"):
                 comp_data = get_tree(comp_url)
 
             if not comp_data["ok"] or not comp_data["nodes"]:
@@ -714,10 +761,16 @@ if mode.startswith("Update Mode"):
             internal_fetch.append((comp_url, f"ok ({comp_data['source']})"))
             all_rows.extend(update_mode_rows(bayut_data["nodes"], comp_data["nodes"], comp_url))
 
-        # hide fetch status from user (internal only)
-        with st.expander("Internal fetch log (optional)"):
+        # INTERNAL ONLY: hidden from normal users
+        if show_internal_fetch and internal_fetch:
+            st.sidebar.markdown("### Internal fetch log")
             for u, s in internal_fetch:
-                st.write(u, "—", s)
+                st.sidebar.write(u, "—", s)
+
+        # If some competitors blocked, show a short user-friendly note (no URLs)
+        blocked = sum(1 for _, s in internal_fetch if not str(s).startswith("ok"))
+        if blocked:
+            st.warning(f"{blocked} competitor URL(s) could not be fetched. Results are based on the pages that were accessible.")
 
         st.markdown("<div class='section-pill'>Content Gaps</div>", unsafe_allow_html=True)
 
@@ -727,11 +780,18 @@ if mode.startswith("Update Mode"):
             df = pd.DataFrame(all_rows)[["Header (Gap)", "What to add", "Source"]]
             render_table(df)
 
+# =====================================================
+# UI - NEW POST MODE
+# =====================================================
 else:
     st.markdown("<div class='section-pill'>New Post Mode</div>", unsafe_allow_html=True)
 
     new_title = st.text_input("New post title", placeholder="Arabian Ranches vs Mudon")
-    competitors_text = st.text_area("Competitor URLs (one per line)", height=120, placeholder="https://example.com/article\nhttps://example.com/another")
+    competitors_text = st.text_area(
+        "Competitor URLs (one per line)",
+        height=120,
+        placeholder="https://example.com/article\nhttps://example.com/another"
+    )
     competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
 
     run = st.button("Generate competitor coverage", type="primary")
@@ -758,10 +818,15 @@ else:
             internal_fetch.append((comp_url, f"ok ({comp_data['source']})"))
             rows.extend(new_post_coverage_rows(comp_data["nodes"], comp_url))
 
-        # hide fetch status from user (internal only)
-        with st.expander("Internal fetch log (optional)"):
+        # INTERNAL ONLY: hidden from normal users
+        if show_internal_fetch and internal_fetch:
+            st.sidebar.markdown("### Internal fetch log")
             for u, s in internal_fetch:
-                st.write(u, "—", s)
+                st.sidebar.write(u, "—", s)
+
+        blocked = sum(1 for _, s in internal_fetch if not str(s).startswith("ok"))
+        if blocked:
+            st.warning(f"{blocked} competitor URL(s) could not be fetched. Results are based on the pages that were accessible.")
 
         st.markdown("<div class='section-pill'>Competitor Coverage</div>", unsafe_allow_html=True)
 
