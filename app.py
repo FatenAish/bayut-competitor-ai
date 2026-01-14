@@ -4,12 +4,137 @@ import re
 import pandas as pd
 from bs4 import BeautifulSoup
 from urllib.parse import quote_plus, urlparse
-import hashlib
 
 # =========================
 # PAGE CONFIG
 # =========================
 st.set_page_config(page_title="Bayut Competitor Gap Analysis", layout="wide")
+
+# =========================
+# GLOBAL UI STYLE
+# =========================
+BAYUT_GREEN = "#0E8A6D"
+LIGHT_GREEN = "#E9F7F2"
+LIGHT_GREEN_2 = "#DFF2EA"
+TEXT_DARK = "#1f2937"
+
+st.markdown(
+    f"""
+    <style>
+      /* Page spacing */
+      section.main > div.block-container {{
+        max-width: 1100px;
+        padding-top: 2.2rem;
+        padding-bottom: 2.2rem;
+      }}
+
+      /* Centered title */
+      .hero-title {{
+        text-align: center;
+        font-size: 52px;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        margin-bottom: 8px;
+        color: {TEXT_DARK};
+      }}
+      .hero-title .bayut {{
+        color: {BAYUT_GREEN};
+      }}
+
+      /* Centered subtitle (optional – kept subtle) */
+      .hero-sub {{
+        text-align: center;
+        font-size: 16px;
+        color: #6b7280;
+        margin-bottom: 28px;
+      }}
+
+      /* Bold labels */
+      div[data-testid="stWidgetLabel"] > label,
+      label {{
+        font-weight: 800 !important;
+        color: {TEXT_DARK} !important;
+      }}
+
+      /* Inputs in light green */
+      div[data-testid="stTextInput"] input {{
+        background: {LIGHT_GREEN} !important;
+        border: 1px solid {LIGHT_GREEN_2} !important;
+        border-radius: 12px !important;
+        padding: 14px 14px !important;
+      }}
+
+      div[data-testid="stTextArea"] textarea {{
+        background: {LIGHT_GREEN} !important;
+        border: 1px solid {LIGHT_GREEN_2} !important;
+        border-radius: 12px !important;
+        padding: 14px 14px !important;
+      }}
+
+      /* Button style */
+      div.stButton > button {{
+        background: {BAYUT_GREEN};
+        color: white;
+        border: 0;
+        border-radius: 12px;
+        padding: 10px 18px;
+        font-weight: 700;
+      }}
+      div.stButton > button:hover {{
+        filter: brightness(0.95);
+      }}
+
+      /* Table styling */
+      .table-wrap {{
+        margin-top: 10px;
+      }}
+
+      table {{
+        width: 100%;
+        border-collapse: collapse;
+        border: 1px solid #eef2f7;
+        border-radius: 14px;
+        overflow: hidden;
+      }}
+
+      th {{
+        background: {LIGHT_GREEN_2};
+        color: {TEXT_DARK};
+        text-align: center !important;
+        font-weight: 800;
+        padding: 12px 10px;
+        border-bottom: 1px solid #e5e7eb;
+      }}
+
+      td {{
+        padding: 12px 10px;
+        border-bottom: 1px solid #f1f5f9;
+        vertical-align: top;
+        font-size: 14px;
+        color: {TEXT_DARK};
+      }}
+
+      tr:hover td {{
+        background: #fbfffd;
+      }}
+
+      a {{
+        color: {BAYUT_GREEN};
+        font-weight: 700;
+        text-decoration: none;
+      }}
+      a:hover {{
+        text-decoration: underline;
+      }}
+
+      /* Hide Streamlit default “caption-like” spacing if needed */
+      .stCaptionContainer {{
+        display: none;
+      }}
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
 # =========================
 # FETCH (ROBUST FALLBACKS)
@@ -26,16 +151,13 @@ DEFAULT_HEADERS = {
 
 IGNORE = {"nav", "footer", "header", "aside", "script", "style", "noscript"}
 
-
 def clean(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "")).strip()
-
 
 @st.cache_data(show_spinner=False, ttl=60 * 30)
 def fetch_direct(url: str, timeout: int = 20) -> tuple[int, str]:
     r = requests.get(url, headers=DEFAULT_HEADERS, timeout=timeout, allow_redirects=True)
     return r.status_code, r.text
-
 
 @st.cache_data(show_spinner=False, ttl=60 * 30)
 def fetch_jina(url: str, timeout: int = 20) -> tuple[int, str]:
@@ -48,14 +170,12 @@ def fetch_jina(url: str, timeout: int = 20) -> tuple[int, str]:
     r = requests.get(jina_url, headers=DEFAULT_HEADERS, timeout=timeout, allow_redirects=True)
     return r.status_code, r.text
 
-
 def looks_blocked(text: str) -> bool:
     t = (text or "").lower()
     return any(x in t for x in [
         "just a moment", "checking your browser", "verify you are human",
         "cloudflare", "access denied", "captcha"
     ])
-
 
 def fetch_best_effort(url: str) -> dict:
     url = (url or "").strip()
@@ -109,7 +229,6 @@ def norm_header(h: str) -> str:
     h = re.sub(r"\s+", " ", h).strip()
     return h
 
-
 NOISE_PATTERNS = [
     r"\blooking to rent\b",
     r"\blooking to buy\b",
@@ -150,35 +269,27 @@ NOISE_PATTERNS = [
     r"\bcomments\b",
 ]
 
-
 def is_noise_header(h: str) -> bool:
     s = clean(h)
     if not s:
         return True
-
     hn = norm_header(s)
     if len(hn) < 4:
         return True
-
     if len(s) > 90:
         return True
-
     if sum(1 for c in s if c.isalnum()) / max(len(s), 1) < 0.6:
         return True
-
     for pat in NOISE_PATTERNS:
         if re.search(pat, hn):
             return True
-
     return False
-
 
 def level_of(tag_name: str) -> int:
     try:
         return int(tag_name[1])
     except Exception:
         return 9
-
 
 def build_tree_from_html(html: str) -> list[dict]:
     soup = BeautifulSoup(html, "lxml")
@@ -232,7 +343,6 @@ def build_tree_from_html(html: str) -> list[dict]:
 
     return nodes
 
-
 def build_tree_from_reader_text(text: str) -> list[dict]:
     lines = [l.rstrip() for l in (text or "").splitlines()]
     nodes = []
@@ -285,7 +395,6 @@ def build_tree_from_reader_text(text: str) -> list[dict]:
 
     return [walk(n) for n in nodes]
 
-
 def get_tree(url: str) -> dict:
     fetched = fetch_best_effort(url)
     if not fetched["ok"]:
@@ -300,17 +409,11 @@ def get_tree(url: str) -> dict:
 # STRICT SUBPOINT RULES
 # =========================
 def is_subpoint_heading_text_only(h: str) -> bool:
-    """
-    STRICT: only treat as subpoint if it ends with ':'.
-    """
     s = clean(h)
     if not s or is_noise_header(s):
         return False
     return s.endswith(":")
 
-# =========================
-# FLATTEN SECTIONS (H2/H3 ONLY) + STRICT-FOLD H4 UNDER LATEST H2/H3
-# =========================
 def flatten_sections(nodes: list[dict]) -> list[dict]:
     sections = []
     current = None
@@ -332,20 +435,13 @@ def flatten_sections(nodes: list[dict]) -> list[dict]:
         h = clean(n.get("header", ""))
         txt = clean(n.get("content", ""))
 
-        # H4 => ALWAYS subpoint under current H2/H3
         if lvl >= 4:
             append_subpoint(h, txt)
         else:
-            # H2/H3: treat as real section unless it ends with ':' (rare)
             if is_subpoint_heading_text_only(h):
                 append_subpoint(h, txt)
             else:
-                current = {
-                    "header": h,
-                    "norm": norm_header(h),
-                    "text": txt,
-                    "subpoints": []
-                }
+                current = {"header": h, "norm": norm_header(h), "text": txt, "subpoints": []}
                 sections.append(current)
 
         for c in n.get("children", []):
@@ -354,7 +450,6 @@ def flatten_sections(nodes: list[dict]) -> list[dict]:
     for n in nodes:
         walk(n)
 
-    # clean & dedupe subpoints
     for s in sections:
         s["text"] = clean(s["text"])
         seen = set()
@@ -405,7 +500,6 @@ def bucket_for_header(header: str) -> str | None:
             if k in h:
                 return b
     return None
-
 
 STOPWORDS = {
     "the","and","for","with","that","this","from","you","your","are","was","were","will","have","has","had",
@@ -459,7 +553,7 @@ def best_match(comp_sec: dict, bayut_secs: list[dict]) -> dict:
     return {"matched": False, "bayut_section": None, "bucket": c_bucket, "score": best_s}
 
 # =========================
-# GAP EXTRACTION (focused)
+# GAP EXTRACTION
 # =========================
 def split_points(text: str) -> list[str]:
     text = clean(text)
@@ -506,7 +600,7 @@ def top_missing_points(bayut_text: str, comp_text: str, limit: int = 4) -> list[
     return missing
 
 # =========================
-# FAQs: compare missing questions
+# FAQs
 # =========================
 FAQ_HEAD_RE = re.compile(r"\b(faq|faqs|frequently asked questions)\b", re.I)
 
@@ -595,7 +689,7 @@ def site_link(url: str) -> str:
     return f'<a href="{url}" target="_blank">{name}</a>'
 
 # =========================
-# BRIEF BUILDERS (human, non-repetitive)
+# HUMAN BRIEFS
 # =========================
 def format_points(points: list[str], limit: int = 4) -> str:
     pts = []
@@ -609,9 +703,9 @@ def format_points(points: list[str], limit: int = 4) -> str:
 def build_gap_brief(bucket_title: str, points: list[str], subpoints: list[str]) -> str:
     core = format_points(points, limit=4)
     if core:
-        brief = f"Bayut has a {bucket_title} section, but it doesn’t cover: {core}. Add these points inside the existing section to close the gap."
+        brief = f"Bayut covers {bucket_title}, but it misses: {core}. Add these points inside the existing section."
     else:
-        brief = f"Bayut has a {bucket_title} section, but competitor adds useful detail. Add a short paragraph to match the depth."
+        brief = f"Bayut covers {bucket_title}, but the competitor adds useful detail. Add a short paragraph to match the depth."
     if subpoints:
         brief += f" Competitor also touches on: {', '.join(subpoints[:6])}."
         if len(subpoints) > 6:
@@ -623,9 +717,9 @@ def build_missing_brief(header: str, summary: str, subpoints: list[str]) -> str:
     if summary:
         if len(summary) > 220:
             summary = summary[:220].rstrip() + "..."
-        brief = f"Competitor includes this section and explains: {summary}. Bayut doesn’t cover it yet, so adding it would fill a clear reader need."
+        brief = f"Competitor includes this section and explains: {summary} Bayut doesn’t cover it yet, so adding it would help readers."
     else:
-        brief = "Competitor includes this section. Bayut doesn’t cover it yet, so adding it would fill a clear reader need."
+        brief = "Competitor includes this section. Bayut doesn’t cover it yet, so adding it would help readers."
     if subpoints:
         brief += f" It also mentions: {', '.join(subpoints[:6])}."
         if len(subpoints) > 6:
@@ -652,8 +746,8 @@ def build_rows_for_competitor(bayut_nodes, comp_nodes, comp_url):
 
         if not bayut_faq:
             rows.append({
-                "Header (Gap)": "FAQs",
-                "What to add (human brief)": "Competitor has an FAQ block. Bayut doesn’t — add a short FAQs section answering common reader questions.",
+                "Header": "FAQs",
+                "What to add": "Competitor has an FAQ block. Bayut doesn’t — add a short FAQs section answering common reader questions.",
                 "Source": site_link(comp_url)
             })
         elif missing_qs:
@@ -661,15 +755,13 @@ def build_rows_for_competitor(bayut_nodes, comp_nodes, comp_url):
             if len(missing_qs) > 8:
                 qs += f" (+{len(missing_qs)-8} more)"
             rows.append({
-                "Header (Gap)": "FAQs (Content Gap)",
-                "What to add (human brief)": f"Bayut has FAQs, but it’s missing these questions the competitor answers: {qs}.",
+                "Header": "FAQs (Content Gap)",
+                "What to add": f"Bayut has FAQs, but it’s missing these questions the competitor answers: {qs}.",
                 "Source": site_link(comp_url)
             })
 
-    # Aggregate rows by (bucket + matched/missing)
-    # This is the key change that prevents 'Pros & Cons (Content Gap)' from appearing 3 times.
-    agg_gap = {}      # key: bucket_title -> {points:set, subpoints:set}
-    agg_missing = {}  # key: (bucket_title or exact header) -> {summary_parts:[], subpoints:set}
+    agg_gap = {}
+    agg_missing = {}
 
     for c in comp_secs:
         if bucket_for_header(c["header"]) == "faqs" or FAQ_HEAD_RE.search(c["header"]):
@@ -678,7 +770,6 @@ def build_rows_for_competitor(bayut_nodes, comp_nodes, comp_url):
         c_bucket = bucket_for_header(c["header"])
         m = best_match(c, bayut_secs)
 
-        # Matched => CONTENT GAP (merge by bucket title)
         if m["matched"] and m["bayut_section"]:
             b = m["bayut_section"]
             bucket = m["bucket"] or c_bucket or bucket_for_header(b["header"])
@@ -695,10 +786,7 @@ def build_rows_for_competitor(bayut_nodes, comp_nodes, comp_url):
             for sp in (c.get("subpoints") or []):
                 agg_gap[bucket_title]["subpoints"].add(clean(sp))
 
-        # Not matched => MISSING SECTION
         else:
-            # If competitor headings are "Pros", "Cons", etc. and Bayut doesn't have the bucket,
-            # we still want ONE row like "Pros & Cons" (not 3 separate rows).
             if c_bucket and c_bucket in BUCKET_TITLES:
                 key = BUCKET_TITLES[c_bucket]
             else:
@@ -707,7 +795,6 @@ def build_rows_for_competitor(bayut_nodes, comp_nodes, comp_url):
             if key not in agg_missing:
                 agg_missing[key] = {"summaries": [], "subpoints": set()}
 
-            # store one short summary sentence fragment per contributing section (kept small)
             txt = clean(c.get("text", ""))
             if txt:
                 sents = re.split(r"(?<=[.!?])\s+", txt)
@@ -720,36 +807,31 @@ def build_rows_for_competitor(bayut_nodes, comp_nodes, comp_url):
             for sp in (c.get("subpoints") or []):
                 agg_missing[key]["subpoints"].add(clean(sp))
 
-    # Emit merged GAP rows (ONE per bucket)
     for bucket_title, data in agg_gap.items():
-        pts = list(data["points"])
-        # stable ordering
-        pts = sorted(pts, key=lambda x: (len(x), x))[:6]
+        pts = sorted(list(data["points"]), key=lambda x: (len(x), x))[:6]
         subps = sorted(list(data["subpoints"]))[:10]
 
         rows.append({
-            "Header (Gap)": f"{bucket_title} (Content Gap)",
-            "What to add (human brief)": build_gap_brief(bucket_title, pts, subps),
+            "Header": f"{bucket_title} (Content Gap)",
+            "What to add": build_gap_brief(bucket_title, pts, subps),
             "Source": site_link(comp_url)
         })
 
-    # Emit merged MISSING rows
     for key, data in agg_missing.items():
         parts = data["summaries"][:2]
         summary = " ".join(parts).strip()
         subps = sorted(list(data["subpoints"]))[:10]
 
         rows.append({
-            "Header (Gap)": key,
-            "What to add (human brief)": build_missing_brief(key, summary, subps),
+            "Header": key,
+            "What to add": build_missing_brief(key, summary, subps),
             "Source": site_link(comp_url)
         })
 
-    # final dedupe safeguard
     seen = set()
     out = []
     for r in rows:
-        k = (r["Header (Gap)"], r["Source"])
+        k = (r["Header"], r["Source"])
         if k not in seen:
             seen.add(k)
             out.append(r)
@@ -757,11 +839,19 @@ def build_rows_for_competitor(bayut_nodes, comp_nodes, comp_url):
     return out
 
 # =========================
-# UI
+# HERO HEADER
 # =========================
-st.title("Bayut Competitor Gap Analysis")
-st.caption("Fix applied: duplicate bucket rows are merged. So Pros/Cons appears once per competitor, not 3 times.")
+st.markdown(
+    f"""
+    <div class="hero-title"><span class="bayut">Bayut</span> Competitor Gap Analysis</div>
+    <div class="hero-sub">SEO & editorial gaps vs market coverage</div>
+    """,
+    unsafe_allow_html=True
+)
 
+# =========================
+# INPUTS
+# =========================
 bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
 competitors_text = st.text_area(
     "Competitor URLs (one per line)",
@@ -769,6 +859,9 @@ competitors_text = st.text_area(
 )
 competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
 
+# =========================
+# RUN
+# =========================
 if st.button("Run analysis"):
     if not bayut_url.strip():
         st.error("Bayut URL is required.")
@@ -784,50 +877,35 @@ if st.button("Run analysis"):
         st.error("Could not extract headings from Bayut page (blocked or no headings found).")
         st.stop()
 
-    fetch_report = []
     all_rows = []
+    internal_fetch_report = []
 
     for comp_url in competitors:
-        with st.spinner(f"Fetching competitor: {comp_url}"):
+        with st.spinner(f"Fetching competitor..."):
             comp_data = get_tree(comp_url)
 
         if not comp_data["ok"] or not comp_data["nodes"]:
-            fetch_report.append((comp_url, "blocked/no headings"))
+            internal_fetch_report.append((comp_url, "blocked/no headings"))
             continue
 
-        fetch_report.append((comp_url, f"ok ({comp_data['source']})"))
+        internal_fetch_report.append((comp_url, f"ok ({comp_data['source']})"))
         all_rows.extend(build_rows_for_competitor(
             bayut_nodes=bayut_data["nodes"],
             comp_nodes=comp_data["nodes"],
             comp_url=comp_url
         ))
 
-    st.subheader("Fetch status")
-    for u, status in fetch_report:
-        if status.startswith("ok"):
-            st.success(f"✔ {u} — {status}")
-        else:
-            st.warning(f"⚠ {u} — {status}")
+    # Fetch status is intentionally hidden from UI (kept internal)
+    # If you ever want a debug toggle later, we can add it.
 
-    st.subheader("Combined gaps table (all competitors)")
+    st.subheader("Content Gaps")
+
     if not all_rows:
         st.info("No meaningful gaps detected (or competitors blocked / not extractable).")
         st.stop()
 
-    df = pd.DataFrame(all_rows)
+    df = pd.DataFrame(all_rows)[["Header", "What to add", "Source"]]
 
-    # HTML table for clickable source links
-    st.markdown(
-        """
-        <style>
-          table { width: 100%; border-collapse: collapse; }
-          th, td { border: 1px solid #eee; padding: 10px; vertical-align: top; }
-          th { background: #fafafa; text-align: left; }
-          td { font-size: 14px; }
-          a { text-decoration: none; }
-          a:hover { text-decoration: underline; }
-        </style>
-        """,
-        unsafe_allow_html=True
-    )
+    st.markdown('<div class="table-wrap">', unsafe_allow_html=True)
     st.markdown(df.to_html(escape=False, index=False), unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
