@@ -34,7 +34,6 @@ def fetch_direct(url: str, timeout: int = 20) -> tuple[int, str]:
 
 @st.cache_data(show_spinner=False, ttl=60 * 30)
 def fetch_jina(url: str, timeout: int = 20) -> tuple[int, str]:
-    # r.jina.ai/http(s)://...
     if url.startswith("https://"):
         jina_url = "https://r.jina.ai/https://" + url[len("https://"):]
     elif url.startswith("http://"):
@@ -51,22 +50,20 @@ def looks_blocked(text: str) -> bool:
         "cloudflare", "access denied", "captcha"
     ])
 
-def fetch_html_best_effort(url: str) -> dict:
+def fetch_best_effort(url: str) -> dict:
     """
-    Returns dict:
-      { ok, source, html, text }
-    html is only present when we really have HTML.
-    text is always present when ok=True (could be reader-text).
+    Returns: { ok, source, html, text }
+    - html is provided only when we have real HTML.
+    - text provided for reader-style fallbacks.
     """
     url = (url or "").strip()
     if not url:
         return {"ok": False, "source": None, "html": "", "text": ""}
 
-    # 1) direct
+    # 1) direct HTML
     try:
         code, html = fetch_direct(url)
         if code == 200 and html:
-            # keep html + plain text
             soup = BeautifulSoup(html, "lxml")
             for t in soup.find_all(list(IGNORE)):
                 t.decompose()
@@ -77,7 +74,7 @@ def fetch_html_best_effort(url: str) -> dict:
     except Exception:
         pass
 
-    # 2) jina reader (text-like, sometimes markdown)
+    # 2) jina reader
     try:
         code, txt = fetch_jina(url)
         if code == 200 and txt:
@@ -102,7 +99,7 @@ def fetch_html_best_effort(url: str) -> dict:
     return {"ok": False, "source": None, "html": "", "text": ""}
 
 # =========================
-# HEADERS EXTRACTION
+# HIERARCHY-AWARE HEADINGS
 # =========================
 def norm_header(h: str) -> str:
     h = clean(h).lower()
@@ -110,7 +107,26 @@ def norm_header(h: str) -> str:
     h = re.sub(r"\s+", " ", h).strip()
     return h
 
-def extract_sections_from_html(html: str) -> list[dict]:
+def is_faq_header(h: str) -> bool:
+    hn = norm_header(h)
+    return "faq" in hn or "frequently asked" in hn
+
+def brief_text(content: str) -> str:
+    # 1–2 sentences max
+    content = clean(content)
+    parts = re.split(r"(?<=[.!?])\s+", content)
+    parts = [p.strip() for p in parts if len(p.strip()) > 30]
+    out = " ".join(parts[:2])
+    if len(out) > 220:
+        out = out[:220].rstrip() + "..."
+    return out
+
+def build_heading_tree_from_html(html: str) -> list[dict]:
+    """
+    Build hierarchical nodes from H2/H3/H4.
+    Output: list of nodes:
+      { level, header, content, children:[...] }
+    """
     soup = BeautifulSoup(html, "lxml")
     for t in soup.find_all(list(IGNORE)):
         t.decompose()
@@ -120,12 +136,43 @@ def extract_sections_from_html(html: str) -> list[dict]:
     if not headings:
         headings = root.find_all(["h1", "h2", "h3", "h4"])
 
-    sections = []
+    def level_of(tag_name: str) -> int:
+        # map h1->1, h2->2, h3->3, h4->4
+        try:
+            return int(tag_name[1])
+        except:
+            return 9
+
+    nodes = []
+    stack = []  # stack of nodes
+
+    def push_node(node):
+        nonlocal nodes, stack
+        # attach to parent if exists
+        if stack:
+            stack[-1]["children"].append(node)
+        else:
+            nodes.append(node)
+        stack.append(node)
+
+    def pop_to_level(lvl):
+        nonlocal stack
+        while stack and stack[-1]["level"] >= lvl:
+            stack.pop()
+
+    # Walk headings, gather content until next heading
     for h in headings:
         header = clean(h.get_text(" "))
         if not header or len(header) < 3:
             continue
+        lvl = level_of(h.name)
 
+        pop_to_level(lvl)
+
+        node = {"level": lvl, "header": header, "content": "", "children": []}
+        push_node(node)
+
+        # collect content until next heading
         content_parts = []
         for sib in h.find_all_next():
             if sib == h:
@@ -137,90 +184,228 @@ def extract_sections_from_html(html: str) -> list[dict]:
                 if txt:
                     content_parts.append(txt)
 
-        content = clean(" ".join(content_parts))
-        if len(content) < 80:
-            continue
+        node["content"] = clean(" ".join(content_parts))
 
-        sections.append({"header": header, "content": content})
+    # drop tiny content-only nodes (keep header + children though)
+    def prune(n: dict) -> dict | None:
+        # prune children first
+        kept_children = []
+        for ch in n["children"]:
+            pr = prune(ch)
+            if pr:
+                kept_children.append(pr)
+        n["children"] = kept_children
 
-    return sections
+        # keep if it has children (even if short content)
+        if n["children"]:
+            return n
 
-def extract_sections_from_reader_text(text: str) -> list[dict]:
+        # keep if content is meaningful
+        if len(n["content"]) >= 80:
+            return n
+
+        return None
+
+    pruned = []
+    for n in nodes:
+        p = prune(n)
+        if p:
+            pruned.append(p)
+
+    return pruned
+
+def build_heading_tree_from_reader_text(text: str) -> list[dict]:
     """
-    Works for Jina markdown-like output:
-    ## Heading
-    content...
+    For Jina markdown-like text.
+    Headings look like:
+      ## Header
+      ### Subheader
+      #### Question
     """
     lines = [l.rstrip() for l in (text or "").splitlines()]
-    sections = []
-    current_h = None
-    buff = []
 
-    def flush():
-        nonlocal current_h, buff
-        if current_h and buff:
-            content = clean(" ".join(buff))
-            if len(content) >= 80:
-                sections.append({"header": current_h, "content": content})
-        current_h = None
-        buff = []
+    def level_from_md(line: str) -> int | None:
+        m = re.match(r"^(#{1,4})\s+(.*)$", line.strip())
+        if not m:
+            return None
+        return len(m.group(1))
 
+    nodes = []
+    stack = []
+
+    def push_node(node):
+        nonlocal nodes, stack
+        if stack:
+            stack[-1]["children"].append(node)
+        else:
+            nodes.append(node)
+        stack.append(node)
+
+    def pop_to_level(lvl):
+        nonlocal stack
+        while stack and stack[-1]["level"] >= lvl:
+            stack.pop()
+
+    current = None
     for line in lines:
         s = line.strip()
         if not s:
             continue
 
-        m = re.match(r"^(#{1,4})\s+(.*)$", s)
-        if m:
-            flush()
-            current_h = clean(m.group(2))
-            continue
+        lvl = level_from_md(s)
+        if lvl is not None:
+            header = clean(re.sub(r"^#{1,4}\s+", "", s))
+            if not header:
+                continue
+            pop_to_level(lvl)
+            node = {"level": lvl, "header": header, "content": "", "children": []}
+            push_node(node)
+            current = node
+        else:
+            if current:
+                current["content"] += " " + s
 
-        if current_h:
-            buff.append(s)
+    # clean contents
+    def post(n):
+        n["content"] = clean(n["content"])
+        n["children"] = [post(c) for c in n["children"]]
+        return n
+    nodes = [post(n) for n in nodes]
 
-    flush()
-    return sections
+    # prune like HTML version
+    def prune(n: dict) -> dict | None:
+        kept_children = []
+        for ch in n["children"]:
+            pr = prune(ch)
+            if pr:
+                kept_children.append(pr)
+        n["children"] = kept_children
 
-def brief(content: str) -> str:
-    # 1–2 sentences only
-    content = clean(content)
-    parts = re.split(r"(?<=[.!?])\s+", content)
-    parts = [p.strip() for p in parts if len(p.strip()) > 30]
-    out = " ".join(parts[:2])
-    if len(out) > 220:
-        out = out[:220].rstrip() + "..."
-    return out
+        if n["children"]:
+            return n
+        if len(n["content"]) >= 80:
+            return n
+        return None
 
-def get_sections(url: str) -> dict:
+    pruned = []
+    for n in nodes:
+        p = prune(n)
+        if p:
+            pruned.append(p)
+
+    return pruned
+
+def get_tree(url: str) -> dict:
     """
     Returns:
-      { ok, source, sections }
+      { ok, source, nodes:[...] }
     """
-    fetched = fetch_html_best_effort(url)
+    fetched = fetch_best_effort(url)
     if not fetched["ok"]:
-        return {"ok": False, "source": None, "sections": []}
+        return {"ok": False, "source": None, "nodes": []}
 
     if fetched["html"]:
-        secs = extract_sections_from_html(fetched["html"])
-        return {"ok": True, "source": fetched["source"], "sections": secs}
+        nodes = build_heading_tree_from_html(fetched["html"])
+        return {"ok": True, "source": fetched["source"], "nodes": nodes}
 
-    # reader text
-    secs = extract_sections_from_reader_text(fetched["text"])
-    return {"ok": True, "source": fetched["source"], "sections": secs}
+    nodes = build_heading_tree_from_reader_text(fetched["text"])
+    return {"ok": True, "source": fetched["source"], "nodes": nodes}
+
+# =========================
+# FLATTEN FOR OUTPUT
+# =========================
+def collect_headers_norm(nodes: list[dict], keep_levels=(2,3)) -> set:
+    s = set()
+    def walk(n):
+        if n["level"] in keep_levels:
+            hn = norm_header(n["header"])
+            if hn:
+                s.add(hn)
+        for c in n["children"]:
+            walk(c)
+    for n in nodes:
+        walk(n)
+    return s
+
+def output_rows_missing_headers_per_comp(bayut_nodes, comp_nodes, comp_url):
+    """
+    Output rows for missing H2/H3 only.
+    If missing header is H3, include H4 titles inside the brief (not separate rows).
+    FAQs: show one row with the list of questions (H4) in the brief.
+    """
+    bayut_norm = collect_headers_norm(bayut_nodes, keep_levels=(2,3))
+
+    rows = []
+
+    def h4_titles(node: dict) -> list[str]:
+        titles = []
+        for ch in node.get("children", []):
+            if ch["level"] == 4:
+                t = clean(ch["header"])
+                if t:
+                    titles.append(t)
+            # sometimes H4 might be nested differently; collect any level-4 in subtree
+            titles.extend(h4_titles(ch))
+        # dedupe preserve order
+        out = []
+        seen = set()
+        for t in titles:
+            nt = norm_header(t)
+            if nt and nt not in seen:
+                seen.add(nt)
+                out.append(t)
+        return out
+
+    def walk(node: dict):
+        lvl = node["level"]
+
+        # only consider H2/H3 as "headers" rows
+        if lvl in (2,3):
+            hn = norm_header(node["header"])
+            if hn and hn not in bayut_norm:
+                base = brief_text(node.get("content", ""))
+
+                # attach H4 questions/subheaders inside the brief for H3
+                extra = ""
+                if lvl == 3:
+                    subs = h4_titles(node)
+                    if subs:
+                        if is_faq_header(node["header"]):
+                            extra = " FAQs: " + "; ".join(subs[:12])
+                        else:
+                            extra = " Subpoints: " + "; ".join(subs[:10])
+
+                brief_full = (base + (" " if base and extra else "") + extra).strip()
+                if not brief_full:
+                    # if no content, at least show subpoints
+                    brief_full = extra.strip() or "Section present in competitor."
+
+                rows.append({
+                    "Missing Header": node["header"],
+                    "What it contains (brief)": brief_full[:300] + ("..." if len(brief_full) > 300 else ""),
+                    "Source": comp_url
+                })
+
+        # continue traversal
+        for ch in node.get("children", []):
+            walk(ch)
+
+    for n in comp_nodes:
+        walk(n)
+
+    return rows
 
 # =========================
 # UI
 # =========================
 st.title("Bayut Header Gap Analysis")
-st.caption("Per competitor: missing headers in Bayut + brief content + source")
+st.caption("Per competitor: Missing H2/H3 headers in Bayut • H4 gets grouped under its parent H3 (e.g., FAQs questions).")
 
 bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
 competitors_text = st.text_area(
     "Competitor URLs (one per line)",
     placeholder="https://example.com/article\nhttps://example.com/another"
 )
-
 competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
 
 if st.button("Run analysis"):
@@ -232,41 +417,32 @@ if st.button("Run analysis"):
         st.stop()
 
     with st.spinner("Fetching Bayut..."):
-        bayut_data = get_sections(bayut_url.strip())
-    if not bayut_data["ok"] or not bayut_data["sections"]:
+        bayut_data = get_tree(bayut_url.strip())
+
+    if not bayut_data["ok"] or not bayut_data["nodes"]:
         st.error("Could not extract headings from Bayut page (blocked or no headings found).")
         st.stop()
-
-    bayut_headers_norm = set(norm_header(s["header"]) for s in bayut_data["sections"] if norm_header(s["header"]))
 
     rows = []
     fetch_report = []
 
     for comp_url in competitors:
         with st.spinner(f"Fetching competitor: {comp_url}"):
-            comp_data = get_sections(comp_url)
+            comp_data = get_tree(comp_url)
 
-        if not comp_data["ok"] or not comp_data["sections"]:
+        if not comp_data["ok"] or not comp_data["nodes"]:
             fetch_report.append((comp_url, "blocked/no headings"))
             continue
 
         fetch_report.append((comp_url, f"ok ({comp_data['source']})"))
 
-        # ✅ RUN EACH COMPETITOR ALONE:
-        # Just add headers that this competitor has and Bayut doesn't.
-        for sec in comp_data["sections"]:
-            h = sec["header"]
-            hn = norm_header(h)
-            if not hn:
-                continue
-            if hn not in bayut_headers_norm:
-                rows.append({
-                    "Missing Header": h,
-                    "What it contains (brief)": brief(sec["content"]),
-                    "Source": comp_url
-                })
+        # ✅ run competitor alone: missing headers only
+        rows.extend(output_rows_missing_headers_per_comp(
+            bayut_nodes=bayut_data["nodes"],
+            comp_nodes=comp_data["nodes"],
+            comp_url=comp_url
+        ))
 
-    # show fetch status (not design change; just useful)
     st.subheader("Fetch status")
     for u, status in fetch_report:
         if status.startswith("ok"):
@@ -276,6 +452,6 @@ if st.button("Run analysis"):
 
     st.subheader("Missing headers in Bayut (per competitor)")
     if not rows:
-        st.info("No missing headers found (or competitors blocked / headings not extractable).")
+        st.info("No missing H2/H3 headers found (or competitors blocked / headings not extractable).")
     else:
         st.dataframe(rows, use_container_width=True)
