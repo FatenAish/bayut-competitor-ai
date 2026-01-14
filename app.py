@@ -45,35 +45,6 @@ st.markdown(
         margin-bottom: 18px;
       }}
 
-      /* Mode buttons row */
-      .mode-wrap {{
-        display: flex;
-        justify-content: center;
-        gap: 14px;
-        margin: 16px 0 22px 0;
-      }}
-      .mode-pill {{
-        border: 1px solid {LIGHT_GREEN_2};
-        background: white;
-        border-radius: 14px;
-        padding: 10px 18px;
-        font-weight: 800;
-        color: {TEXT_DARK};
-        cursor: pointer;
-        user-select: none;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.04);
-      }}
-      .mode-pill.active {{
-        background: {LIGHT_GREEN_2};
-        border-color: {BAYUT_GREEN};
-      }}
-      .mode-pill small {{
-        display:block;
-        font-weight: 600;
-        color: {MUTED};
-        margin-top: 2px;
-      }}
-
       /* Bold labels */
       div[data-testid="stWidgetLabel"] > label,
       label {{
@@ -142,9 +113,6 @@ st.markdown(
         text-decoration: none;
       }}
       a:hover {{ text-decoration: underline; }}
-
-      /* Hide Streamlit caption container if any */
-      .stCaptionContainer {{ display:none; }}
     </style>
     """,
     unsafe_allow_html=True
@@ -289,8 +257,8 @@ def build_tree_from_html(html: str) -> list[dict]:
         t.decompose()
 
     root = soup.find("article") or soup
-
     headings = root.find_all(["h1", "h2", "h3", "h4"])
+
     nodes = []
     stack = []
 
@@ -334,7 +302,6 @@ def build_tree_from_html(html: str) -> list[dict]:
     return nodes
 
 def build_tree_from_reader_text(text: str) -> list[dict]:
-    # r.jina.ai often returns markdown-ish text with ### headers
     lines = [l.rstrip() for l in (text or "").splitlines()]
     nodes = []
     stack = []
@@ -415,7 +382,7 @@ def get_tree(url: str) -> dict:
     }
 
 # =========================
-# UTIL: SOURCE NAME LINK
+# SOURCE NAME LINK
 # =========================
 def site_link(url: str) -> str:
     try:
@@ -432,9 +399,27 @@ def site_link(url: str) -> str:
         name = "Source"
     return f'<a href="{url}" target="_blank">{name}</a>'
 
+def join_sources(urls: list[str]) -> str:
+    # De-dup by domain name but keep distinct URLs if different domains.
+    seen = set()
+    out = []
+    for u in urls:
+        try:
+            dom = urlparse(u).netloc.lower().replace("www.", "")
+        except Exception:
+            dom = u
+        if dom not in seen:
+            seen.add(dom)
+            out.append(site_link(u))
+    return " • ".join(out)
+
 # =========================
-# UPDATE MODE LOGIC (same as your current system)
+# UPDATE MODE (keep your existing logic)
 # =========================
+# (Your Update Mode code is already working; keep it exactly as it is.)
+# To keep this answer focused, I’m reusing the same update-mode functions you already had in the previous version.
+
+# --- START: Update Mode functions (same as prior working version) ---
 def is_subpoint_heading_text_only(h: str) -> bool:
     s = clean(h)
     if not s or is_noise_header(s):
@@ -501,7 +486,6 @@ BUCKETS = {
     "nearby": ["nearby", "close to", "near", "around", "alternatives", "other areas", "similar areas", "compare", "comparison"],
     "faqs": ["faq", "faqs", "frequently asked questions"]
 }
-
 BUCKET_TITLES = {
     "overview": "Overview",
     "pros_cons": "Pros & Cons",
@@ -529,11 +513,9 @@ STOPWORDS = {
     "a","an","to","of","in","on","at","as","is","it","be","or","by","we","i","us",
     "dubai","business","bay"
 }
-
 def tokens(s: str) -> set:
     ws = re.findall(r"[a-z0-9]{3,}", norm_header(s))
     return {w for w in ws if w not in STOPWORDS}
-
 def jaccard(a: set, b: set) -> float:
     if not a and not b:
         return 0.0
@@ -618,7 +600,6 @@ def top_missing_points(bayut_text: str, comp_text: str, limit: int = 4) -> list[
     return missing
 
 FAQ_HEAD_RE = re.compile(r"\b(faq|faqs|frequently asked questions)\b", re.I)
-
 def is_question(s: str) -> bool:
     s = clean(s)
     if not s:
@@ -626,14 +607,12 @@ def is_question(s: str) -> bool:
     if s.endswith("?"):
         return True
     return bool(re.match(r"^(what|why|how|where|when|who|which|is|are|can|do|does|did|should|will)\b", s.lower()))
-
 def normalize_q(s: str) -> str:
     s = clean(s).lower()
     s = re.sub(r"^\d+\s*[\.\)]\s*", "", s)
     s = re.sub(r"\s+", " ", s)
     s = s.strip(" .!?")
     return s
-
 def prettify_question(q: str) -> str:
     q = clean(q)
     q = re.sub(r"^\d+\s*[\.\)]\s*", "", q).strip()
@@ -658,7 +637,6 @@ def extract_faq_questions(node: dict) -> list[str]:
     if not node:
         return []
     qs = []
-
     def walk(n: dict):
         h = clean(n.get("header", ""))
         if h and is_question(h):
@@ -825,12 +803,12 @@ def build_rows_for_competitor(bayut_nodes, comp_nodes, comp_url):
             seen.add(k)
             out.append(r)
     return out
+# --- END: Update Mode functions ---
 
 # =========================
-# NEW POST MODE LOGIC (outline from competitors)
+# NEW POST MODE: H1/H2/H3/H4 COVERAGE TABLE (MERGED)
 # =========================
 def first_h1(nodes: list[dict], page_title: str = "") -> str:
-    # Prefer real H1; fallback to page <title>; otherwise best effort.
     def walk_find_h1(n: dict):
         if n.get("level") == 1 and n.get("header"):
             return clean(n["header"])
@@ -839,20 +817,11 @@ def first_h1(nodes: list[dict], page_title: str = "") -> str:
             if hit:
                 return hit
         return ""
-
     for n in nodes:
         hit = walk_find_h1(n)
         if hit:
             return hit
-
-    if page_title:
-        return page_title
-
-    # fallback: first header
-    for n in nodes:
-        if n.get("header"):
-            return clean(n["header"])
-    return ""
+    return page_title or ""
 
 def brief_from_content(txt: str, max_len: int = 220) -> str:
     txt = clean(txt)
@@ -866,70 +835,131 @@ def brief_from_content(txt: str, max_len: int = 220) -> str:
         base = base[:max_len].rstrip() + "..."
     return base
 
-def collect_subtree_headers(node: dict) -> list[str]:
-    # Returns H3/H4 under an H2, as a compact list
+def dedupe_keep_order(items: list[str]) -> list[str]:
+    seen = set()
+    out = []
+    for it in items:
+        k = norm_header(it)
+        if k and k not in seen:
+            seen.add(k)
+            out.append(it)
+    return out
+
+def collect_outline_nodes(nodes: list[dict], source_url: str) -> list[dict]:
+    """
+    Returns flat list of nodes for H1/H2/H3/H4 in display order.
+    Each item: {level, header, content, source}
+    """
     out = []
     def walk(n: dict):
         lvl = n.get("level", 9)
-        h = clean(n.get("header",""))
-        if lvl in (3, 4) and h and not is_noise_header(h):
-            out.append(h)
-        for c in n.get("children", []):
-            walk(c)
-    for c in node.get("children", []):
-        walk(c)
-    # de-dup preserve order
-    seen = set()
-    final = []
-    for x in out:
-        nx = norm_header(x)
-        if nx and nx not in seen:
-            seen.add(nx)
-            final.append(x)
-    return final
-
-def outline_rows_for_competitor(nodes: list[dict], comp_url: str, page_title: str, desired_title: str) -> list[dict]:
-    rows = []
-    h1 = first_h1(nodes, page_title=page_title)
-    # User-provided title is the "target" for new post; show it at top for context
-    target = clean(desired_title)
-
-    # We output one row per H2 (main section). If no H2, fallback to first available node as a "Section".
-    def walk_h2(n: dict):
-        if n.get("level") == 2:
-            h2 = clean(n.get("header",""))
-            subs = collect_subtree_headers(n)
-            brief = brief_from_content(n.get("content",""))
-            rows.append({
-                "Target title (you write)": target,
-                "Competitor H1": h1 or "(not detected)",
-                "H2 section": h2,
-                "Subsections (H3/H4)": "; ".join(subs[:12]) if subs else "",
-                "What it covers (brief)": brief or "Competitor covers this section (add a short summary when drafting).",
-                "Source": site_link(comp_url)
+        h = clean(n.get("header", ""))
+        if lvl in (1, 2, 3, 4) and h and not is_noise_header(h):
+            out.append({
+                "level": lvl,
+                "header": h,
+                "norm": norm_header(h),
+                "content": clean(n.get("content", "")),
+                "source": source_url
             })
         for c in n.get("children", []):
-            walk_h2(c)
-
+            walk(c)
     for n in nodes:
-        walk_h2(n)
+        walk(n)
+    return out
 
-    if not rows:
-        # fallback: show a single row with best headers we can find
-        first = ""
-        first_content = ""
-        for n in nodes:
-            if n.get("header"):
-                first = clean(n["header"])
-                first_content = clean(n.get("content",""))
-                break
+def extract_key_phrases(text: str, top_n: int = 6) -> list[str]:
+    STOP = set(list(STOPWORDS) + ["ranches", "mudon", "community", "communities", "villa", "villas"])
+    words = re.findall(r"[a-zA-Z]{3,}", (text or "").lower())
+    words = [w for w in words if w not in STOP]
+    freq = {}
+    for w in words:
+        freq[w] = freq.get(w, 0) + 1
+    ranked = sorted(freq.items(), key=lambda x: (x[1], len(x[0])), reverse=True)
+    return [w for w, _ in ranked[:top_n]]
+
+def coverage_brief(header: str, snippets: list[str], level: int) -> str:
+    """
+    Human brief, avoids repeating same sentence pattern.
+    """
+    snippets = [clean(s) for s in snippets if clean(s)]
+    snippets = dedupe_keep_order(snippets)
+
+    combined = " ".join(snippets[:3])
+    keys = extract_key_phrases(combined, top_n=6)
+
+    # short and human, different per level
+    if level == 1:
+        if keys:
+            return f"Competitors position the page around: {', '.join(keys)}. Use this H1 angle as the main promise of the article."
+        return "Competitors frame the article’s main angle in the H1. Use a clear, reader-friendly main promise."
+
+    if level == 2:
+        if snippets:
+            base = snippets[0]
+            if keys:
+                return f"This section usually covers {', '.join(keys)}. Competitors explain it like: {base}"
+            return f"Competitors cover this section by explaining: {base}"
+        return "Competitors include this as a core section. Add it as a main H2 with a clear explanation."
+
+    if level in (3, 4):
+        if snippets:
+            base = snippets[0]
+            if keys:
+                return f"Covered as a supporting point (often about {', '.join(keys)}). Competitors mention: {base}"
+            return f"Competitors include this point and mention: {base}"
+        return "Competitors include this as a supporting subsection. Add a short paragraph or bullets to cover it."
+
+    return "Competitors cover this."
+
+def indent_header(level: int, header: str) -> str:
+    # visual hierarchy in the first column
+    prefix = {1: "H1", 2: "H2", 3: "H3", 4: "H4"}.get(level, f"H{level}")
+    indent = "&nbsp;" * (4 * max(0, level - 1))
+    return f"{indent}<b>{prefix}:</b> {header}"
+
+def build_newpost_coverage_table(all_comp_nodes: list[list[dict]]) -> list[dict]:
+    """
+    Merge coverage across competitors into one hierarchical table.
+    De-dupe by (level, normalized header).
+    Combine content snippets and sources.
+    """
+    order = []
+    data = {}
+
+    for flat in all_comp_nodes:
+        for item in flat:
+            key = (item["level"], item["norm"])
+            if not item["norm"]:
+                continue
+            if key not in data:
+                data[key] = {
+                    "level": item["level"],
+                    "header": item["header"],
+                    "snippets": [],
+                    "sources": []
+                }
+                order.append(key)
+
+            # collect snippet (content) if present
+            if item.get("content"):
+                data[key]["snippets"].append(item["content"])
+            data[key]["sources"].append(item["source"])
+
+    rows = []
+    for key in order:
+        d = data[key]
+        lvl = d["level"]
+        h = d["header"]
+
+        # Keep table useful: avoid dumping long content
+        snippets = dedupe_keep_order(d["snippets"])[:4]
+        sources = dedupe_keep_order(d["sources"])
+
         rows.append({
-            "Target title (you write)": target,
-            "Competitor H1": h1 or "(not detected)",
-            "H2 section": first or "(no headings detected)",
-            "Subsections (H3/H4)": "",
-            "What it covers (brief)": brief_from_content(first_content) or "Competitor page extracted but headings are limited.",
-            "Source": site_link(comp_url)
+            "Headers covered": indent_header(lvl, h),
+            "Content covered": coverage_brief(h, snippets, lvl),
+            "Source": join_sources(sources)
         })
 
     return rows
@@ -940,51 +970,45 @@ def outline_rows_for_competitor(nodes: list[dict], comp_url: str, page_title: st
 st.markdown(
     f"""
     <div class="hero-title"><span class="bayut">Bayut</span> Competitor Gap Analysis</div>
-    <div class="hero-sub">Choose a tool: Update an existing article, or plan a new one using competitor coverage</div>
+    <div class="hero-sub">Update an existing article, or plan a new one using competitor coverage</div>
     """,
     unsafe_allow_html=True
 )
 
 # =========================
-# MODE SWITCH (2 TOOLS)
+# MODE SWITCH
 # =========================
 if "mode" not in st.session_state:
     st.session_state.mode = "update"  # update | new
 
-c1, c2, c3 = st.columns([1, 1, 1])
-with c2:
-    # centered-ish using columns
-    left, mid, right = st.columns([1, 2, 1])
-    with mid:
-        a, b = st.columns(2)
-        with a:
-            if st.button("Update Mode", use_container_width=True):
-                st.session_state.mode = "update"
-        with b:
-            if st.button("New Post Mode", use_container_width=True):
-                st.session_state.mode = "new"
+colA, colB, colC = st.columns([1, 1, 1])
+with colB:
+    a, b = st.columns(2)
+    with a:
+        if st.button("Update Mode", use_container_width=True):
+            st.session_state.mode = "update"
+    with b:
+        if st.button("New Post Mode", use_container_width=True):
+            st.session_state.mode = "new"
 
 # =========================
-# INPUTS (DIFFER BY MODE)
+# INPUTS
 # =========================
+if st.session_state.mode == "update":
+    bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
+else:
+    new_title = st.text_input("New post title", placeholder="e.g., Arabian Ranches vs Mudon")
+
 competitors_text = st.text_area(
     "Competitor URLs (one per line)",
     placeholder="https://example.com/article\nhttps://example.com/another"
 )
 competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
 
-bayut_url = ""
-new_title = ""
-
-if st.session_state.mode == "update":
-    bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
-else:
-    new_title = st.text_input("New post title", placeholder="e.g., Pros and Cons of Living in Business Bay")
-
 # =========================
 # RUN
 # =========================
-run_label = "Run analysis" if st.session_state.mode == "update" else "Build competitor outline"
+run_label = "Run analysis" if st.session_state.mode == "update" else "Build coverage table"
 if st.button(run_label):
     if not competitors:
         st.error("At least one competitor URL is required.")
@@ -1031,14 +1055,14 @@ if st.button(run_label):
         st.markdown("</div>", unsafe_allow_html=True)
 
     # -------------------------
-    # NEW POST MODE
+    # NEW POST MODE (YOUR NEW LOGIC)
     # -------------------------
     else:
         if not new_title.strip():
             st.error("Title is required in New Post Mode.")
             st.stop()
 
-        all_rows = []
+        all_flat = []
         for comp_url in competitors:
             with st.spinner("Fetching competitor..."):
                 comp_data = get_tree(comp_url)
@@ -1046,23 +1070,25 @@ if st.button(run_label):
             if not comp_data["ok"] or not comp_data["nodes"]:
                 continue
 
-            all_rows.extend(outline_rows_for_competitor(
-                nodes=comp_data["nodes"],
-                comp_url=comp_url,
-                page_title=comp_data.get("page_title", ""),
-                desired_title=new_title.strip()
-            ))
+            # Build flat outline list for this competitor
+            flat = collect_outline_nodes(comp_data["nodes"], comp_url)
 
-        st.subheader("Competitor Coverage Outline")
+            # If competitor has no explicit H1, we still keep H2/H3/H4; but also try to create one H1 row:
+            h1 = first_h1(comp_data["nodes"], comp_data.get("page_title", ""))
+            if h1:
+                flat = [{"level": 1, "header": h1, "norm": norm_header(h1), "content": "", "source": comp_url}] + flat
 
-        if not all_rows:
-            st.info("Could not extract competitor headings (blocked / no headings). Try different competitor URLs.")
+            all_flat.append(flat)
+
+        st.subheader("Competitor Coverage")
+
+        if not all_flat:
+            st.info("Could not extract competitor headings (blocked / no headings). Try different URLs.")
             st.stop()
 
-        df = pd.DataFrame(all_rows)[
-            ["Target title (you write)", "Competitor H1", "H2 section", "Subsections (H3/H4)", "What it covers (brief)", "Source"]
-        ]
+        rows = build_newpost_coverage_table(all_flat)
 
+        df = pd.DataFrame(rows)[["Headers covered", "Content covered", "Source"]]
         st.markdown('<div class="table-wrap">', unsafe_allow_html=True)
         st.markdown(df.to_html(escape=False, index=False), unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
