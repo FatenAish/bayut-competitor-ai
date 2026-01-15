@@ -8,6 +8,7 @@ import pandas as pd
 import time, random, hashlib
 from dataclasses import dataclass
 from typing import Optional, Dict, Tuple, List
+from difflib import SequenceMatcher
 
 # Optional (recommended): JS rendering tool
 # pip install playwright
@@ -37,22 +38,17 @@ PAGE_BG = "#F3FBF7"  # lighter green background
 st.markdown(
     f"""
     <style>
-      /* full page background */
       html, body, [data-testid="stAppViewContainer"] {{
         background: {PAGE_BG} !important;
       }}
       [data-testid="stHeader"] {{
         background: rgba(0,0,0,0) !important;
       }}
-
-      /* page width */
       section.main > div.block-container {{
         max-width: 1180px !important;
         padding-top: 1.6rem !important;
         padding-bottom: 2.4rem !important;
       }}
-
-      /* centered title */
       .hero {{
         text-align:center;
         margin-top: 0.6rem;
@@ -74,8 +70,6 @@ st.markdown(
         color: #6B7280;
         font-size: 16px;
       }}
-
-      /* light green labels / section headers */
       .section-pill {{
         background: {LIGHT_GREEN};
         border: 1px solid {LIGHT_GREEN_2};
@@ -86,22 +80,16 @@ st.markdown(
         display: inline-block;
         margin: 16px 0 10px 0;
       }}
-
-      /* inputs background */
       .stTextInput input, .stTextArea textarea {{
         background: {LIGHT_GREEN} !important;
         border: 1px solid {LIGHT_GREEN_2} !important;
         border-radius: 12px !important;
       }}
-
-      /* buttons nicer */
       .stButton button {{
         border-radius: 14px !important;
         padding: 0.65rem 1rem !important;
         font-weight: 800 !important;
       }}
-
-      /* MODE BUTTONS - centered */
       .mode-wrap {{
         display:flex;
         justify-content:center;
@@ -114,8 +102,6 @@ st.markdown(
         margin-top: -2px;
         margin-bottom: 6px;
       }}
-
-      /* tables */
       table {{
         width: 100% !important;
         border-collapse: separate !important;
@@ -162,7 +148,7 @@ st.markdown(
     f"""
     <div class="hero">
       <h1><span class="bayut">Bayut</span> Competitor Gap Analysis</h1>
-      <p><b>Gaps-only</b> output — competitor has it, Bayut doesn’t. No exceptions.</p>
+      <p><b>Header-first</b> gap logic — Missing headers first, then content gaps under matching headers. FAQ subjects-only.</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -344,12 +330,6 @@ def _safe_key(prefix: str, url: str) -> str:
 
 
 def resolve_all_or_require_manual(agent: FetchAgent, urls: List[str], st_key_prefix: str) -> Dict[str, FetchResult]:
-    """
-    HARD ENFORCEMENT:
-    - tries to resolve all URLs
-    - if any fail, forces manual paste for EACH failed URL
-    - stops app until all are resolved
-    """
     results: Dict[str, FetchResult] = {}
     failed: List[str] = []
 
@@ -401,6 +381,11 @@ NOISE_PATTERNS = [
     r"\bplease stand by\b", r"\bloading\b", r"\bjust a moment\b",
 ]
 
+# extra “generic headings” that should NOT create missing-header rows
+GENERIC_SECTION_HEADERS = {
+    "introduction", "overview", "conclusion", "final thoughts", "summary",
+    "closing thoughts", "wrap up", "in summary", "takeaway", "key takeaways",
+}
 
 def norm_header(h: str) -> str:
     h = clean(h).lower()
@@ -408,12 +393,13 @@ def norm_header(h: str) -> str:
     h = re.sub(r"\s+", " ", h).strip()
     return h
 
-
 def is_noise_header(h: str) -> bool:
     s = clean(h)
     if not s:
         return True
     hn = norm_header(s)
+    if hn in GENERIC_SECTION_HEADERS:
+        return True
     if len(hn) < 4:
         return True
     if len(s) > 95:
@@ -425,13 +411,11 @@ def is_noise_header(h: str) -> bool:
             return True
     return False
 
-
 def level_of(tag_name: str) -> int:
     try:
         return int(tag_name[1])
     except Exception:
         return 9
-
 
 def build_tree_from_html(html: str) -> List[dict]:
     soup = BeautifulSoup(html, "html.parser")
@@ -482,7 +466,6 @@ def build_tree_from_html(html: str) -> List[dict]:
         node["content"] = clean(" ".join(content_parts))
 
     return nodes
-
 
 def build_tree_from_reader_text(text: str) -> List[dict]:
     lines = [l.rstrip() for l in (text or "").splitlines()]
@@ -536,7 +519,6 @@ def build_tree_from_reader_text(text: str) -> List[dict]:
 
     return [walk(n) for n in nodes]
 
-
 def build_tree_from_plain_text_heuristic(text: str) -> List[dict]:
     raw = (text or "").replace("\r", "")
     lines = [clean(l) for l in raw.split("\n")]
@@ -571,7 +553,6 @@ def build_tree_from_plain_text_heuristic(text: str) -> List[dict]:
 
     return nodes
 
-
 def get_tree_from_fetchresult(fr: FetchResult) -> dict:
     if not fr.ok:
         return {"ok": False, "source": None, "nodes": [], "status": fr.status}
@@ -589,7 +570,6 @@ def get_tree_from_fetchresult(fr: FetchResult) -> dict:
             nodes = build_tree_from_plain_text_heuristic(txt)
 
     return {"ok": True, "source": fr.source, "nodes": nodes, "status": fr.status}
-
 
 def ensure_headings_or_require_repaste(urls: List[str], fr_map: Dict[str, FetchResult], st_key_prefix: str) -> Dict[str, dict]:
     tree_map: Dict[str, dict] = {}
@@ -641,15 +621,12 @@ def site_name(url: str) -> str:
     except Exception:
         return "Source"
 
-
 def source_link(url: str) -> str:
     n = site_name(url)
     return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{n}</a>'
 
-
 def flatten(nodes: List[dict]) -> List[dict]:
     out = []
-
     def walk(n: dict, parent=None):
         out.append({
             "level": n["level"],
@@ -660,20 +637,16 @@ def flatten(nodes: List[dict]) -> List[dict]:
         })
         for c in n.get("children", []):
             walk(c, n)
-
     for n in nodes:
         walk(n, None)
     return out
 
-
 def strip_label(h: str) -> str:
     return clean(re.sub(r"\s*:\s*$", "", (h or "").strip()))
-
 
 def header_is_faq(header: str) -> bool:
     nh = norm_header(header)
     return ("faq" in nh) or ("frequently asked" in nh)
-
 
 def find_faq_nodes(nodes: List[dict]) -> List[dict]:
     faq = []
@@ -682,17 +655,14 @@ def find_faq_nodes(nodes: List[dict]) -> List[dict]:
             faq.append(x)
     return faq
 
-
 def normalize_question(q: str) -> str:
     q = clean(q or "")
     q = re.sub(r"^\s*\d+[\.\)]\s*", "", q)
     q = q.strip()
     return q
 
-
 def extract_questions_from_node(node: dict) -> List[str]:
     qs = []
-
     def walk(n: dict):
         for c in n.get("children", []):
             hdr = clean(c.get("header", ""))
@@ -702,8 +672,8 @@ def extract_questions_from_node(node: dict) -> List[str]:
             if "?" in hdr or re.match(r"^\s*\d+[\.\)]\s+.*", hdr):
                 qs.append(normalize_question(hdr))
             walk(c)
-
     walk(node)
+
     seen = set()
     out = []
     for q in qs:
@@ -716,7 +686,7 @@ def extract_questions_from_node(node: dict) -> List[str]:
 
 
 # =====================================================
-# FORCED GAPS-ONLY ENGINE (BUCKETED)
+# KEYWORDS / THEME EXTRACTION (NO QUOTES)
 # =====================================================
 STOP = {
     "the","and","for","with","that","this","from","you","your","are","was","were","will","have","has","had",
@@ -726,191 +696,154 @@ STOP = {
 }
 
 GENERIC_STOP = {
-    "dubai","uae","damac","islands","island","phase","project","community","development","properties",
-    "price","prices","plan","plans","floor","payment","handover","location","amenities","villas","townhouses"
+    "dubai","uae","business","bay","community","area","living","pros","cons",
+    "property","properties","rent","sale","apartments","villas"
 }
 
-def nodes_blob(nodes: List[dict]) -> str:
-    parts = []
-    for x in flatten(nodes):
-        h = strip_label(x.get("header",""))
-        c = clean(x.get("content",""))
-        if h and not is_noise_header(h):
-            parts.append(h)
-        if c and len(c) > 40:
-            parts.append(c[:800])
-    return " ".join(parts).lower()
+def top_keywords(text: str, n: int = 7) -> List[str]:
+    words = re.findall(r"[a-zA-Z]{4,}", (text or "").lower())
+    freq = {}
+    for w in words:
+        if w in STOP or w in GENERIC_STOP:
+            continue
+        freq[w] = freq.get(w, 0) + 1
+    return [w for w, _ in sorted(freq.items(), key=lambda x: (-x[1], x[0]))[:n]]
 
-def headings_list(nodes: List[dict], levels=(2,3)) -> List[str]:
-    hs = []
+
+# =====================================================
+# SECTION EXTRACTION (HEADER-FIRST COMPARISON)
+# =====================================================
+def section_nodes(nodes: List[dict], levels=(2,3)) -> List[dict]:
+    """
+    Returns list of section dicts:
+    {level, header, content}
+    Only H2/H3 by default.
+    """
+    secs = []
     for x in flatten(nodes):
         if x["level"] in levels:
-            h = strip_label(x["header"])
-            if h and not is_noise_header(h):
-                hs.append(h)
-    # dedupe preserve order
+            h = strip_label(x.get("header",""))
+            if not h or is_noise_header(h) or header_is_faq(h):
+                continue
+            c = clean(x.get("content",""))
+            secs.append({"level": x["level"], "header": h, "content": c})
+    # de-dupe by normalized header
     seen = set()
     out = []
-    for h in hs:
-        k = norm_header(h)
+    for s in secs:
+        k = norm_header(s["header"])
         if k in seen:
             continue
         seen.add(k)
-        out.append(h)
+        out.append(s)
     return out
 
-# Buckets = the ONLY allowed rows in Update Mode (besides FAQ row)
-BUCKETS = [
-    {
-        "name": "Master plan & layout concept",
-        "patterns": [
-            r"\bmaster plan\b", r"\blayout\b", r"\bcluster\b", r"\bdestinations\b",
-            r"\bmaldives\b", r"\bbora bora\b", r"\bseychelles\b", r"\bhawaii\b", r"\bbali\b", r"\bfiji\b"
-        ],
-        "hint": "A dedicated master-plan framing: how the project is structured (clusters/destinations/layout concept).",
-    },
-    {
-        "name": "Floor plans & unit layouts",
-        "patterns": [
-            r"\bfloor plan\b", r"\bfloor plans\b", r"\bunit layout\b", r"\bconfigurations\b", r"\blayouts\b"
-        ],
-        "hint": "Standalone floor plans / unit layout coverage (not just a brief mention).",
-    },
-    {
-        "name": "Brochure / downloads",
-        "patterns": [
-            r"\bdownload brochure\b", r"\bdownload\b.*\bbrochure\b", r"\bbrochure\b",
-            r"\bdownload\b.*\bfloor plan\b", r"\bpdf\b"
-        ],
-        "hint": "Downloadables / brochure intent (separate from editorial writing).",
-    },
-    {
-        "name": "Investment potential",
-        "patterns": [
-            r"\binvestment\b", r"\breturn\b", r"\broi\b", r"\brental yield\b", r"\bcapital appreciation\b",
-            r"\bwhy invest\b", r"\binvestor\b"
-        ],
-        "hint": "A dedicated investment angle (benefits/returns positioning).",
-    },
-    {
-        "name": "Sustainability",
-        "patterns": [
-            r"\bsustainability\b", r"\beco\b", r"\bgreen\b", r"\benvironment\b", r"\bbiodiversity\b"
-        ],
-        "hint": "A dedicated sustainability/eco framing.",
-    },
-    {
-        "name": "Location & access highlights",
-        "patterns": [
-            r"\bstrategic location\b", r"\blocation highlights\b", r"\bnearby communities\b",
-            r"\bconnectivity\b", r"\bhighway\b", r"\baccess\b"
-        ],
-        "hint": "A dedicated location section with highlights/nearby areas/connectivity framing.",
-    },
-    {
-        "name": "Project snapshot / key details",
-        "patterns": [
-            r"\bkey details\b", r"\boverview\b", r"\bproject details\b", r"\bquick facts\b",
-            r"\bdeveloper\b"
-        ],
-        "hint": "A structured overview / key facts block (beyond narrative paragraphs).",
-    },
-    {
-        "name": "Amenities & lifestyle framing",
-        "patterns": [
-            r"\bamenities\b", r"\bfacilities\b", r"\blifestyle\b", r"\bcommunity features\b",
-            r"\bfitness\b", r"\bparks?\b"
-        ],
-        "hint": "Amenities + lifestyle positioning as a dedicated section.",
-    },
-    {
-        "name": "Payment plan & financing",
-        "patterns": [
-            r"\bpayment plan\b", r"\bdown payment\b", r"\bduring construction\b", r"\bon handover\b",
-            r"\binstallments?\b", r"\b75/25\b", r"\b60/40\b"
-        ],
-        "hint": "Payment plan breakdown (only appears if Bayut truly doesn’t cover it).",
-    },
-]
-
-CTA_EXCLUDE = [
-    r"\bdownload\b", r"\bregister\b", r"\bsign up\b", r"\benquire\b", r"\binquire\b",
-    r"\bcontact\b", r"\bwhatsapp\b", r"\bcall\b", r"\bbook\b", r"\bsubmit\b.*\binterest\b"
-]
-
-def _is_downloadish_heading(h: str) -> bool:
-    s = norm_header(strip_label(h))
-    return any(k in s for k in ["download", "brochure", "pdf", "register", "enquire", "inquire"])
-
-def bucket_present(nodes: List[dict], bucket: dict) -> bool:
-    """Competitor/Bayut 'has bucket' if we find patterns in headings or meaningful content."""
-    blob = nodes_blob(nodes)
-
-    name_n = norm_header(bucket["name"])
-    is_brochure_bucket = ("brochure" in name_n) or ("download" in name_n)
-
-    hs_list = headings_list(nodes, levels=(2,3))
-    hs = " ".join([h.lower() for h in hs_list])
-    text = (hs + " " + blob)
-
-    for pat in bucket["patterns"]:
-        if re.search(pat, text):
-            if "please stand by" in text or "loading" in text:
-                continue
-
-            # Extra anti-noise: avoid claiming "Floor plans" when the ONLY match is a download/brochure CTA
-            if (bucket["name"] == "Floor plans & unit layouts"):
-                matched_h = [h for h in hs_list if any(re.search(p, h.lower()) for p in bucket["patterns"])]
-                if matched_h and all(_is_downloadish_heading(h) for h in matched_h):
-                    # only download-ish headings matched -> don't count as floor-plan content
-                    return False
-
-            # For non-brochure buckets, ignore pure CTA-only pages unless there is non-CTA evidence
-            if not is_brochure_bucket:
-                if any(re.search(p, hs) for p in CTA_EXCLUDE):
-                    # still allow; the pattern match above is not limited to CTA headings
-                    pass
-
-            return True
-    return False
-
-def _bucket_matched_headings(comp_nodes: List[dict], bucket: dict) -> List[str]:
-    hs = headings_list(comp_nodes, levels=(2,3))
-    matched = []
-    for h in hs:
-        hn = h.lower()
-        if any(re.search(pat, hn) for pat in bucket["patterns"]):
-            matched.append(h)
-    return matched[:8]
-
-def bucket_evidence_summary(comp_nodes: List[dict], bucket: dict) -> str:
+def header_similarity(a: str, b: str) -> float:
     """
-    Non-repetitive summary:
-    - NO global keyword themes (that was causing repeated text)
-    - Only the bucket hint + the bucket-relevant matched headings (if any)
+    Stable header match score using:
+    - token overlap
+    - sequence similarity
     """
-    matched_headings = _bucket_matched_headings(comp_nodes, bucket)
+    a_n = norm_header(a)
+    b_n = norm_header(b)
+    if not a_n or not b_n:
+        return 0.0
 
-    bits = [bucket["hint"]]
-    if matched_headings:
-        # Keep it tight; headings are the cleanest “evidence” without repeating page-wide keywords.
-        bits.append(
-            "Competitor sections include: "
-            + "; ".join(matched_headings[:4])
-            + ("…" if len(matched_headings) > 4 else "")
-            + "."
-        )
-    return clean(" ".join(bits))
+    a_set = set(a_n.split())
+    b_set = set(b_n.split())
+    if not a_set or not b_set:
+        jacc = 0.0
+    else:
+        jacc = len(a_set & b_set) / max(len(a_set | b_set), 1)
+
+    seq = SequenceMatcher(None, a_n, b_n).ratio()
+    return (0.55 * seq) + (0.45 * jacc)
+
+def find_best_bayut_match(comp_header: str, bayut_sections: List[dict], min_score: float = 0.73) -> Optional[dict]:
+    best = None
+    best_score = 0.0
+    for b in bayut_sections:
+        sc = header_similarity(comp_header, b["header"])
+        if sc > best_score:
+            best_score = sc
+            best = b
+    if best and best_score >= min_score:
+        return {"bayut_section": best, "score": best_score}
+    return None
+
+def content_gap(comp_section: dict, bayut_section: dict) -> Tuple[bool, str]:
+    """
+    Decide if there is a content gap under same header.
+    Returns: (gap?, short_reason)
+    Rules:
+    - competitor section must have meaningful length
+    - competitor must be significantly longer AND introduce missing themes
+    """
+    c_txt = clean(comp_section.get("content",""))
+    b_txt = clean(bayut_section.get("content",""))
+
+    # If both are tiny, don't claim a gap
+    if len(c_txt) < 120:
+        return False, ""
+
+    # If Bayut content is empty but header exists => gap (expand)
+    if len(b_txt) < 60 and len(c_txt) >= 160:
+        return True, "Bayut header exists but has minimal content compared to competitor."
+
+    # If competitor not longer enough, skip
+    if len(c_txt) < (1.35 * max(len(b_txt), 1)):
+        return False, ""
+
+    # Theme gap: competitor has keywords not present in Bayut section text
+    c_kws = top_keywords(c_txt, n=9)
+    b_low = b_txt.lower()
+    missing = [k for k in c_kws if k not in b_low]
+
+    # Need at least 3 missing themes to call it a content gap
+    if len(missing) >= 3:
+        return True, "Competitor expands the section with additional decision themes."
+    return False, ""
+
+def summarize_section_as_action(header: str, comp_section: dict) -> str:
+    """
+    High-level 'what to add' based on competitor section content themes (no quotes).
+    """
+    kws = top_keywords(comp_section.get("content",""), n=7)
+    if kws:
+        return f"Add a dedicated section for **{header}**. Cover practical decision themes such as: {', '.join(kws)}."
+    return f"Add a dedicated section for **{header}** with practical, decision-led details (not just a brief mention)."
+
+def summarize_content_gap_as_action(header: str, comp_section: dict, bayut_section: dict) -> str:
+    kws = top_keywords(comp_section.get("content",""), n=9)
+    b_low = (bayut_section.get("content","") or "").lower()
+    missing = [k for k in kws if k not in b_low]
+    if missing:
+        missing = missing[:7]
+        return f"Expand **{header}** by adding missing decision details (themes like: {', '.join(missing)})."
+    return f"Expand **{header}** with deeper practical details and decision-led coverage."
+
+def dedupe_rows(rows: List[dict]) -> List[dict]:
+    """
+    Remove repeated rows caused by overlaps.
+    Key = normalized Header(Gap) + normalized source name.
+    """
+    out = []
+    seen = set()
+    for r in rows:
+        hk = norm_header(r.get("Header (Gap)",""))
+        sk = norm_header(re.sub(r"<[^>]+>", "", r.get("Source","")))
+        k = hk + "||" + sk
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(r)
+    return out
 
 
 # =======================
-# FAQ SUBJECT LOGIC
+# FAQ SUBJECT LOGIC (KEEP)
 # =======================
 def faq_subject(q: str) -> str:
-    """
-    Map an FAQ question into a short subject label (NO full question text).
-    Deterministic.
-    """
     s = norm_header(normalize_question(q))
 
     if any(k in s for k in ["where is", "located", "location", "map", "how to get", "nearest", "distance"]):
@@ -940,11 +873,7 @@ def faq_subject(q: str) -> str:
 
     return "Other FAQs"
 
-
 def faq_subjects_from_questions(questions: List[str], limit: int = 10) -> List[str]:
-    """
-    Convert questions -> deduped subject labels (stable order).
-    """
     out: List[str] = []
     seen = set()
     for q in questions:
@@ -958,15 +887,7 @@ def faq_subjects_from_questions(questions: List[str], limit: int = 10) -> List[s
             break
     return out
 
-
 def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: str) -> Optional[dict]:
-    """
-    FORCED FAQ RULES:
-    - NEVER list full questions
-    - Only output subjects (Location, Pricing, Amenities...)
-    - If Bayut has FAQ: show ONLY subjects for competitor questions not in Bayut
-    - If Bayut has no FAQ: show FAQ Block row ONLY (subjects)
-    """
     bayut_faq_nodes = find_faq_nodes(bayut_nodes)
     comp_faq_nodes = find_faq_nodes(comp_nodes)
     if not comp_faq_nodes:
@@ -996,65 +917,84 @@ def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: 
             return None
 
         subjects = faq_subjects_from_questions(missing_qs, limit=10)
-        msg = "Competitor covers extra FAQ topics not on Bayut, such as: " + ", ".join(subjects) + "."
-
+        msg = "Add missing FAQ topics (subjects only), such as: " + ", ".join(subjects) + "."
         return {
             "Header (Gap)": "Missing FAQs",
-            "What the competitor talks about": msg,
+            "What to add (Bayut action)": msg,
             "Source": source_link(comp_url),
         }
 
     subjects = faq_subjects_from_questions(comp_qs, limit=10)
-    msg = "FAQ block exists on competitor (Bayut has none). Topics include: " + ", ".join(subjects) + "."
-
+    msg = "Add an FAQ block on Bayut. Suggested topics include: " + ", ".join(subjects) + "."
     return {
         "Header (Gap)": "FAQ Block",
-        "What the competitor talks about": msg,
+        "What to add (Bayut action)": msg,
         "Source": source_link(comp_url),
     }
 
 
-def update_mode_rows_bucketed_gaps_only(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: str, max_rows: int = 6) -> List[dict]:
+# =====================================================
+# UPDATE MODE ENGINE (HEADER-FIRST, THEN CONTENT GAPS)
+# =====================================================
+def update_mode_rows_header_first(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: str,
+                                 max_missing_headers: int = 10,
+                                 max_content_gaps: int = 8) -> List[dict]:
     """
-    FORCED UPDATE MODE OUTPUT:
-    - Rows ONLY when competitor has a bucket AND Bayut does not
-    - No per-heading rows, ever
-    - FAQ row only in subjects format
-    - De-dupe overlap: if "Floor plans" only appears via brochure/download CTA, keep ONLY brochure row
+    Rules you requested:
+    1) Check missing headers first (competitor H2/H3 not in Bayut)
+    2) If Bayut has header, only add a gap if content is weaker
+    3) FAQ row stays
     """
     rows: List[dict] = []
 
-    # 1) bucket gaps
-    for bucket in BUCKETS:
-        comp_has = bucket_present(comp_nodes, bucket)
-        bayut_has = bucket_present(bayut_nodes, bucket)
+    bayut_secs = section_nodes(bayut_nodes, levels=(2,3))
+    comp_secs = section_nodes(comp_nodes, levels=(2,3))
 
-        if comp_has and (not bayut_has):
-            rows.append({
-                "Header (Gap)": bucket["name"],
-                "What the competitor talks about": bucket_evidence_summary(comp_nodes, bucket),
+    # --- 1) Missing headers (strict) ---
+    missing_rows = []
+    matched_map = {}  # comp header norm -> matched bayut header norm (for content-gap step)
+    for cs in comp_secs:
+        m = find_best_bayut_match(cs["header"], bayut_secs, min_score=0.73)
+        if not m:
+            missing_rows.append({
+                "Header (Gap)": cs["header"],
+                "What to add (Bayut action)": summarize_section_as_action(cs["header"], cs),
+                "Source": source_link(comp_url),
+            })
+        else:
+            matched_map[norm_header(cs["header"])] = norm_header(m["bayut_section"]["header"])
+
+    # cap missing headers to avoid spammy results
+    rows.extend(missing_rows[:max_missing_headers])
+
+    # --- 2) Content gaps under matching headers ---
+    content_gap_rows = []
+    for cs in comp_secs:
+        m = find_best_bayut_match(cs["header"], bayut_secs, min_score=0.73)
+        if not m:
+            continue  # already handled as missing header
+
+        bs = m["bayut_section"]
+        gap, _reason = content_gap(cs, bs)
+        if gap:
+            content_gap_rows.append({
+                "Header (Gap)": f"{bs['header']} (Content gap)",
+                "What to add (Bayut action)": summarize_content_gap_as_action(bs["header"], cs, bs),
                 "Source": source_link(comp_url),
             })
 
-    # 2) overlap cleanup: Floor plans vs Brochure
-    names = [r["Header (Gap)"] for r in rows]
-    if ("Brochure / downloads" in names) and ("Floor plans & unit layouts" in names):
-        # If floor-plan evidence is ONLY download-ish headings, drop the floor-plan row.
-        floor_bucket = next(b for b in BUCKETS if b["name"] == "Floor plans & unit layouts")
-        matched = _bucket_matched_headings(comp_nodes, floor_bucket)
-        if matched and all(_is_downloadish_heading(h) for h in matched):
-            rows = [r for r in rows if r["Header (Gap)"] != "Floor plans & unit layouts"]
+    rows.extend(content_gap_rows[:max_content_gaps])
 
-    # 3) FAQ gap row
+    # --- 3) FAQ row (subjects-only) ---
     faq_row = missing_faqs_row(bayut_nodes, comp_nodes, comp_url)
     if faq_row:
         rows.append(faq_row)
 
-    return rows[:max_rows]
+    return dedupe_rows(rows)
 
 
 # =====================================================
-# NEW POST MODE (kept simple; not a gaps table)
+# NEW POST MODE (kept simple)
 # =====================================================
 def list_headers(nodes: List[dict], level: int) -> List[str]:
     return [x["header"] for x in flatten(nodes) if x["level"] == level and not is_noise_header(x["header"])]
@@ -1174,7 +1114,7 @@ if "new_fetch" not in st.session_state:
 # UI - UPDATE MODE
 # =====================================================
 if st.session_state.mode == "update":
-    st.markdown("<div class='section-pill'>Update Mode (Gaps Only)</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-pill'>Update Mode (Header-first gaps)</div>", unsafe_allow_html=True)
 
     bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
     competitors_text = st.text_area(
@@ -1205,7 +1145,7 @@ if st.session_state.mode == "update":
             comp_fr_map = resolve_all_or_require_manual(agent, competitors, st_key_prefix="comp_update")
             comp_tree_map = ensure_headings_or_require_repaste(competitors, comp_fr_map, st_key_prefix="comp_update_tree")
 
-        # 3) Build rows (bucketed, gaps-only)
+        # 3) Build rows (missing headers first, then content gaps)
         all_rows = []
         internal_fetch = []
 
@@ -1214,18 +1154,19 @@ if st.session_state.mode == "update":
             internal_fetch.append((comp_url, f"ok ({src})"))
             comp_nodes = comp_tree_map[comp_url]["nodes"]
 
-            all_rows.extend(update_mode_rows_bucketed_gaps_only(
+            all_rows.extend(update_mode_rows_header_first(
                 bayut_nodes=bayut_nodes,
                 comp_nodes=comp_nodes,
                 comp_url=comp_url,
-                max_rows=6
+                max_missing_headers=10,
+                max_content_gaps=8
             ))
 
         st.session_state.update_fetch = internal_fetch
         st.session_state.update_df = (
-            pd.DataFrame(all_rows)[["Header (Gap)", "What the competitor talks about", "Source"]]
+            pd.DataFrame(all_rows)[["Header (Gap)", "What to add (Bayut action)", "Source"]]
             if all_rows
-            else pd.DataFrame(columns=["Header (Gap)", "What the competitor talks about", "Source"])
+            else pd.DataFrame(columns=["Header (Gap)", "What to add (Bayut action)", "Source"])
         )
 
     if show_internal_fetch and st.session_state.update_fetch:
