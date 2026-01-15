@@ -25,136 +25,153 @@ st.markdown(
     f"""
     <style>
 
-    /* ===== PAGE BACKGROUND ===== */
-    body {{
-      background: linear-gradient(180deg, #F9FAFB 0%, #FFFFFF 65%);
+    /* ===============================
+       GLOBAL BACKGROUND (LIGHT GREEN)
+       =============================== */
+    html, body, .stApp {{
+      background-color: {LIGHT_GREEN} !important;
     }}
 
+    /* page width */
     section.main > div.block-container {{
       max-width: 1180px !important;
-      padding-top: 2rem !important;
+      padding-top: 1.8rem !important;
       padding-bottom: 3rem !important;
     }}
 
-    /* ===== HERO ===== */
+    /* ===============================
+       HERO
+       =============================== */
     .hero {{
-      text-align:center;
-      padding: 28px 22px 34px;
-      background: linear-gradient(
-        180deg,
-        rgba(14,138,109,0.10),
-        rgba(255,255,255,0)
-      );
-      border-radius: 26px;
+      text-align: center;
+      padding: 34px 24px;
+      background: #FFFFFF;
+      border-radius: 28px;
       margin-bottom: 26px;
+      box-shadow: 0 10px 28px rgba(0,0,0,0.06);
     }}
+
     .hero h1 {{
       font-size: 52px;
       font-weight: 900;
-      letter-spacing: -0.02em;
       margin: 0;
       color: {TEXT_DARK};
     }}
+
     .hero .bayut {{
       color: {BAYUT_GREEN};
     }}
+
     .hero p {{
       margin-top: 12px;
       color: #6B7280;
       font-size: 16px;
     }}
 
-    /* ===== CARD WRAPPER ===== */
+    /* ===============================
+       WHITE CARDS / SECTIONS
+       =============================== */
     .ui-card {{
       background: #FFFFFF;
-      border-radius: 20px;
+      border-radius: 22px;
       padding: 22px 24px;
       border: 1px solid #E5E7EB;
-      box-shadow: 0 12px 30px rgba(0,0,0,0.06);
+      box-shadow: 0 10px 28px rgba(0,0,0,0.06);
       margin-bottom: 22px;
     }}
 
-    /* ===== SECTION LABEL ===== */
+    /* section pill */
     .section-pill {{
-      display: inline-block;
-      padding: 8px 14px;
-      border-radius: 999px;
       background: {LIGHT_GREEN};
       border: 1px solid {LIGHT_GREEN_2};
+      padding: 8px 14px;
+      border-radius: 999px;
       font-weight: 800;
       color: {TEXT_DARK};
+      display: inline-block;
       margin-bottom: 14px;
     }}
 
-    /* ===== INPUTS ===== */
+    /* ===============================
+       INPUTS (WHITE BOXES)
+       =============================== */
     .stTextInput input,
     .stTextArea textarea {{
-      background: {LIGHT_GREEN} !important;
+      background: #FFFFFF !important;
+      border: 1px solid #D1D5DB !important;
       border-radius: 14px !important;
-      border: 1px solid {LIGHT_GREEN_2} !important;
       padding: 12px !important;
     }}
+
     .stTextInput input:focus,
     .stTextArea textarea:focus {{
       border-color: {BAYUT_GREEN} !important;
-      box-shadow: 0 0 0 3px rgba(14,138,109,0.18);
+      box-shadow: 0 0 0 3px rgba(14,138,109,0.20);
     }}
 
-    /* ===== BUTTONS ===== */
+    /* ===============================
+       BUTTONS (DARK GREEN ONLY)
+       =============================== */
     .stButton button {{
+      background-color: {BAYUT_GREEN} !important;
+      color: #FFFFFF !important;
       border-radius: 14px !important;
-      padding: 0.65rem 1.1rem !important;
+      padding: 0.65rem 1.2rem !important;
       font-weight: 800 !important;
+      border: none !important;
       transition: all 0.18s ease;
     }}
+
     .stButton button:hover {{
+      background-color: #0B6F58 !important;
       transform: translateY(-1px);
     }}
 
-    /* ===== TABLES ===== */
+    /* remove red / default theme colors */
+    button[kind="secondary"] {{
+      background-color: #FFFFFF !important;
+      color: {BAYUT_GREEN} !important;
+      border: 2px solid {BAYUT_GREEN} !important;
+    }}
+
+    /* ===============================
+       TABLES (WHITE ON GREEN BG)
+       =============================== */
     table {{
-      width: 100% !important;
-      border-collapse: separate !important;
-      border-spacing: 0 !important;
+      background: #FFFFFF !important;
       border-radius: 18px !important;
       overflow: hidden !important;
       border: 1px solid #E5E7EB !important;
-      background: white;
     }}
+
     thead th {{
-      background: {LIGHT_GREEN};
-      padding: 14px 12px !important;
+      background: {LIGHT_GREEN} !important;
       font-weight: 900 !important;
-      text-align: left !important;
-      border-bottom: 1px solid #E5E7EB !important;
+      color: {TEXT_DARK} !important;
     }}
-    tbody td {{
-      padding: 14px 12px !important;
-      font-size: 14px !important;
-      vertical-align: top;
-      border-bottom: 1px solid #F1F5F9;
-    }}
+
     tbody tr:nth-child(even) {{
       background: #F9FAFB;
     }}
+
     tbody tr:hover {{
       background: #ECFDF5;
     }}
+
     tbody td:first-child {{
       font-weight: 800;
       color: {BAYUT_GREEN};
     }}
+
     a {{
       color: {BAYUT_GREEN} !important;
       font-weight: 800 !important;
-      text-decoration: underline;
     }}
 
     </style>
     """,
     unsafe_allow_html=True,
 )
-
 # =====================================================
 # HERO
 # =====================================================
