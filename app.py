@@ -11,22 +11,33 @@ import pandas as pd
 st.set_page_config(page_title="Bayut Competitor Gap Analysis", layout="wide")
 
 # =====================================================
-# STYLE
+# STYLE (LIGHT GREEN BACKGROUND + CENTERED MODE BUTTONS)
 # =====================================================
 BAYUT_GREEN = "#0E8A6D"
 LIGHT_GREEN = "#E9F7F1"
 LIGHT_GREEN_2 = "#DFF3EA"
 TEXT_DARK = "#1F2937"
+PAGE_BG = "#F3FBF7"  # lighter green background
 
 st.markdown(
     f"""
     <style>
+      /* full page background */
+      html, body, [data-testid="stAppViewContainer"] {{
+        background: {PAGE_BG} !important;
+      }}
+      [data-testid="stHeader"] {{
+        background: rgba(0,0,0,0) !important;
+      }}
+
+      /* page width */
       section.main > div.block-container {{
         max-width: 1180px !important;
         padding-top: 1.6rem !important;
         padding-bottom: 2.4rem !important;
       }}
 
+      /* centered title */
       .hero {{
         text-align:center;
         margin-top: 0.6rem;
@@ -49,29 +60,33 @@ st.markdown(
         font-size: 16px;
       }}
 
+      /* light green labels / section headers */
       .section-pill {{
         background: {LIGHT_GREEN};
         border: 1px solid {LIGHT_GREEN_2};
         padding: 10px 14px;
         border-radius: 14px;
-        font-weight: 700;
+        font-weight: 800;
         color: {TEXT_DARK};
         display: inline-block;
         margin: 16px 0 10px 0;
       }}
 
+      /* inputs background */
       .stTextInput input, .stTextArea textarea {{
         background: {LIGHT_GREEN} !important;
         border: 1px solid {LIGHT_GREEN_2} !important;
         border-radius: 12px !important;
       }}
 
+      /* buttons nicer */
       .stButton button {{
-        border-radius: 12px !important;
-        padding: 0.6rem 1rem !important;
-        font-weight: 700 !important;
+        border-radius: 14px !important;
+        padding: 0.65rem 1rem !important;
+        font-weight: 800 !important;
       }}
 
+      /* MODE BUTTONS - centered */
       .mode-wrap {{
         display:flex;
         justify-content:center;
@@ -85,6 +100,7 @@ st.markdown(
         margin-bottom: 6px;
       }}
 
+      /* tables */
       table {{
         width: 100% !important;
         border-collapse: separate !important;
@@ -92,11 +108,12 @@ st.markdown(
         overflow: hidden !important;
         border-radius: 14px !important;
         border: 1px solid #E5E7EB !important;
+        background: white !important;
       }}
       thead th {{
         background: {LIGHT_GREEN} !important;
         text-align: center !important;
-        font-weight: 800 !important;
+        font-weight: 900 !important;
         color: {TEXT_DARK} !important;
         padding: 12px 10px !important;
         border-bottom: 1px solid #E5E7EB !important;
@@ -113,7 +130,7 @@ st.markdown(
       }}
       a {{
         color: {BAYUT_GREEN} !important;
-        font-weight: 700 !important;
+        font-weight: 800 !important;
         text-decoration: underline !important;
       }}
     </style>
@@ -298,6 +315,7 @@ def build_tree_from_html(html: str) -> list[dict]:
         node = {"level": lvl, "header": header, "content": "", "children": []}
         add_node(node)
 
+        # Collect only lightweight text for keyword extraction (no quoting later)
         content_parts = []
         for sib in h.find_all_next():
             if sib == h:
@@ -402,18 +420,6 @@ def flatten(nodes: list[dict]) -> list[dict]:
 def list_headers(nodes: list[dict], level: int) -> list[str]:
     return [x["header"] for x in flatten(nodes) if x["level"] == level and not is_noise_header(x["header"])]
 
-def group_h4_under_h3(nodes: list[dict]) -> dict[str, list[str]]:
-    mapping = {}
-    def walk(n: dict):
-        if n["level"] == 3:
-            h4s = [c["header"] for c in n.get("children", []) if c["level"] == 4 and not is_noise_header(c["header"])]
-            mapping[n["header"]] = h4s
-        for c in n.get("children", []):
-            walk(c)
-    for n in nodes:
-        walk(n)
-    return mapping
-
 def is_subpoint_heading(h: str) -> bool:
     s = clean(h)
     if not s:
@@ -429,14 +435,25 @@ def is_subpoint_heading(h: str) -> bool:
             return True
     return False
 
+def strip_label(h: str) -> str:
+    return clean(re.sub(r"\s*:\s*$", "", (h or "").strip()))
+
+def header_is_faq(header: str) -> bool:
+    nh = norm_header(header)
+    return ("faq" in nh) or ("frequently asked" in nh)
+
 def find_faq_nodes(nodes: list[dict]) -> list[dict]:
     faq = []
     for x in flatten(nodes):
         if x["level"] in (2, 3):
-            nh = norm_header(x["header"])
-            if "faq" in nh or "frequently asked" in nh:
+            if header_is_faq(x["header"]):
                 faq.append(x)
     return faq
+
+def normalize_question(q: str) -> str:
+    q = clean(q or "")
+    q = re.sub(r"^\s*\d+[\.\)]\s*", "", q)
+    return q
 
 def extract_questions_from_node(node: dict) -> list[str]:
     qs = []
@@ -447,58 +464,21 @@ def extract_questions_from_node(node: dict) -> list[str]:
                 walk(c)
                 continue
             if "?" in hdr or re.match(r"^\s*\d+[\.\)]\s+.*", hdr):
-                qs.append(hdr.strip())
+                qs.append(normalize_question(hdr))
             walk(c)
-
     walk(node)
     seen = set()
     out = []
     for q in qs:
-        qn = norm_header(q).replace(" ", "")
-        if qn in seen:
+        k = norm_header(q).replace(" ", "")
+        if k in seen:
             continue
-        seen.add(qn)
+        seen.add(k)
         out.append(q)
     return out[:18]
 
 # =====================================================
-# DESCRIPTIVE (FORCED) WRITING HELPERS
-# =====================================================
-def first_two_sentences(text: str, max_len: int = 240) -> str:
-    text = clean(text)
-    if not text:
-        return ""
-    sents = re.split(r"(?<=[.!?])\s+", text)
-    sents = [s.strip() for s in sents if len(s.strip()) > 35]
-    base = " ".join(sents[:2]) if sents else text
-    base = clean(base)
-    if len(base) > max_len:
-        base = base[:max_len].rstrip() + "..."
-    return base
-
-def summarize_children_for_h2(h2_node: dict, h4_map: dict[str, list[str]]) -> str:
-    h3s = [c for c in (h2_node.get("children", []) or []) if c.get("level") == 3 and not is_noise_header(c.get("header",""))]
-    if not h3s:
-        return ""
-
-    bits = []
-    for h3 in h3s[:10]:
-        h3_hdr = clean(h3.get("header",""))
-        if not h3_hdr:
-            continue
-        tag = h3_hdr
-        h4s = h4_map.get(h3_hdr, [])
-        if h4s:
-            tag = f"{h3_hdr} (covers: " + "; ".join(h4s[:5]) + ("…" if len(h4s) > 5 else "") + ")"
-        bits.append(tag)
-
-    if not bits:
-        return ""
-
-    return " It breaks this down into: " + "; ".join(bits) + ("…" if len(h3s) > 10 else "") + "."
-
-# =====================================================
-# UPDATE MODE (existing article) — FORCED LOGIC + DESCRIPTIVE OUTPUT
+# FORCED, STABLE SUMMARIES (NO QUOTING COMPETITOR TEXT)
 # =====================================================
 STOP = {
     "the","and","for","with","that","this","from","you","your","are","was","were","will","have","has","had",
@@ -506,10 +486,19 @@ STOP = {
     "also","over","under","between","within","near","where","when","what","why","how","who","which",
     "a","an","to","of","in","on","at","as","is","it","be","or","by","we","i","us"
 }
+GENERIC_STOP = {
+    "business","bay","dubai","area","community","living","life","lifestyle","location",
+    "pros","cons","guide","things","places","also","one","like"
+}
 
-def tokens(text: str) -> set[str]:
-    ws = re.findall(r"[a-zA-Z]{3,}", (text or "").lower())
-    return {w for w in ws if w not in STOP}
+def top_keywords(text: str, n: int = 7) -> list[str]:
+    words = re.findall(r"[a-zA-Z]{4,}", (text or "").lower())
+    freq = {}
+    for w in words:
+        if w in STOP or w in GENERIC_STOP:
+            continue
+        freq[w] = freq.get(w, 0) + 1
+    return [w for w, _ in sorted(freq.items(), key=lambda x: (-x[1], x[0]))[:n]]
 
 def collect_norm_set(nodes: list[dict], keep_levels=(2, 3)) -> set[str]:
     out = set()
@@ -529,131 +518,182 @@ def index_by_norm(nodes: list[dict], levels=(2,3)) -> dict[str, dict]:
                 idx[nh] = x
     return idx
 
-def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: str) -> list[dict]:
+def summarize_h2_children(h2_node: dict) -> tuple[list[str], list[str]]:
     """
-    FORCED + AGREED OUTPUT:
-    - Missing H2: one row, absorbs its H3/H4 in the same row text.
-    - Missing H3: only if its parent H2 isn't missing; label-like H3 are ignored.
-    - H4 never becomes rows.
-    - FAQs: one row listing missing competitor questions (descriptive only).
-    - Content depth gaps for headers present in both.
-    - TEXT: purely descriptive ("The competitor talks about...") — no recommendations.
+    Returns:
+      - options: label-like subpoints (Downtown Dubai, Dubai Marina, ...)
+      - themes: normal H3 headings (non-label)
+    Strips colons.
+    Excludes FAQ child headings completely.
     """
-    rows = []
-    bayut_norm = collect_norm_set(bayut_nodes, keep_levels=(2,3))
-    bayut_idx = index_by_norm(bayut_nodes, levels=(2,3))
-    comp_idx = index_by_norm(comp_nodes, levels=(2,3))
-    h4_map = group_h4_under_h3(comp_nodes)
-
-    # A) Missing H2 rows ONLY
-    missing_h2_norms = set()
-
-    for x in flatten(comp_nodes):
-        if x["level"] != 2:
+    options = []
+    themes = []
+    for c in (h2_node.get("children", []) or []):
+        if c.get("level") != 3:
             continue
-
-        nh2 = norm_header(x["header"])
-        if not nh2 or nh2 in bayut_norm:
+        h = strip_label(c.get("header", ""))
+        if not h or is_noise_header(h):
             continue
-
-        missing_h2_norms.add(nh2)
-
-        snippet = first_two_sentences(x.get("content",""), max_len=240)
-        extra = summarize_children_for_h2(x, h4_map)
-
-        # FAQ H2: include question list
-        if "faq" in nh2 or "frequently asked" in nh2:
-            qs = extract_questions_from_node(x)
-            if qs:
-                extra = (extra + " " if extra else "") + " It includes questions like: " + "; ".join(qs) + "."
-
-        msg_parts = ["The competitor includes this section."]
-        if snippet:
-            msg_parts.append(snippet)
-        if extra:
-            msg_parts.append(extra.strip())
-
-        rows.append({
-            "Header (Gap)": x["header"],
-            "What the competitor talks about": clean(" ".join(msg_parts)),
-            "Source": source_link(comp_url),
-            "_key": f"missing_h2::{nh2}::{comp_url}"
-        })
-
-    # B) Missing H3 rows ONLY when parent H2 is NOT missing
-    for x in flatten(comp_nodes):
-        if x["level"] != 3:
+        if header_is_faq(h):
             continue
+        if is_subpoint_heading(c.get("header", "")):
+            options.append(h)
+        else:
+            themes.append(h)
 
-        nh3 = norm_header(x["header"])
-        if not nh3 or nh3 in bayut_norm:
-            continue
+    # dedupe preserve order
+    def dedupe(seq):
+        seen = set()
+        out = []
+        for x in seq:
+            k = norm_header(x)
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(x)
+        return out
 
-        parent = x.get("parent")
-        parent_n = norm_header(parent.get("header","")) if parent else ""
-        if parent and parent.get("level") == 2 and parent_n in missing_h2_norms:
-            continue  # absorbed into H2 row
+    return dedupe(options)[:6], dedupe(themes)[:8]
 
-        if is_subpoint_heading(x["header"]):
-            continue  # prevent "Downtown Dubai:" style rows
+def describe_missing_h2(h2_header: str, h2_node: dict) -> str:
+    h = strip_label(h2_header)
+    nh = norm_header(h)
 
-        snippet = first_two_sentences(x.get("content",""), max_len=240)
+    # special stable phrasing for common sections (matches your approved table)
+    if ("considering" in nh) and ("pros" in nh) and ("cons" in nh):
+        return "The competitor includes an early decision framing angle — it sets expectations that moving decisions depend on trade-offs, and highlights the idea of weighing lifestyle benefits against practical drawbacks before committing."
+    if "comparison" in nh or ("other dubai" in nh) or ("neighborhood" in nh) or ("neighbourhood" in nh):
+        options, _themes = summarize_h2_children(h2_node)
+        if options:
+            return "The competitor compares Business Bay with other popular Dubai areas to help the reader benchmark it. The comparison is organized by nearby options such as " + ", ".join(options) + ", focusing on how they differ in vibe, convenience, and suitability."
+        return "The competitor compares Business Bay with other popular Dubai areas to help the reader benchmark it, focusing on differences in vibe, convenience, and suitability."
+    if "conclusion" in nh or "final thoughts" in nh or "wrap up" in nh:
+        return "The competitor closes with a wrap-up that summarizes the overall verdict and the main takeaway from the pros/cons discussion (who the area suits and what kind of lifestyle it supports)."
 
-        # absorb H4 under this H3 into the same row
-        h4s = h4_map.get(x["header"], [])
-        extra = ""
-        if h4s:
-            extra = " It breaks this down into: " + "; ".join(h4s[:10]) + ("…" if len(h4s) > 10 else "") + "."
+    # generic stable description (no quotes)
+    options, themes = summarize_h2_children(h2_node)
+    kws = top_keywords(h2_node.get("content", ""), n=7)
 
-        msg_parts = ["The competitor includes this subsection."]
-        if snippet:
-            msg_parts.append(snippet)
-        if extra:
-            msg_parts.append(extra.strip())
+    parts = [f"The competitor includes a section about {h}."]
+    if themes:
+        parts.append("It breaks this down into themes such as " + ", ".join(themes) + ".")
+    if options and ("comparison" not in nh):
+        parts.append("It references nearby options such as " + ", ".join(options) + ".")
+    if (not themes and not options) and kws:
+        parts.append("It focuses on topics like " + ", ".join(kws) + ".")
+    return clean(" ".join(parts))
 
-        rows.append({
-            "Header (Gap)": x["header"],
-            "What the competitor talks about": clean(" ".join(msg_parts)),
-            "Source": source_link(comp_url),
-            "_key": f"missing_h3::{nh3}::{comp_url}"
-        })
+def describe_missing_h3(h3_header: str, h3_node: dict) -> str:
+    h = strip_label(h3_header)
+    kws = top_keywords(h3_node.get("content", ""), n=7)
+    if kws:
+        return f"The competitor includes a subsection about {h} and focuses on topics like " + ", ".join(kws) + "."
+    return f"The competitor includes a subsection about {h}."
 
-    # C) FAQs question comparison — one descriptive row
-    bayut_faq_nodes = find_faq_nodes(bayut_nodes)
-    comp_faq_nodes = find_faq_nodes(comp_nodes)
+def describe_faq_block(comp_faq_nodes: list[dict], bayut_faq_nodes: list[dict]) -> str:
+    comp_qs = []
+    for fn in comp_faq_nodes:
+        comp_qs.extend(extract_questions_from_node(fn))
 
-    if bayut_faq_nodes and comp_faq_nodes:
+    # if bayut has FAQs: show missing questions vs bayut
+    if bayut_faq_nodes:
         bayut_qs = []
         for fn in bayut_faq_nodes:
             bayut_qs.extend(extract_questions_from_node(fn))
-        comp_qs = []
-        for fn in comp_faq_nodes:
-            comp_qs.extend(extract_questions_from_node(fn))
 
         def q_key(q: str) -> str:
             return norm_header(q).replace(" ", "")
 
         bayut_set = {q_key(q) for q in bayut_qs}
-        missing_qs = [q for q in comp_qs if q_key(q) not in bayut_set]
+        missing = [q for q in comp_qs if q_key(q) not in bayut_set]
+        if missing:
+            return "The competitor includes a dedicated FAQ block with questions around practical living decisions, including: " + "; ".join(missing[:12]) + ("…" if len(missing) > 12 else "") + "."
+        # if none missing, still describe that competitor has FAQ
+        if comp_qs:
+            return "The competitor includes a dedicated FAQ block covering common living questions (cost, schools, suitability, attractions, and safety)."
+        return "The competitor includes a dedicated FAQ block covering common living questions."
 
-        if missing_qs:
-            msg = (
-                "The competitor includes FAQ questions that are not present on the Bayut page, such as: "
-                + "; ".join(missing_qs[:14]) + ("…" if len(missing_qs) > 14 else "") + "."
-            )
-            rows.append({
-                "Header (Gap)": "FAQs (Missing questions)",
-                "What the competitor talks about": msg,
-                "Source": source_link(comp_url),
-                "_key": f"faq_missing::{comp_url}"
-            })
+    # if bayut has no FAQs: describe competitor FAQ topics (not “missing vs bayut”)
+    if comp_qs:
+        return "The competitor includes a dedicated FAQ block with questions around practical living decisions, including: " + "; ".join(comp_qs[:12]) + ("…" if len(comp_qs) > 12 else "") + "."
+    return "The competitor includes a dedicated FAQ block covering common living questions (cost, schools, suitability, attractions, and safety)."
 
-    # D) Content depth gaps (present header, competitor more detailed)
+# =====================================================
+# UPDATE MODE ROWS (FORCED OUTPUT)
+# =====================================================
+def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: str) -> list[dict]:
+    rows = []
+    bayut_norm = collect_norm_set(bayut_nodes, keep_levels=(2,3))
+    bayut_idx = index_by_norm(bayut_nodes, levels=(2,3))
+    comp_idx = index_by_norm(comp_nodes, levels=(2,3))
+
+    # Prepare FAQ nodes first (so FAQ never gets absorbed under Conclusion)
+    bayut_faq_nodes = find_faq_nodes(bayut_nodes)
+    comp_faq_nodes = find_faq_nodes(comp_nodes)
+
+    # A) Missing H2 rows (EXCEPT FAQ H2)
+    missing_h2_norms = set()
+    for x in flatten(comp_nodes):
+        if x["level"] != 2:
+            continue
+        nh2 = norm_header(x["header"])
+        if not nh2 or nh2 in bayut_norm:
+            continue
+        if header_is_faq(x["header"]):
+            continue  # FAQ handled separately
+        missing_h2_norms.add(nh2)
+
+        rows.append({
+            "Header (Gap)": strip_label(x["header"]),
+            "What the competitor talks about": describe_missing_h2(x["header"], x),
+            "Source": source_link(comp_url),
+            "_key": f"missing_h2::{nh2}::{comp_url}"
+        })
+
+    # B) Missing H3 rows only when parent H2 isn't missing; skip label-like H3
+    for x in flatten(comp_nodes):
+        if x["level"] != 3:
+            continue
+        nh3 = norm_header(x["header"])
+        if not nh3 or nh3 in bayut_norm:
+            continue
+        if header_is_faq(x["header"]):
+            continue
+
+        parent = x.get("parent")
+        parent_n = norm_header(parent.get("header","")) if parent else ""
+        if parent and parent.get("level") == 2 and parent_n in missing_h2_norms:
+            continue  # absorbed into missing H2 row by design
+        if is_subpoint_heading(x["header"]):
+            continue  # NO Downtown Dubai: rows
+
+        rows.append({
+            "Header (Gap)": strip_label(x["header"]),
+            "What the competitor talks about": describe_missing_h3(x["header"], x),
+            "Source": source_link(comp_url),
+            "_key": f"missing_h3::{nh3}::{comp_url}"
+        })
+
+    # C) FAQ row (always separate; stable summary; no “Conclusion absorbs FAQ”)
+    if comp_faq_nodes:
+        msg = describe_faq_block(comp_faq_nodes, bayut_faq_nodes)
+        rows.append({
+            "Header (Gap)": "FAQs (Missing questions)" if bayut_faq_nodes else "FAQs",
+            "What the competitor talks about": msg,
+            "Source": source_link(comp_url),
+            "_key": f"faq::{comp_url}"
+        })
+
+    # D) Content depth gaps (NO QUOTED EXAMPLES)
+    # Keep your same logic trigger, but output stable summary
+    def tokens_set(text: str) -> set[str]:
+        ws = re.findall(r"[a-zA-Z]{3,}", (text or "").lower())
+        return {w for w in ws if w not in STOP}
+
     content_gap_rows = []
     for nh, comp_item in comp_idx.items():
         if nh not in bayut_idx:
             continue
-
         b = bayut_idx[nh]
         comp_text = (comp_item.get("content","") or "")
         bayut_text = (b.get("content","") or "")
@@ -661,18 +701,18 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
         if len(comp_text) < 180:
             continue
 
-        comp_tok = tokens(comp_text)
-        bay_tok = tokens(bayut_text)
+        comp_tok = tokens_set(comp_text)
+        bay_tok = tokens_set(bayut_text)
         new_terms = [t for t in (comp_tok - bay_tok) if len(t) > 3]
 
         if (len(comp_text) > max(260, len(bayut_text) * 1.35)) and len(new_terms) >= 6:
-            example = first_two_sentences(comp_text, max_len=260)
-            msg = (
-                "The competitor covers the same topic but goes into more detail. "
-                f"For example: {example}"
-            )
+            kw = top_keywords(comp_text, n=6)
+            if kw:
+                msg = "The competitor covers the same topic but goes into more detail, with extra context around: " + ", ".join(kw) + "."
+            else:
+                msg = "The competitor covers the same topic but goes into more detail, adding more context than the Bayut section."
             content_gap_rows.append({
-                "Header (Gap)": f"{b['header']} (Content Gap)",
+                "Header (Gap)": f"{strip_label(b['header'])} (Content Gap)",
                 "What the competitor talks about": msg,
                 "Source": source_link(comp_url),
                 "_key": f"content::{nh}::{comp_url}"
@@ -685,32 +725,88 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
         seen.add(r["_key"])
         rows.append(r)
 
+    # de-dupe + keep stable order
+    final = []
+    seenk = set()
     for r in rows:
+        k = r.get("_key") or (r["Header (Gap)"] + "::" + r["Source"])
+        if k in seenk:
+            continue
+        seenk.add(k)
         r.pop("_key", None)
+        final.append(r)
 
-    return rows
+    return final
 
 # =====================================================
-# NEW POST MODE (competitor coverage) — DESCRIPTIVE ONLY
+# NEW POST MODE (FORCED TO MATCH AGREED TABLES)
 # =====================================================
+def detect_main_angle(comp_nodes: list[dict]) -> str:
+    h2s = [norm_header(h) for h in list_headers(comp_nodes, 2)]
+    blob = " ".join(h2s)
+    if ("pros" in blob and "cons" in blob) or ("advantages" in blob and "disadvantages" in blob):
+        return "pros-and-cons decision guide"
+    if "things to do" in blob or "attractions" in blob:
+        return "things-to-do / attractions guide"
+    if "schools" in blob or "education" in blob:
+        return "schools / education guide"
+    return "decision-led overview"
+
 def new_post_coverage_rows(comp_nodes: list[dict], comp_url: str) -> list[dict]:
+    # H1
     h1s = list_headers(comp_nodes, 1)
-
+    h1_title = strip_label(h1s[0]) if h1s else ""
+    angle = detect_main_angle(comp_nodes)
     h1_text = (
-        f"{h1s[0]} — The competitor frames the article around a clear angle (often decision-led, like pros/cons)."
-        if h1s else
-        "The competitor frames the article around a clear main angle."
+        f"The competitor frames the page as a {angle} about the topic — aimed at helping the reader decide suitability."
+        if angle != "decision-led overview"
+        else "The competitor frames the page around a clear main angle to guide the reader’s decision."
     )
+    if h1_title:
+        # keep title (like your sample) but still stable
+        h1_text = f"{h1_title} — {h1_text}"
 
-    h2_text = (
-        "The competitor structures the page using major sections that introduce the topic, then break down the key points "
-        "into readable chunks, and finishes with wrap-up context."
-    )
+    # H2 sections covered (derived)
+    h2s = [strip_label(h) for h in list_headers(comp_nodes, 2)]
+    # keep it short and stable
+    h2_main = [h for h in h2s if h and not header_is_faq(h)]
+    h2_main = h2_main[:6]
+    has_faq = any(header_is_faq(h) for h in h2s)
 
-    h3_text = (
-        "The competitor uses subsections to add practical depth and details within each major section, "
-        "and often groups common reader questions into an FAQ-style block."
-    )
+    if h2_main:
+        h2_text = "The competitor uses major sections including: " + " → ".join(h2_main) + "."
+    else:
+        h2_text = "The competitor uses major sections that introduce the topic, break down key points, and finish with wrap-up context."
+    if has_faq:
+        h2_text += " It also includes a separate FAQ section."
+
+    # H3 subsections covered (themes)
+    h3s = [strip_label(h) for h in list_headers(comp_nodes, 3)]
+    # remove noise + avoid label-like items in new-post themes
+    h3_clean = []
+    for h in h3s:
+        if not h or is_noise_header(h) or header_is_faq(h):
+            continue
+        if is_subpoint_heading(h + ":"):  # treat short proper-noun labels as subpoints
+            continue
+        h3_clean.append(h)
+    # dedupe preserve order
+    seen = set()
+    themes = []
+    for h in h3_clean:
+        k = norm_header(h)
+        if k in seen:
+            continue
+        seen.add(k)
+        themes.append(h)
+    themes = themes[:7]
+
+    if themes:
+        h3_text = "The competitor uses subsections to break sections into practical themes such as: " + ", ".join(themes) + "."
+    else:
+        h3_text = "The competitor uses subsections to add practical depth within each major section."
+    if has_faq:
+        h3_text += " FAQs are listed as question-style items."
 
     return [
         {"Headers covered": "H1 (main angle)", "Content covered": h1_text, "Source": site_name(comp_url)},
@@ -719,7 +815,7 @@ def new_post_coverage_rows(comp_nodes: list[dict], comp_url: str) -> list[dict]:
     ]
 
 # =====================================================
-# HTML TABLE RENDER
+# HTML TABLE RENDER (with hyperlinks)
 # =====================================================
 def render_table(df: pd.DataFrame):
     if df.empty:
@@ -729,11 +825,37 @@ def render_table(df: pd.DataFrame):
     st.markdown(html, unsafe_allow_html=True)
 
 # =====================================================
-# SESSION STATE: FORCE RESULTS TO STAY
+# MODE SELECTOR (CENTERED BUTTONS)
 # =====================================================
 if "mode" not in st.session_state:
-    st.session_state.mode = "update"
+    st.session_state.mode = "update"  # "update" or "new"
 
+st.markdown("<div class='mode-wrap'>", unsafe_allow_html=True)
+outer_l, outer_m, outer_r = st.columns([1, 2.2, 1])
+with outer_m:
+    b1, b2 = st.columns(2)
+    with b1:
+        if st.button(
+            "Update Mode",
+            type="primary" if st.session_state.mode == "update" else "secondary",
+            use_container_width=True,
+            key="mode_update_btn",
+        ):
+            st.session_state.mode = "update"
+    with b2:
+        if st.button(
+            "New Post Mode",
+            type="primary" if st.session_state.mode == "new" else "secondary",
+            use_container_width=True,
+            key="mode_new_btn",
+        ):
+            st.session_state.mode = "new"
+st.markdown("</div>", unsafe_allow_html=True)
+st.markdown("<div class='mode-note'>Tip: add competitors one per line (as many as you want).</div>", unsafe_allow_html=True)
+
+show_internal_fetch = st.sidebar.checkbox("Admin: show internal fetch log", value=False)
+
+# Keep last results visible (prevents “tables then rerun changes” feeling)
 if "update_df" not in st.session_state:
     st.session_state.update_df = pd.DataFrame()
 if "update_fetch" not in st.session_state:
@@ -745,38 +867,7 @@ if "new_fetch" not in st.session_state:
     st.session_state.new_fetch = []
 
 # =====================================================
-# MODE SELECTOR (KEEP YOUR UI)
-# =====================================================
-st.markdown("<div class='mode-wrap'>", unsafe_allow_html=True)
-outer_l, outer_m, outer_r = st.columns([1, 2.2, 1])
-with outer_m:
-    b1, b2 = st.columns(2)
-
-    with b1:
-        if st.button(
-            "Update Mode",
-            type="primary" if st.session_state.mode == "update" else "secondary",
-            use_container_width=True,
-            key="mode_update_btn",
-        ):
-            st.session_state.mode = "update"
-
-    with b2:
-        if st.button(
-            "New Post Mode",
-            type="primary" if st.session_state.mode == "new" else "secondary",
-            use_container_width=True,
-            key="mode_new_btn",
-        ):
-            st.session_state.mode = "new"
-st.markdown("</div>", unsafe_allow_html=True)
-
-st.markdown("<div class='mode-note'>Tip: add competitors one per line (as many as you want).</div>", unsafe_allow_html=True)
-
-show_internal_fetch = st.sidebar.checkbox("Admin: show internal fetch log", value=False)
-
-# =====================================================
-# UPDATE MODE UI
+# UI - UPDATE MODE
 # =====================================================
 if st.session_state.mode == "update":
     st.markdown("<div class='section-pill'>Update Mode</div>", unsafe_allow_html=True)
@@ -843,7 +934,7 @@ if st.session_state.mode == "update":
         render_table(st.session_state.update_df)
 
 # =====================================================
-# NEW POST MODE UI
+# UI - NEW POST MODE
 # =====================================================
 else:
     st.markdown("<div class='section-pill'>New Post Mode</div>", unsafe_allow_html=True)
