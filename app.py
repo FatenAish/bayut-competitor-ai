@@ -730,15 +730,6 @@ GENERIC_STOP = {
     "price","prices","plan","plans","floor","payment","handover","location","amenities","villas","townhouses"
 }
 
-def top_keywords(text: str, n: int = 7) -> List[str]:
-    words = re.findall(r"[a-zA-Z]{4,}", (text or "").lower())
-    freq = {}
-    for w in words:
-        if w in STOP or w in GENERIC_STOP:
-            continue
-        freq[w] = freq.get(w, 0) + 1
-    return [w for w, _ in sorted(freq.items(), key=lambda x: (-x[1], x[0]))[:n]]
-
 def nodes_blob(nodes: List[dict]) -> str:
     parts = []
     for x in flatten(nodes):
@@ -768,7 +759,7 @@ def headings_list(nodes: List[dict], levels=(2,3)) -> List[str]:
         out.append(h)
     return out
 
-# Buckets = the ONLY allowed rows in Update Mode (besides Missing FAQs)
+# Buckets = the ONLY allowed rows in Update Mode (besides FAQ row)
 BUCKETS = [
     {
         "name": "Master plan & layout concept",
@@ -781,7 +772,7 @@ BUCKETS = [
     {
         "name": "Floor plans & unit layouts",
         "patterns": [
-            r"\bfloor plan\b", r"\bfloor plans\b", r"\blayouts\b", r"\bunit layout\b", r"\bconfigurations\b"
+            r"\bfloor plan\b", r"\bfloor plans\b", r"\bunit layout\b", r"\bconfigurations\b", r"\blayouts\b"
         ],
         "hint": "Standalone floor plans / unit layout coverage (not just a brief mention).",
     },
@@ -832,8 +823,6 @@ BUCKETS = [
         ],
         "hint": "Amenities + lifestyle positioning as a dedicated section.",
     },
-    # NOTE: Payment plan intentionally NOT a bucket row unless it is truly missing in Bayut.
-    # If Bayut has it, it will not appear.
     {
         "name": "Payment plan & financing",
         "patterns": [
@@ -844,67 +833,78 @@ BUCKETS = [
     },
 ]
 
-# Noise rows we NEVER want to count as “coverage”
 CTA_EXCLUDE = [
     r"\bdownload\b", r"\bregister\b", r"\bsign up\b", r"\benquire\b", r"\binquire\b",
     r"\bcontact\b", r"\bwhatsapp\b", r"\bcall\b", r"\bbook\b", r"\bsubmit\b.*\binterest\b"
 ]
 
+def _is_downloadish_heading(h: str) -> bool:
+    s = norm_header(strip_label(h))
+    return any(k in s for k in ["download", "brochure", "pdf", "register", "enquire", "inquire"])
+
 def bucket_present(nodes: List[dict], bucket: dict) -> bool:
     """Competitor/Bayut 'has bucket' if we find patterns in headings or meaningful content."""
     blob = nodes_blob(nodes)
 
-    # if bucket is mainly CTA/lead-capture, exclude it from counting as meaningful topic
-    # (EXCEPT brochure bucket itself – that is allowed)
     name_n = norm_header(bucket["name"])
-    is_brochure_bucket = "brochure" in name_n or "download" in name_n
+    is_brochure_bucket = ("brochure" in name_n) or ("download" in name_n)
 
-    # headings check (strong signal)
-    hs = " ".join([h.lower() for h in headings_list(nodes, levels=(2,3))])
+    hs_list = headings_list(nodes, levels=(2,3))
+    hs = " ".join([h.lower() for h in hs_list])
     text = (hs + " " + blob)
-
-    # If not brochure bucket, do not count pure CTA-only matches as real coverage
-    if not is_brochure_bucket:
-        if any(re.search(p, hs) for p in CTA_EXCLUDE):
-            # still allow if there is ALSO non-CTA evidence via patterns in content
-            pass
 
     for pat in bucket["patterns"]:
         if re.search(pat, text):
-            # extra gate: avoid counting "loading / please stand by"
             if "please stand by" in text or "loading" in text:
                 continue
+
+            # Extra anti-noise: avoid claiming "Floor plans" when the ONLY match is a download/brochure CTA
+            if (bucket["name"] == "Floor plans & unit layouts"):
+                matched_h = [h for h in hs_list if any(re.search(p, h.lower()) for p in bucket["patterns"])]
+                if matched_h and all(_is_downloadish_heading(h) for h in matched_h):
+                    # only download-ish headings matched -> don't count as floor-plan content
+                    return False
+
+            # For non-brochure buckets, ignore pure CTA-only pages unless there is non-CTA evidence
+            if not is_brochure_bucket:
+                if any(re.search(p, hs) for p in CTA_EXCLUDE):
+                    # still allow; the pattern match above is not limited to CTA headings
+                    pass
+
             return True
     return False
 
-def bucket_evidence_summary(comp_nodes: List[dict], bucket: dict) -> str:
-    """Human-ish summary that does NOT quote competitor. Uses headings + safe keyword themes."""
+def _bucket_matched_headings(comp_nodes: List[dict], bucket: dict) -> List[str]:
     hs = headings_list(comp_nodes, levels=(2,3))
-    blob = nodes_blob(comp_nodes)
-
-    matched_headings = []
+    matched = []
     for h in hs:
         hn = h.lower()
         if any(re.search(pat, hn) for pat in bucket["patterns"]):
-            matched_headings.append(h)
-        if len(matched_headings) >= 5:
-            break
+            matched.append(h)
+    return matched[:8]
 
-    # try to focus keywords from the whole competitor blob (still safe, not quotes)
-    kws = top_keywords(blob, n=7)
+def bucket_evidence_summary(comp_nodes: List[dict], bucket: dict) -> str:
+    """
+    Non-repetitive summary:
+    - NO global keyword themes (that was causing repeated text)
+    - Only the bucket hint + the bucket-relevant matched headings (if any)
+    """
+    matched_headings = _bucket_matched_headings(comp_nodes, bucket)
 
     bits = [bucket["hint"]]
-
     if matched_headings:
-        bits.append("Competitor sections include: " + "; ".join(matched_headings[:4]) + ("…" if len(matched_headings) > 4 else "") + ".")
-    if kws:
-        bits.append("It emphasizes themes like: " + ", ".join(kws) + ".")
-
+        # Keep it tight; headings are the cleanest “evidence” without repeating page-wide keywords.
+        bits.append(
+            "Competitor sections include: "
+            + "; ".join(matched_headings[:4])
+            + ("…" if len(matched_headings) > 4 else "")
+            + "."
+        )
     return clean(" ".join(bits))
 
 
 # =======================
-# FAQ SUBJECT LOGIC (NEW)
+# FAQ SUBJECT LOGIC
 # =======================
 def faq_subject(q: str) -> str:
     """
@@ -915,37 +915,26 @@ def faq_subject(q: str) -> str:
 
     if any(k in s for k in ["where is", "located", "location", "map", "how to get", "nearest", "distance"]):
         return "Location"
-
     if any(k in s for k in ["price", "starting price", "cost", "how much", "prices"]):
         return "Pricing"
-
     if any(k in s for k in ["types of properties", "property types", "villa", "townhouse", "apartment", "layouts", "floor plan", "floor plans", "bedroom", "unit types"]):
         return "Property types & layouts"
-
     if any(k in s for k in ["amenities", "facilities", "features", "pool", "gym", "park"]):
         return "Amenities"
-
     if any(k in s for k in ["developer", "developed by", "who is the developer"]):
         return "Developer"
-
     if any(k in s for k in ["how big", "size", "area", "master plan", "community size", "sqm", "sq ft"]):
         return "Community size & master plan"
-
     if any(k in s for k in ["payment plan", "payment", "installment", "down payment", "cash", "crypto", "cryptocurrency", "mortgage"]):
         return "Payment & purchase methods"
-
     if any(k in s for k in ["foreign", "investors", "freehold", "eligib", "can i buy", "ownership"]):
         return "Eligibility & ownership"
-
     if any(k in s for k in ["handover", "completion", "ready", "move in", "construction", "progress", "delivery", "available now"]):
         return "Handover & availability"
-
     if any(k in s for k in ["brochure", "download", "pdf"]):
         return "Brochure & downloads"
-
     if any(k in s for k in ["expression of interest", "register", "enquire", "inquire", "contact", "how can i submit", "submit", "interest"]):
         return "How to register interest"
-
     if any(k in s for k in ["what is", "about", "overview"]):
         return "Project overview"
 
@@ -972,7 +961,7 @@ def faq_subjects_from_questions(questions: List[str], limit: int = 10) -> List[s
 
 def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: str) -> Optional[dict]:
     """
-    FORCED FAQ RULES (UPDATED):
+    FORCED FAQ RULES:
     - NEVER list full questions
     - Only output subjects (Location, Pricing, Amenities...)
     - If Bayut has FAQ: show ONLY subjects for competitor questions not in Bayut
@@ -996,7 +985,6 @@ def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: 
         q2 = re.sub(r"\s+", " ", q2).strip()
         return q2
 
-    # Bayut HAS FAQ -> only missing topics
     if bayut_faq_nodes:
         bayut_qs = []
         for fn in bayut_faq_nodes:
@@ -1005,7 +993,7 @@ def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: 
 
         missing_qs = [q for q in comp_qs if q_key(q) not in bayut_set]
         if not missing_qs:
-            return None  # forced: no row if nothing missing
+            return None
 
         subjects = faq_subjects_from_questions(missing_qs, limit=10)
         msg = "Competitor covers extra FAQ topics not on Bayut, such as: " + ", ".join(subjects) + "."
@@ -1016,7 +1004,6 @@ def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: 
             "Source": source_link(comp_url),
         }
 
-    # Bayut has NO FAQ block -> show FAQ Block (subjects)
     subjects = faq_subjects_from_questions(comp_qs, limit=10)
     msg = "FAQ block exists on competitor (Bayut has none). Topics include: " + ", ".join(subjects) + "."
 
@@ -1032,17 +1019,16 @@ def update_mode_rows_bucketed_gaps_only(bayut_nodes: List[dict], comp_nodes: Lis
     FORCED UPDATE MODE OUTPUT:
     - Rows ONLY when competitor has a bucket AND Bayut does not
     - No per-heading rows, ever
-    - FAQ row ONLY if missing topics exist OR Bayut has no FAQ block (FAQ Block)
-    - Row count capped
+    - FAQ row only in subjects format
+    - De-dupe overlap: if "Floor plans" only appears via brochure/download CTA, keep ONLY brochure row
     """
     rows: List[dict] = []
 
-    # 1) bucket gaps (excluding FAQ logic)
+    # 1) bucket gaps
     for bucket in BUCKETS:
         comp_has = bucket_present(comp_nodes, bucket)
         bayut_has = bucket_present(bayut_nodes, bucket)
 
-        # GAPS ONLY:
         if comp_has and (not bayut_has):
             rows.append({
                 "Header (Gap)": bucket["name"],
@@ -1050,7 +1036,16 @@ def update_mode_rows_bucketed_gaps_only(bayut_nodes: List[dict], comp_nodes: Lis
                 "Source": source_link(comp_url),
             })
 
-    # 2) FAQ gap row (subjects only)
+    # 2) overlap cleanup: Floor plans vs Brochure
+    names = [r["Header (Gap)"] for r in rows]
+    if ("Brochure / downloads" in names) and ("Floor plans & unit layouts" in names):
+        # If floor-plan evidence is ONLY download-ish headings, drop the floor-plan row.
+        floor_bucket = next(b for b in BUCKETS if b["name"] == "Floor plans & unit layouts")
+        matched = _bucket_matched_headings(comp_nodes, floor_bucket)
+        if matched and all(_is_downloadish_heading(h) for h in matched):
+            rows = [r for r in rows if r["Header (Gap)"] != "Floor plans & unit layouts"]
+
+    # 3) FAQ gap row
     faq_row = missing_faqs_row(bayut_nodes, comp_nodes, comp_url)
     if faq_row:
         rows.append(faq_row)
@@ -1210,7 +1205,7 @@ if st.session_state.mode == "update":
             comp_fr_map = resolve_all_or_require_manual(agent, competitors, st_key_prefix="comp_update")
             comp_tree_map = ensure_headings_or_require_repaste(competitors, comp_fr_map, st_key_prefix="comp_update_tree")
 
-        # 3) Build rows (bucketed, gaps-only; no per-heading output)
+        # 3) Build rows (bucketed, gaps-only)
         all_rows = []
         internal_fetch = []
 
