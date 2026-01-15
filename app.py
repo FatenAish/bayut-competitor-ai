@@ -687,6 +687,7 @@ def extract_questions_from_node(node: dict) -> List[str]:
 
 # =====================================================
 # KEYWORDS / THEME EXTRACTION (NO QUOTES)
+# (keywords are OK for internal detection, but NOT shown to user)
 # =====================================================
 STOP = {
     "the","and","for","with","that","this","from","you","your","are","was","were","will","have","has","had",
@@ -711,23 +712,118 @@ def top_keywords(text: str, n: int = 7) -> List[str]:
 
 
 # =====================================================
+# HUMAN THEME SUMMARIES (SHOWN TO USER)
+# =====================================================
+def human_themes_from_text(text: str) -> List[str]:
+    """
+    Turn competitor content into human themes (no keyword dumps).
+    Deterministic, lightweight.
+    """
+    t = (text or "").lower()
+    themes: List[str] = []
+
+    def has_any(words: List[str]) -> bool:
+        return any(w in t for w in words)
+
+    if has_any(["metro", "public transport", "bus", "commute", "roads", "highway", "access", "connectivity"]):
+        themes.append("connectivity & commute")
+
+    if has_any(["parking", "traffic", "congestion", "rush", "busy roads"]):
+        themes.append("traffic & parking realities")
+
+    if has_any(["cost", "expensive", "budget", "afford", "pricing", "rent", "rental"]):
+        themes.append("cost considerations")
+
+    if has_any(["restaurants", "cafes", "nightlife", "vibe", "atmosphere", "lifestyle"]):
+        themes.append("lifestyle & vibe")
+
+    if has_any(["burj", "downtown", "dubai mall", "landmarks", "attractions"]):
+        themes.append("nearby landmarks & attractions")
+
+    if has_any(["marina", "beach", "waterfront", "walk", "promenade"]):
+        themes.append("waterfront lifestyle angle")
+
+    if has_any(["schools", "clinic", "hospital", "supermarket", "family", "kids"]):
+        themes.append("day-to-day convenience")
+
+    if has_any(["pros", "cons", "advantages", "disadvantages", "weigh", "consider"]):
+        themes.append("decision framing (pros vs cons)")
+
+    # de-dupe keep order
+    out, seen = [], set()
+    for x in themes:
+        k = norm_header(x)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(x)
+    return out[:5]
+
+
+def summarize_missing_section_action(header: str, subheaders: Optional[List[str]], comp_content: str) -> str:
+    hn = norm_header(header)
+
+    # Pros/cons importance intro
+    if ("importance" in hn and "pros" in hn and "cons" in hn) or ("consider" in hn and "pros" in hn and "cons" in hn):
+        return (
+            "Add a short intro that sets expectations: explain why readers should weigh the benefits vs drawbacks before deciding "
+            "to move, so the rest of the article feels like a clear decision guide."
+        )
+
+    # Comparison section grouping
+    if "comparison" in hn or "compare" in hn:
+        msg = (
+            "Add a comparison section with other Dubai neighborhoods, explaining how they differ from Business Bay "
+            "(vibe, access, lifestyle fit, and who each area suits best)."
+        )
+        if subheaders:
+            bullets = "<br>".join([f"• {h}" for h in subheaders[:8]])
+            msg += f"<br><br>Competitor breaks this down into subsections like:<br>{bullets}"
+        return msg
+
+    themes = human_themes_from_text(comp_content)
+    msg = f"Add a dedicated section for <b>{header}</b> with practical, decision-led details."
+    if themes:
+        msg += " Cover points like: " + ", ".join(themes) + "."
+    return msg
+
+
+def summarize_content_gap_action(header: str, comp_content: str, bayut_content: str) -> str:
+    themes = human_themes_from_text(comp_content)
+    msg = f"Expand <b>{header}</b> — Bayut has the header, but the competitor goes deeper."
+    if themes:
+        msg += " Add more detail around: " + ", ".join(themes) + "."
+    else:
+        msg += " Add more decision-led detail and practical specifics."
+    return msg
+
+
+# =====================================================
 # SECTION EXTRACTION (HEADER-FIRST COMPARISON)
 # =====================================================
 def section_nodes(nodes: List[dict], levels=(2,3)) -> List[dict]:
     """
     Returns list of section dicts:
-    {level, header, content}
+    {level, header, content, parent_h2}
     Only H2/H3 by default.
     """
     secs = []
+    current_h2 = None
+
     for x in flatten(nodes):
-        if x["level"] in levels:
-            h = strip_label(x.get("header",""))
-            if not h or is_noise_header(h) or header_is_faq(h):
-                continue
+        lvl = x["level"]
+        h = strip_label(x.get("header",""))
+        if not h or is_noise_header(h) or header_is_faq(h):
+            continue
+
+        if lvl == 2:
+            current_h2 = h
+
+        if lvl in levels:
             c = clean(x.get("content",""))
-            secs.append({"level": x["level"], "header": h, "content": c})
-    # de-dupe by normalized header
+            secs.append({"level": lvl, "header": h, "content": c, "parent_h2": current_h2})
+
+    # de-dupe by normalized header (keep first)
     seen = set()
     out = []
     for s in secs:
@@ -737,6 +833,7 @@ def section_nodes(nodes: List[dict], levels=(2,3)) -> List[dict]:
         seen.add(k)
         out.append(s)
     return out
+
 
 def header_similarity(a: str, b: str) -> float:
     """
@@ -759,6 +856,7 @@ def header_similarity(a: str, b: str) -> float:
     seq = SequenceMatcher(None, a_n, b_n).ratio()
     return (0.55 * seq) + (0.45 * jacc)
 
+
 def find_best_bayut_match(comp_header: str, bayut_sections: List[dict], min_score: float = 0.73) -> Optional[dict]:
     best = None
     best_score = 0.0
@@ -771,6 +869,7 @@ def find_best_bayut_match(comp_header: str, bayut_sections: List[dict], min_scor
         return {"bayut_section": best, "score": best_score}
     return None
 
+
 def content_gap(comp_section: dict, bayut_section: dict) -> Tuple[bool, str]:
     """
     Decide if there is a content gap under same header.
@@ -782,45 +881,23 @@ def content_gap(comp_section: dict, bayut_section: dict) -> Tuple[bool, str]:
     c_txt = clean(comp_section.get("content",""))
     b_txt = clean(bayut_section.get("content",""))
 
-    # If both are tiny, don't claim a gap
     if len(c_txt) < 120:
         return False, ""
 
-    # If Bayut content is empty but header exists => gap (expand)
     if len(b_txt) < 60 and len(c_txt) >= 160:
         return True, "Bayut header exists but has minimal content compared to competitor."
 
-    # If competitor not longer enough, skip
     if len(c_txt) < (1.35 * max(len(b_txt), 1)):
         return False, ""
 
-    # Theme gap: competitor has keywords not present in Bayut section text
     c_kws = top_keywords(c_txt, n=9)
     b_low = b_txt.lower()
     missing = [k for k in c_kws if k not in b_low]
 
-    # Need at least 3 missing themes to call it a content gap
     if len(missing) >= 3:
         return True, "Competitor expands the section with additional decision themes."
     return False, ""
 
-def summarize_section_as_action(header: str, comp_section: dict) -> str:
-    """
-    High-level 'what to add' based on competitor section content themes (no quotes).
-    """
-    kws = top_keywords(comp_section.get("content",""), n=7)
-    if kws:
-        return f"Add a dedicated section for **{header}**. Cover practical decision themes such as: {', '.join(kws)}."
-    return f"Add a dedicated section for **{header}** with practical, decision-led details (not just a brief mention)."
-
-def summarize_content_gap_as_action(header: str, comp_section: dict, bayut_section: dict) -> str:
-    kws = top_keywords(comp_section.get("content",""), n=9)
-    b_low = (bayut_section.get("content","") or "").lower()
-    missing = [k for k in kws if k not in b_low]
-    if missing:
-        missing = missing[:7]
-        return f"Expand **{header}** by adding missing decision details (themes like: {', '.join(missing)})."
-    return f"Expand **{header}** with deeper practical details and decision-led coverage."
 
 def dedupe_rows(rows: List[dict]) -> List[dict]:
     """
@@ -935,51 +1012,104 @@ def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: 
 
 # =====================================================
 # UPDATE MODE ENGINE (HEADER-FIRST, THEN CONTENT GAPS)
+# (FIXED: groups H3 under missing H2; human wording)
 # =====================================================
 def update_mode_rows_header_first(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: str,
                                  max_missing_headers: int = 10,
                                  max_content_gaps: int = 8) -> List[dict]:
     """
-    Rules you requested:
+    Rules:
     1) Check missing headers first (competitor H2/H3 not in Bayut)
     2) If Bayut has header, only add a gap if content is weaker
     3) FAQ row stays
+    EXTRA:
+    - If an H2 is missing, do NOT output its H3 children as separate missing rows.
+      They are grouped INSIDE the H2 action text (your request).
+    - Output wording is human (no keyword lists).
     """
     rows: List[dict] = []
 
     bayut_secs = section_nodes(bayut_nodes, levels=(2,3))
     comp_secs = section_nodes(comp_nodes, levels=(2,3))
 
-    # --- 1) Missing headers (strict) ---
-    missing_rows = []
-    matched_map = {}  # comp header norm -> matched bayut header norm (for content-gap step)
-    for cs in comp_secs:
-        m = find_best_bayut_match(cs["header"], bayut_secs, min_score=0.73)
+    bayut_h2 = [s for s in bayut_secs if s["level"] == 2]
+    bayut_h3 = [s for s in bayut_secs if s["level"] == 3]
+    comp_h2 = [s for s in comp_secs if s["level"] == 2]
+    comp_h3 = [s for s in comp_secs if s["level"] == 3]
+
+    missing_h2_norms: set = set()
+
+    # --- 1) Missing H2 headers (group their H3 inside the same row) ---
+    missing_rows: List[dict] = []
+    for cs in comp_h2:
+        m = find_best_bayut_match(cs["header"], bayut_h2, min_score=0.73)
         if not m:
+            missing_h2_norms.add(norm_header(cs["header"]))
+
+            # collect H3 children for this H2 (if any)
+            children = []
+            child_text_parts = []
+            for h3 in comp_h3:
+                if norm_header(h3.get("parent_h2") or "") == norm_header(cs["header"]):
+                    children.append(h3["header"])
+                    if h3.get("content"):
+                        child_text_parts.append(h3["content"])
+
+            comp_text = (cs.get("content","") or "") + " " + " ".join(child_text_parts)
+
             missing_rows.append({
                 "Header (Gap)": cs["header"],
-                "What to add (Bayut action)": summarize_section_as_action(cs["header"], cs),
+                "What to add (Bayut action)": summarize_missing_section_action(cs["header"], children, comp_text),
                 "Source": source_link(comp_url),
             })
-        else:
-            matched_map[norm_header(cs["header"])] = norm_header(m["bayut_section"]["header"])
 
-    # cap missing headers to avoid spammy results
     rows.extend(missing_rows[:max_missing_headers])
 
-    # --- 2) Content gaps under matching headers ---
-    content_gap_rows = []
+    # --- 1b) Missing H3 headers ONLY if their parent H2 is NOT missing ---
+    # (So Downtown/JLT/Marina won't appear as separate rows if "Comparison..." H2 is missing.)
+    remaining_slots = max(0, max_missing_headers - len(rows))
+    missing_h3_rows: List[dict] = []
+
+    for cs in comp_h3:
+        parent = cs.get("parent_h2") or ""
+        if parent and norm_header(parent) in missing_h2_norms:
+            continue  # grouped under missing parent H2
+
+        # parent should exist in Bayut (or be matched)
+        if parent:
+            parent_match = find_best_bayut_match(parent, bayut_h2, min_score=0.73)
+            if not parent_match:
+                continue
+
+        m = find_best_bayut_match(cs["header"], bayut_h3, min_score=0.73)
+        if not m:
+            label = f"{parent} → {cs['header']}" if parent else cs["header"]
+            missing_h3_rows.append({
+                "Header (Gap)": label,
+                "What to add (Bayut action)": summarize_missing_section_action(cs["header"], None, cs.get("content","")),
+                "Source": source_link(comp_url),
+            })
+
+    if remaining_slots > 0:
+        rows.extend(missing_h3_rows[:remaining_slots])
+
+    # --- 2) Content gaps under matching headers (human) ---
+    content_gap_rows: List[dict] = []
     for cs in comp_secs:
+        # skip if missing H2 already claimed
+        if cs["level"] == 2 and norm_header(cs["header"]) in missing_h2_norms:
+            continue
+
         m = find_best_bayut_match(cs["header"], bayut_secs, min_score=0.73)
         if not m:
-            continue  # already handled as missing header
+            continue
 
         bs = m["bayut_section"]
         gap, _reason = content_gap(cs, bs)
         if gap:
             content_gap_rows.append({
                 "Header (Gap)": f"{bs['header']} (Content gap)",
-                "What to add (Bayut action)": summarize_content_gap_as_action(bs["header"], cs, bs),
+                "What to add (Bayut action)": summarize_content_gap_action(bs["header"], cs.get("content",""), bs.get("content","")),
                 "Source": source_link(comp_url),
             })
 
