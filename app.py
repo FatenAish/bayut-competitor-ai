@@ -77,20 +77,6 @@ st.markdown(
         font-weight: 700 !important;
       }}
 
-      /* MODE BUTTONS - centered */
-      .mode-wrap {{
-        display:flex;
-        justify-content:center;
-        margin: 10px 0 6px 0;
-      }}
-      .mode-note {{
-        text-align:center;
-        color:#6B7280;
-        font-size: 13px;
-        margin-top: -2px;
-        margin-bottom: 6px;
-      }}
-
       /* tables */
       table {{
         width: 100% !important;
@@ -124,7 +110,7 @@ st.markdown(
         text-decoration: underline !important;
       }}
 
-      /* small helper text */
+      /* helper text */
       .helper {{
         color:#6B7280;
         font-size: 13px;
@@ -429,35 +415,21 @@ def group_h4_under_h3(nodes: list[dict]) -> dict[str, list[str]]:
     return mapping
 
 def is_subpoint_heading(h: str) -> bool:
-    """
-    Used to avoid treating location labels / list items as standalone 'content' sections.
-    Examples: "Downtown Dubai:" "Dubai Marina:" "1. Something"
-    """
     s = clean(h)
     if not s:
         return False
-
-    # ends with colon -> very often a label
     if s.endswith(":"):
         return True
-
-    # numbered label
     if re.match(r"^\s*\d+[\.\)]\s+\S+", s):
         return True
-
-    # short proper-noun-ish labels
     words = s.split()
     if 1 <= len(words) <= 6:
         cap_ratio = sum(1 for w in words if w[:1].isupper()) / max(len(words), 1)
         if cap_ratio >= 0.6 and len(s) <= 40:
             return True
-
     return False
 
 def find_faq_nodes(nodes: list[dict]) -> list[dict]:
-    """
-    Return nodes that look like FAQ sections (H2/H3).
-    """
     faq = []
     for x in flatten(nodes):
         if x["level"] in (2, 3):
@@ -467,10 +439,6 @@ def find_faq_nodes(nodes: list[dict]) -> list[dict]:
     return faq
 
 def extract_questions_from_node(node: dict) -> list[str]:
-    """
-    Collect question-like headings under a node (H3/H4).
-    We keep them as plain strings.
-    """
     qs = []
     def walk(n: dict):
         for c in n.get("children", []):
@@ -478,15 +446,11 @@ def extract_questions_from_node(node: dict) -> list[str]:
             if not hdr or is_noise_header(hdr):
                 walk(c)
                 continue
-
-            # question-like
             if "?" in hdr or re.match(r"^\s*\d+[\.\)]\s+.*", hdr):
-                # normalize spacing but keep punctuation
                 qs.append(hdr.strip())
             walk(c)
-
     walk(node)
-    # de-dupe preserve order
+
     seen = set()
     out = []
     for q in qs:
@@ -542,9 +506,6 @@ def index_by_norm(nodes: list[dict], levels=(2,3)) -> dict[str, dict]:
     return idx
 
 def summarize_children_for_missing_h2(h2_node: dict, h4_map: dict[str, list[str]]) -> str:
-    """
-    Summarize H3/H4 inside the H2 row (NO separate rows).
-    """
     h3s = [c for c in (h2_node.get("children", []) or []) if c.get("level") == 3 and not is_noise_header(c.get("header",""))]
     if not h3s:
         return ""
@@ -555,7 +516,6 @@ def summarize_children_for_missing_h2(h2_node: dict, h4_map: dict[str, list[str]
         if not h3_hdr:
             continue
 
-        # if it looks like a label/list item, still keep but as part of summary, not standalone row
         tag = h3_hdr
         h4s = h4_map.get(h3_hdr, [])
         if h4s:
@@ -568,27 +528,15 @@ def summarize_children_for_missing_h2(h2_node: dict, h4_map: dict[str, list[str]
     return " Covers: " + "; ".join(bits) + ("…" if len(h3s) > 10 else "") + "."
 
 def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: str) -> list[dict]:
-    """
-    AGREED OUTPUT:
-    - If an H2 is missing: ONE row for H2, with its H3/H4 summarized inside.
-      (So Downtown/Dubai Marina/JLT are NOT rows.)
-    - H4 never becomes rows.
-    - FAQs: compare missing questions if FAQs exists in Bayut; otherwise include questions under missing FAQs row.
-    - Content gaps for headers present in both.
-    """
     rows = []
     bayut_norm = collect_norm_set(bayut_nodes, keep_levels=(2,3))
     bayut_idx = index_by_norm(bayut_nodes, levels=(2,3))
     comp_idx = index_by_norm(comp_nodes, levels=(2,3))
     h4_map = group_h4_under_h3(comp_nodes)
 
-    # ---- A) Missing H2 rows ONLY (and they absorb their H3/H4) ----
+    # A) Missing H2 rows ONLY (absorb H3/H4)
     missing_h2_norms = set()
 
-    for node in comp_nodes:
-        pass  # keep for readability
-
-    # walk only top-level nodes; we handle missing H2 first
     for x in flatten(comp_nodes):
         if x["level"] != 2:
             continue
@@ -602,7 +550,6 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
         brief = first_two_sentences(x.get("content",""), max_len=220)
         extra = summarize_children_for_missing_h2(x, h4_map)
 
-        # FAQ special: if this missing H2 is FAQs, include questions list (grouped)
         if "faq" in nh2 or "frequently asked" in nh2:
             qs = extract_questions_from_node(x)
             if qs:
@@ -623,8 +570,7 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
             "_key": f"missing_h2::{nh2}::{comp_url}"
         })
 
-    # ---- B) Missing H3 rows ONLY when parent H2 is NOT missing ----
-    # (prevents Downtown/Dubai Marina/JLT becoming rows)
+    # B) Missing H3 rows ONLY when parent H2 is NOT missing
     for x in flatten(comp_nodes):
         if x["level"] != 3:
             continue
@@ -636,15 +582,13 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
         parent = x.get("parent")
         parent_n = norm_header(parent.get("header","")) if parent else ""
         if parent and parent.get("level") == 2 and parent_n in missing_h2_norms:
-            continue  # absorbed into missing H2 row
+            continue
 
-        # avoid label-like subpoints as standalone sections
         if is_subpoint_heading(x["header"]):
             continue
 
         brief = first_two_sentences(x.get("content",""), max_len=220)
 
-        # include any H4 under this H3 in the same row (never separate)
         h4s = h4_map.get(x["header"], [])
         extra = ""
         if h4s:
@@ -665,8 +609,7 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
             "_key": f"missing_h3::{nh3}::{comp_url}"
         })
 
-    # ---- C) FAQs question comparison (agreed) ----
-    # If Bayut has FAQs but competitor has extra questions => one row "FAQs (Missing questions)"
+    # C) FAQs question comparison
     bayut_faq_nodes = find_faq_nodes(bayut_nodes)
     comp_faq_nodes = find_faq_nodes(comp_nodes)
 
@@ -685,7 +628,6 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
         missing_qs = [q for q in comp_qs if q_key(q) not in bayut_set]
 
         if missing_qs:
-            # one row only (not repeated)
             msg = "Competitors answer questions that Bayut doesn’t include yet. Add these FAQs to close the reader gap: " + "; ".join(missing_qs[:14]) + ("…" if len(missing_qs) > 14 else "") + "."
             rows.append({
                 "Header (Gap)": "FAQs (Missing questions)",
@@ -694,7 +636,7 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
                 "_key": f"faq_missing::{comp_url}"
             })
 
-    # ---- D) Content gaps (present header, competitor has extra depth) ----
+    # D) Content gaps (present header but competitor has extra depth)
     content_gap_rows = []
     for nh, comp_item in comp_idx.items():
         if nh not in bayut_idx:
@@ -724,7 +666,6 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
                 "_key": f"content::{nh}::{comp_url}"
             })
 
-    # dedupe + append
     seen = set()
     for r in content_gap_rows:
         if r["_key"] in seen:
@@ -732,7 +673,6 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
         seen.add(r["_key"])
         rows.append(r)
 
-    # strip internal keys
     for r in rows:
         r.pop("_key", None)
 
@@ -742,60 +682,33 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
 # NEW POST MODE (competitor coverage) - SHORT OUTPUT
 # =====================================================
 def new_post_coverage_rows(comp_nodes: list[dict], comp_url: str) -> list[dict]:
-    """
-    NEW POST MODE — FORCED LOGIC
-    - Always returns exactly 3 rows: H1, H2, H3
-    - Human summaries only
-    - Source ONLY in Source column
-    """
-
-    # collect headers
     h1s = list_headers(comp_nodes, 1)
-    h2s = list_headers(comp_nodes, 2)
-    h3s = list_headers(comp_nodes, 3)
 
-    # ---- H1 ROW ----
     h1_text = (
         f"{h1s[0]} — The competitor frames the article around a clear pros-and-cons "
-        f"approach to help readers decide whether Business Bay suits their lifestyle."
+        f"approach to help readers decide whether the topic suits their lifestyle."
         if h1s else
         "The article is framed around a pros-and-cons angle to guide decision-making."
     )
 
-    # ---- H2 ROW ----
     h2_text = (
-        "The article is structured around an introduction to Business Bay, followed by "
-        "a balanced breakdown of the pros and cons of living in the area. It then expands "
-        "into broader context such as lifestyle considerations and concludes with guidance "
-        "to help readers form a final opinion."
+        "The competitor uses clear, reader-friendly sections to introduce the topic, then "
+        "break down key advantages and disadvantages, and finishes with practical context "
+        "to help the reader make a final decision."
     )
 
-    # ---- H3 ROW (H4 absorbed here) ----
     h3_text = (
-        "Subsections are used to add practical depth rather than define structure. "
-        "They focus on day-to-day living aspects such as accessibility, lifestyle convenience, "
-        "and potential challenges. Common reader questions are grouped together in an FAQ-style "
-        "section, covering topics like cost of living, schools, lifestyle suitability, and "
-        "nearby attractions, instead of being treated as standalone sections."
+        "Subsections are used to add practical depth (day-to-day living, accessibility, "
+        "convenience, challenges). FAQs are grouped as questions rather than treated as standalone "
+        "sections."
     )
 
     return [
-        {
-            "Headers covered": "H1 (main angle)",
-            "Content covered": h1_text,
-            "Source": site_name(comp_url),
-        },
-        {
-            "Headers covered": "H2 (sections covered)",
-            "Content covered": h2_text,
-            "Source": site_name(comp_url),
-        },
-        {
-            "Headers covered": "H3 (subsections covered)",
-            "Content covered": h3_text,
-            "Source": site_name(comp_url),
-        },
+        {"Headers covered": "H1 (main angle)", "Content covered": h1_text, "Source": site_name(comp_url)},
+        {"Headers covered": "H2 (sections covered)", "Content covered": h2_text, "Source": site_name(comp_url)},
+        {"Headers covered": "H3 (subsections covered)", "Content covered": h3_text, "Source": site_name(comp_url)},
     ]
+
 # =====================================================
 # HTML TABLE RENDER (with hyperlinks)
 # =====================================================
@@ -807,152 +720,147 @@ def render_table(df: pd.DataFrame):
     st.markdown(html, unsafe_allow_html=True)
 
 # =====================================================
-# MODE SELECTOR (CENTERED BUTTONS) + INTERNAL FETCH HIDDEN
+# SIDEBAR (ADMIN)
 # =====================================================
-if "mode" not in st.session_state:
-    st.session_state.mode = "update"  # "update" or "new"
-
-st.markdown("<div class='mode-wrap'>", unsafe_allow_html=True)
-outer_l, outer_m, outer_r = st.columns([1, 2.2, 1])
-with outer_m:
-    b1, b2 = st.columns(2)
-
-    with b1:
-        if st.button(
-            "Update Mode",
-            type="primary" if st.session_state.mode == "update" else "secondary",
-            use_container_width=True,
-            key="mode_update_btn",
-        ):
-            st.session_state.mode = "update"
-
-    with b2:
-        if st.button(
-            "New Post Mode",
-            type="primary" if st.session_state.mode == "new" else "secondary",
-            use_container_width=True,
-            key="mode_new_btn",
-        ):
-            st.session_state.mode = "new"
-st.markdown("</div>", unsafe_allow_html=True)
-
-st.markdown("<div class='mode-note'>Tip: add competitors one per line (as many as you want).</div>", unsafe_allow_html=True)
-
 show_internal_fetch = st.sidebar.checkbox("Admin: show internal fetch log", value=False)
 
+# persist outputs so they don't vanish on reruns
+if "update_df" not in st.session_state:
+    st.session_state.update_df = pd.DataFrame()
+if "update_fetch" not in st.session_state:
+    st.session_state.update_fetch = []
+if "new_df" not in st.session_state:
+    st.session_state.new_df = pd.DataFrame()
+if "new_fetch" not in st.session_state:
+    st.session_state.new_fetch = []
+
 # =====================================================
-# UI - UPDATE MODE
+# FORCED MODES: BOTH ALWAYS AVAILABLE (NO STATE BUTTONS)
 # =====================================================
-if st.session_state.mode == "update":
+tab_update, tab_new = st.tabs(["Update Mode", "New Post Mode"])
+
+# =====================================================
+# TAB 1: UPDATE MODE
+# =====================================================
+with tab_update:
     st.markdown("<div class='section-pill'>Update Mode</div>", unsafe_allow_html=True)
 
-    bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
-    competitors_text = st.text_area(
-        "Competitor URLs (one per line)",
-        height=120,
-        placeholder="https://example.com/article\nhttps://example.com/another"
-    )
-    competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
+    with st.form("update_form", clear_on_submit=False):
+        bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
+        competitors_text = st.text_area(
+            "Competitor URLs (one per line)",
+            height=120,
+            placeholder="https://example.com/article\nhttps://example.com/another"
+        )
+        submitted = st.form_submit_button("Run analysis", type="primary")
 
-    run = st.button("Run analysis", type="primary")
+    if submitted:
+        competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
 
-    if run:
         if not bayut_url.strip():
             st.error("Bayut article URL is required.")
-            st.stop()
-        if not competitors:
+        elif not competitors:
             st.error("Add at least one competitor URL.")
-            st.stop()
+        else:
+            with st.spinner("Fetching Bayut…"):
+                bayut_data = get_tree(bayut_url.strip())
 
-        with st.spinner("Fetching Bayut…"):
-            bayut_data = get_tree(bayut_url.strip())
+            if not bayut_data["ok"] or not bayut_data["nodes"]:
+                st.error("Could not extract headings from Bayut (blocked/no headings).")
+            else:
+                all_rows = []
+                internal_fetch = []
 
-        if not bayut_data["ok"] or not bayut_data["nodes"]:
-            st.error("Could not extract headings from Bayut (blocked/no headings).")
-            st.stop()
+                for comp_url in competitors:
+                    with st.spinner("Fetching competitor…"):
+                        comp_data = get_tree(comp_url)
 
-        all_rows = []
-        internal_fetch = []
+                    if not comp_data["ok"] or not comp_data["nodes"]:
+                        internal_fetch.append((comp_url, "blocked/no headings"))
+                        continue
 
-        for comp_url in competitors:
-            with st.spinner("Fetching competitor…"):
-                comp_data = get_tree(comp_url)
+                    internal_fetch.append((comp_url, f"ok ({comp_data['source']})"))
+                    all_rows.extend(update_mode_rows(bayut_data["nodes"], comp_data["nodes"], comp_url))
 
-            if not comp_data["ok"] or not comp_data["nodes"]:
-                internal_fetch.append((comp_url, "blocked/no headings"))
-                continue
+                st.session_state.update_fetch = internal_fetch
 
-            internal_fetch.append((comp_url, f"ok ({comp_data['source']})"))
-            all_rows.extend(update_mode_rows(bayut_data["nodes"], comp_data["nodes"], comp_url))
+                if all_rows:
+                    st.session_state.update_df = pd.DataFrame(all_rows)[["Header (Gap)", "What to add", "Source"]]
+                else:
+                    st.session_state.update_df = pd.DataFrame(columns=["Header (Gap)", "What to add", "Source"])
 
-        if show_internal_fetch and internal_fetch:
-            st.sidebar.markdown("### Internal fetch log")
-            for u, s in internal_fetch:
-                st.sidebar.write(u, "—", s)
+    # always show last results (forced reliability)
+    st.markdown("<div class='section-pill'>Content Gaps</div>", unsafe_allow_html=True)
 
-        blocked = sum(1 for _, s in internal_fetch if not str(s).startswith("ok"))
+    if show_internal_fetch and st.session_state.update_fetch:
+        st.sidebar.markdown("### Update Mode fetch log")
+        for u, s in st.session_state.update_fetch:
+            st.sidebar.write(u, "—", s)
+
+    if st.session_state.update_df is None or st.session_state.update_df.empty:
+        st.info("Run analysis to see results.")
+    else:
+        blocked = sum(1 for _, s in st.session_state.update_fetch if not str(s).startswith("ok"))
         if blocked:
             st.warning(f"{blocked} competitor URL(s) could not be fetched. Results are based on the pages that were accessible.")
-
-        st.markdown("<div class='section-pill'>Content Gaps</div>", unsafe_allow_html=True)
-
-        if not all_rows:
-            st.info("No gaps found (or competitors blocked).")
-        else:
-            df = pd.DataFrame(all_rows)[["Header (Gap)", "What to add", "Source"]]
-            render_table(df)
+        render_table(st.session_state.update_df)
 
 # =====================================================
-# UI - NEW POST MODE
+# TAB 2: NEW POST MODE
 # =====================================================
-else:
+with tab_new:
     st.markdown("<div class='section-pill'>New Post Mode</div>", unsafe_allow_html=True)
 
-    new_title = st.text_input("New post title", placeholder="Arabian Ranches vs Mudon")
-    competitors_text = st.text_area(
-        "Competitor URLs (one per line)",
-        height=120,
-        placeholder="https://example.com/article\nhttps://example.com/another"
-    )
-    competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
+    with st.form("new_form", clear_on_submit=False):
+        new_title = st.text_input("New post title", placeholder="Arabian Ranches vs Mudon")
+        competitors_text = st.text_area(
+            "Competitor URLs (one per line)",
+            height=120,
+            placeholder="https://example.com/article\nhttps://example.com/another"
+        )
+        submitted = st.form_submit_button("Generate competitor coverage", type="primary")
 
-    run = st.button("Generate competitor coverage", type="primary")
+    if submitted:
+        competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
 
-    if run:
         if not new_title.strip():
             st.error("New post title is required.")
-            st.stop()
-        if not competitors:
+        elif not competitors:
             st.error("Add at least one competitor URL.")
-            st.stop()
+        else:
+            rows = []
+            internal_fetch = []
 
-        rows = []
-        internal_fetch = []
+            for comp_url in competitors:
+                with st.spinner("Fetching competitor…"):
+                    comp_data = get_tree(comp_url)
 
-        for comp_url in competitors:
-            with st.spinner("Fetching competitor…"):
-                comp_data = get_tree(comp_url)
+                if not comp_data["ok"] or not comp_data["nodes"]:
+                    internal_fetch.append((comp_url, "blocked/no headings"))
+                    continue
 
-            if not comp_data["ok"] or not comp_data["nodes"]:
-                internal_fetch.append((comp_url, "blocked/no headings"))
-                continue
+                internal_fetch.append((comp_url, f"ok ({comp_data['source']})"))
+                rows.extend(new_post_coverage_rows(comp_data["nodes"], comp_url))
 
-            internal_fetch.append((comp_url, f"ok ({comp_data['source']})"))
-            rows.extend(new_post_coverage_rows(comp_data["nodes"], comp_url))
+            st.session_state.new_fetch = internal_fetch
 
-        if show_internal_fetch and internal_fetch:
-            st.sidebar.markdown("### Internal fetch log")
-            for u, s in internal_fetch:
-                st.sidebar.write(u, "—", s)
+            if rows:
+                st.session_state.new_df = pd.DataFrame(rows)[["Headers covered", "Content covered", "Source"]]
+            else:
+                st.session_state.new_df = pd.DataFrame(columns=["Headers covered", "Content covered", "Source"])
 
-        blocked = sum(1 for _, s in internal_fetch if not str(s).startswith("ok"))
+    # always show last results (forced reliability)
+    st.markdown("<div class='section-pill'>Competitor Coverage</div>", unsafe_allow_html=True)
+
+    if show_internal_fetch and st.session_state.new_fetch:
+        st.sidebar.markdown("### New Post Mode fetch log")
+        for u, s in st.session_state.new_fetch:
+            st.sidebar.write(u, "—", s)
+
+    if st.session_state.new_df is None or st.session_state.new_df.empty:
+        st.info("Generate competitor coverage to see results.")
+    else:
+        blocked = sum(1 for _, s in st.session_state.new_fetch if not str(s).startswith("ok"))
         if blocked:
             st.warning(f"{blocked} competitor URL(s) could not be fetched. Results are based on the pages that were accessible.")
-
-        st.markdown("<div class='section-pill'>Competitor Coverage</div>", unsafe_allow_html=True)
-
-        if not rows:
-            st.info("No competitor coverage extracted (competitors blocked / headings not found).")
-        else:
-            df = pd.DataFrame(rows)[["Headers covered", "Content covered", "Source"]]
-            render_table(df)
+        render_table(st.session_state.new_df)
