@@ -4,6 +4,193 @@ import re
 from bs4 import BeautifulSoup
 from urllib.parse import quote_plus, urlparse
 import pandas as pd
+import time, random
+from dataclasses import dataclass
+from typing import Optional, Dict, Any, Tuple, List
+
+# Optional (recommended): JS rendering tool
+# pip install playwright
+# playwright install chromium
+try:
+    from playwright.sync_api import sync_playwright
+    PLAYWRIGHT_OK = True
+except Exception:
+    PLAYWRIGHT_OK = False
+
+@dataclass
+class FetchResult:
+    ok: bool
+    source: Optional[str]
+    status: Optional[int]
+    html: str
+    text: str
+    reason: Optional[str]
+
+class FetchAgent:
+    """
+    A deterministic "resolver agent":
+    - tries multiple strategies in order
+    - validates extracted content (length + not blocked)
+    - retries + UA rotation + backoff
+    - optional JS rendering (Playwright)
+    - optional manual fallback (user paste) so no competitor is missing
+    """
+
+    def __init__(self, default_headers: dict, ignore_tags: set, clean_fn, looks_blocked_fn):
+        self.default_headers = default_headers
+        self.ignore_tags = ignore_tags
+        self.clean = clean_fn
+        self.looks_blocked = looks_blocked_fn
+
+        self.user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36",
+        ]
+
+    def _http_get(self, url: str, timeout: int = 25, tries: int = 3) -> Tuple[int, str]:
+        import requests
+        last_code, last_text = 0, ""
+        for i in range(tries):
+            headers = dict(self.default_headers)
+            headers["User-Agent"] = random.choice(self.user_agents)
+            try:
+                r = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+                last_code, last_text = r.status_code, (r.text or "")
+
+                # retry on transient/rate-limit responses
+                if r.status_code in (429, 500, 502, 503, 504):
+                    time.sleep(1.2 * (i + 1))
+                    continue
+
+                return last_code, last_text
+            except Exception as e:
+                last_code, last_text = 0, str(e)
+                time.sleep(1.2 * (i + 1))
+        return last_code, last_text
+
+    def _jina_url(self, url: str) -> str:
+        if url.startswith("https://"):
+            return "https://r.jina.ai/https://" + url[len("https://"):]
+        if url.startswith("http://"):
+            return "https://r.jina.ai/http://" + url[len("http://"):]
+        return "https://r.jina.ai/https://" + url
+
+    def _textise_url(self, url: str) -> str:
+        from urllib.parse import quote_plus
+        return f"https://textise.org/showtext.aspx?strURL={quote_plus(url)}"
+
+    def _validate_text(self, text: str, min_len: int) -> bool:
+        t = self.clean(text)
+        if len(t) < min_len:
+            return False
+        if self.looks_blocked(t):
+            return False
+        return True
+
+    def _extract_article_text_from_html(self, html: str) -> str:
+        soup = BeautifulSoup(html, "html.parser")
+        for t in soup.find_all(list(self.ignore_tags)):
+            t.decompose()
+        article = soup.find("article") or soup
+        return self.clean(article.get_text(" "))
+
+    def _fetch_playwright_html(self, url: str, timeout_ms: int = 25000) -> Tuple[bool, str]:
+        if not PLAYWRIGHT_OK:
+            return False, ""
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+                ctx = browser.new_context(user_agent=random.choice(self.user_agents))
+                page = ctx.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                page.wait_for_timeout(1400)  # let JS render
+                html = page.content()
+                browser.close()
+            return True, html
+        except Exception:
+            return False, ""
+
+    def resolve(self, url: str) -> FetchResult:
+        url = (url or "").strip()
+        if not url:
+            return FetchResult(False, None, None, "", "", "empty_url")
+
+        # Strategy 1: direct HTML
+        code, html = self._http_get(url)
+        if code == 200 and html:
+            text = self._extract_article_text_from_html(html)
+            if self._validate_text(text, min_len=500):
+                return FetchResult(True, "direct", code, html, text, None)
+
+        # Strategy 2: JS-rendered HTML (Playwright)
+        ok, html2 = self._fetch_playwright_html(url)
+        if ok and html2:
+            text2 = self._extract_article_text_from_html(html2)
+            if self._validate_text(text2, min_len=500):
+                return FetchResult(True, "playwright", 200, html2, text2, None)
+
+        # Strategy 3: Jina reader
+        jurl = self._jina_url(url)
+        code3, txt3 = self._http_get(jurl)
+        if code3 == 200 and txt3:
+            text3 = self.clean(txt3)
+            if self._validate_text(text3, min_len=500):
+                return FetchResult(True, "jina", code3, "", text3, None)
+
+        # Strategy 4: Textise
+        turl = self._textise_url(url)
+        code4, html4 = self._http_get(turl)
+        if code4 == 200 and html4:
+            soup = BeautifulSoup(html4, "html.parser")
+            text4 = self.clean(soup.get_text(" "))
+            if self._validate_text(text4, min_len=350):
+                return FetchResult(True, "textise", code4, "", text4, None)
+
+        return FetchResult(False, None, None, "", "", "blocked_or_no_content")
+
+
+def resolve_all_or_require_manual(agent: FetchAgent, urls: List[str], st_key_prefix: str) -> Dict[str, FetchResult]:
+    """
+    Enforces "no exceptions":
+    - tries to resolve all
+    - if any fail, app asks for manual paste for those URLs
+    - only returns when all are resolved
+    """
+    results: Dict[str, FetchResult] = {}
+    failed: List[str] = []
+
+    for u in urls:
+        r = agent.resolve(u)
+        results[u] = r
+        if not r.ok:
+            failed.append(u)
+
+        # small polite delay to reduce blocking across many URLs
+        time.sleep(0.3)
+
+    if not failed:
+        return results
+
+    st.error("Some competitor URLs could not be fetched automatically. Paste the article text for each failed URL to continue (no missing competitors).")
+
+    for u in failed:
+        with st.expander(f"Manual fallback required: {u}", expanded=True):
+            pasted = st.text_area(
+                "Paste the full article text (or readable HTML) هنا:",
+                key=f"{st_key_prefix}__paste__{u}",
+                height=180,
+            )
+            if pasted and len(pasted.strip()) > 400:
+                # Treat manual paste like a successful fetch
+                results[u] = FetchResult(True, "manual", 200, "", pasted.strip(), None)
+
+    still_failed = [u for u in failed if not results[u].ok]
+    if still_failed:
+        st.stop()
+
+    return results
+
 
 # =====================================================
 # PAGE CONFIG
