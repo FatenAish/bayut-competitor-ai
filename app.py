@@ -52,11 +52,12 @@ st.markdown(
     }}
 
     .hero h1 {{
-      font-size: 52px;
-      font-weight: 900;
-      margin: 0;
-      color: {TEXT_DARK};
-    }}
+     .hero h1 {
+  font-size: 52px;
+  font-weight: 900;
+  margin: 0;
+  color: {BAYUT_GREEN};
+}
 
     .hero .bayut {{
       color: {BAYUT_GREEN};
