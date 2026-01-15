@@ -13,9 +13,9 @@ st.set_page_config(page_title="Bayut Competitor Gap Analysis", layout="wide")
 # =====================================================
 # COLORS
 # =====================================================
-BAYUT_GREEN = "#0E8A6D"
-LIGHT_GREEN = "#E9F7F1"
-LIGHT_GREEN_2 = "#DFF3EA"
+BAYUT_GREEN = "#2FA58A"      # softer primary green (buttons, highlights)
+LIGHT_GREEN = "#F1FAF7"     # very light mint (page background)
+LIGHT_GREEN_2 = "#E3F3EE"   # borders, pills, table headers
 TEXT_DARK = "#1F2937"
 
 # =====================================================
