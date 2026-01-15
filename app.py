@@ -890,12 +890,10 @@ def bucket_evidence_summary(comp_nodes: List[dict], bucket: dict) -> str:
         if len(matched_headings) >= 5:
             break
 
-    kws = []
     # try to focus keywords from the whole competitor blob (still safe, not quotes)
     kws = top_keywords(blob, n=7)
 
-    bits = []
-    bits.append(bucket["hint"])
+    bits = [bucket["hint"]]
 
     if matched_headings:
         bits.append("Competitor sections include: " + "; ".join(matched_headings[:4]) + ("…" if len(matched_headings) > 4 else "") + ".")
@@ -904,12 +902,81 @@ def bucket_evidence_summary(comp_nodes: List[dict], bucket: dict) -> str:
 
     return clean(" ".join(bits))
 
+
+# =======================
+# FAQ SUBJECT LOGIC (NEW)
+# =======================
+def faq_subject(q: str) -> str:
+    """
+    Map an FAQ question into a short subject label (NO full question text).
+    Deterministic.
+    """
+    s = norm_header(normalize_question(q))
+
+    if any(k in s for k in ["where is", "located", "location", "map", "how to get", "nearest", "distance"]):
+        return "Location"
+
+    if any(k in s for k in ["price", "starting price", "cost", "how much", "prices"]):
+        return "Pricing"
+
+    if any(k in s for k in ["types of properties", "property types", "villa", "townhouse", "apartment", "layouts", "floor plan", "floor plans", "bedroom", "unit types"]):
+        return "Property types & layouts"
+
+    if any(k in s for k in ["amenities", "facilities", "features", "pool", "gym", "park"]):
+        return "Amenities"
+
+    if any(k in s for k in ["developer", "developed by", "who is the developer"]):
+        return "Developer"
+
+    if any(k in s for k in ["how big", "size", "area", "master plan", "community size", "sqm", "sq ft"]):
+        return "Community size & master plan"
+
+    if any(k in s for k in ["payment plan", "payment", "installment", "down payment", "cash", "crypto", "cryptocurrency", "mortgage"]):
+        return "Payment & purchase methods"
+
+    if any(k in s for k in ["foreign", "investors", "freehold", "eligib", "can i buy", "ownership"]):
+        return "Eligibility & ownership"
+
+    if any(k in s for k in ["handover", "completion", "ready", "move in", "construction", "progress", "delivery", "available now"]):
+        return "Handover & availability"
+
+    if any(k in s for k in ["brochure", "download", "pdf"]):
+        return "Brochure & downloads"
+
+    if any(k in s for k in ["expression of interest", "register", "enquire", "inquire", "contact", "how can i submit", "submit", "interest"]):
+        return "How to register interest"
+
+    if any(k in s for k in ["what is", "about", "overview"]):
+        return "Project overview"
+
+    return "Other FAQs"
+
+
+def faq_subjects_from_questions(questions: List[str], limit: int = 10) -> List[str]:
+    """
+    Convert questions -> deduped subject labels (stable order).
+    """
+    out: List[str] = []
+    seen = set()
+    for q in questions:
+        subj = faq_subject(q)
+        k = norm_header(subj)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(subj)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: str) -> Optional[dict]:
     """
-    FORCED FAQ RULES:
-    - Only output a FAQ row if we can list missing questions
-    - If Bayut has FAQ: show ONLY competitor questions not in Bayut
-    - If Bayut has no FAQ: all competitor questions are missing
+    FORCED FAQ RULES (UPDATED):
+    - NEVER list full questions
+    - Only output subjects (Location, Pricing, Amenities...)
+    - If Bayut has FAQ: show ONLY subjects for competitor questions not in Bayut
+    - If Bayut has no FAQ: show FAQ Block row ONLY (subjects)
     """
     bayut_faq_nodes = find_faq_nodes(bayut_nodes)
     comp_faq_nodes = find_faq_nodes(comp_nodes)
@@ -929,42 +996,49 @@ def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: 
         q2 = re.sub(r"\s+", " ", q2).strip()
         return q2
 
+    # Bayut HAS FAQ -> only missing topics
     if bayut_faq_nodes:
         bayut_qs = []
         for fn in bayut_faq_nodes:
             bayut_qs.extend(extract_questions_from_node(fn))
         bayut_set = {q_key(q) for q in bayut_qs if q}
-        missing = [q for q in comp_qs if q_key(q) not in bayut_set]
-        if not missing:
-            return None  # FORCE: no “FAQs missing” without missing list
-        msg = "Competitor answers FAQ questions that Bayut doesn’t include, such as: " + "; ".join(missing[:12]) + ("…" if len(missing) > 12 else "") + "."
+
+        missing_qs = [q for q in comp_qs if q_key(q) not in bayut_set]
+        if not missing_qs:
+            return None  # forced: no row if nothing missing
+
+        subjects = faq_subjects_from_questions(missing_qs, limit=10)
+        msg = "Competitor covers extra FAQ topics not on Bayut, such as: " + ", ".join(subjects) + "."
+
         return {
             "Header (Gap)": "Missing FAQs",
             "What the competitor talks about": msg,
             "Source": source_link(comp_url),
         }
 
-    # Bayut has no FAQ block => all competitor questions are missing
-    msg = "Competitor includes an FAQ block with questions such as: " + "; ".join(comp_qs[:12]) + ("…" if len(comp_qs) > 12 else "") + "."
+    # Bayut has NO FAQ block -> show FAQ Block (subjects)
+    subjects = faq_subjects_from_questions(comp_qs, limit=10)
+    msg = "FAQ block exists on competitor (Bayut has none). Topics include: " + ", ".join(subjects) + "."
+
     return {
-        "Header (Gap)": "Missing FAQs (Bayut has no FAQ block)",
+        "Header (Gap)": "FAQ Block",
         "What the competitor talks about": msg,
         "Source": source_link(comp_url),
     }
+
 
 def update_mode_rows_bucketed_gaps_only(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: str, max_rows: int = 6) -> List[dict]:
     """
     FORCED UPDATE MODE OUTPUT:
     - Rows ONLY when competitor has a bucket AND Bayut does not
     - No per-heading rows, ever
-    - FAQ row ONLY if missing questions list exists
+    - FAQ row ONLY if missing topics exist OR Bayut has no FAQ block (FAQ Block)
     - Row count capped
     """
     rows: List[dict] = []
 
     # 1) bucket gaps (excluding FAQ logic)
     for bucket in BUCKETS:
-        # For brochure/download bucket, allow it as a gap if competitor has it and Bayut doesn't.
         comp_has = bucket_present(comp_nodes, bucket)
         bayut_has = bucket_present(bayut_nodes, bucket)
 
@@ -976,12 +1050,11 @@ def update_mode_rows_bucketed_gaps_only(bayut_nodes: List[dict], comp_nodes: Lis
                 "Source": source_link(comp_url),
             })
 
-    # 2) FAQ gap row (ONLY if missing questions)
+    # 2) FAQ gap row (subjects only)
     faq_row = missing_faqs_row(bayut_nodes, comp_nodes, comp_url)
     if faq_row:
         rows.append(faq_row)
 
-    # 3) cap rows (keep order defined above)
     return rows[:max_rows]
 
 
@@ -1146,7 +1219,6 @@ if st.session_state.mode == "update":
             internal_fetch.append((comp_url, f"ok ({src})"))
             comp_nodes = comp_tree_map[comp_url]["nodes"]
 
-            # FORCED output:
             all_rows.extend(update_mode_rows_bucketed_gaps_only(
                 bayut_nodes=bayut_nodes,
                 comp_nodes=comp_nodes,
