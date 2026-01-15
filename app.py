@@ -25,23 +25,16 @@ st.markdown(
     f"""
     <style>
 
-    /* ===============================
-       GLOBAL BACKGROUND (LIGHT GREEN)
-       =============================== */
     html, body, .stApp {{
       background-color: {LIGHT_GREEN} !important;
     }}
 
-    /* page width */
     section.main > div.block-container {{
       max-width: 1180px !important;
       padding-top: 1.8rem !important;
       padding-bottom: 3rem !important;
     }}
 
-    /* ===============================
-       HERO
-       =============================== */
     .hero {{
       text-align: center;
       padding: 34px 24px;
@@ -52,14 +45,9 @@ st.markdown(
     }}
 
     .hero h1 {{
-     .hero h1 {
-  font-size: 52px;
-  font-weight: 900;
-  margin: 0;
-  color: {BAYUT_GREEN};
-}
-
-    .hero .bayut {{
+      font-size: 52px;
+      font-weight: 900;
+      margin: 0;
       color: {BAYUT_GREEN};
     }}
 
@@ -69,50 +57,6 @@ st.markdown(
       font-size: 16px;
     }}
 
-    /* ===============================
-       WHITE CARDS / SECTIONS
-       =============================== */
-    .ui-card {{
-      background: #FFFFFF;
-      border-radius: 22px;
-      padding: 22px 24px;
-      border: 1px solid #E5E7EB;
-      box-shadow: 0 10px 28px rgba(0,0,0,0.06);
-      margin-bottom: 22px;
-    }}
-
-    /* section pill */
-    .section-pill {{
-      background: {LIGHT_GREEN};
-      border: 1px solid {LIGHT_GREEN_2};
-      padding: 8px 14px;
-      border-radius: 999px;
-      font-weight: 800;
-      color: {TEXT_DARK};
-      display: inline-block;
-      margin-bottom: 14px;
-    }}
-
-    /* ===============================
-       INPUTS (WHITE BOXES)
-       =============================== */
-    .stTextInput input,
-    .stTextArea textarea {{
-      background: #FFFFFF !important;
-      border: 1px solid #D1D5DB !important;
-      border-radius: 14px !important;
-      padding: 12px !important;
-    }}
-
-    .stTextInput input:focus,
-    .stTextArea textarea:focus {{
-      border-color: {BAYUT_GREEN} !important;
-      box-shadow: 0 0 0 3px rgba(14,138,109,0.20);
-    }}
-
-    /* ===============================
-       BUTTONS (DARK GREEN ONLY)
-       =============================== */
     .stButton button {{
       background-color: {BAYUT_GREEN} !important;
       color: #FFFFFF !important;
@@ -120,21 +64,12 @@ st.markdown(
       padding: 0.65rem 1.2rem !important;
       font-weight: 800 !important;
       border: none !important;
-      transition: all 0.18s ease;
     }}
 
-    .stButton button:hover {{
-      background-color: #0B6F58 !important;
-      transform: translateY(-1px);
-    }}
-
-    /* remove red / default theme colors */
-    button[kind="secondary"] {{
-      background-color: #FFFFFF !important;
-      color: {BAYUT_GREEN} !important;
-      border: 2px solid {BAYUT_GREEN} !important;
-    }}
-
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
     /* ===============================
        TABLES (WHITE ON GREEN BG)
        =============================== */
