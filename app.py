@@ -1,12 +1,13 @@
+# app.py
 import streamlit as st
 import requests
 import re
 from bs4 import BeautifulSoup
 from urllib.parse import quote_plus, urlparse
 import pandas as pd
-import time, random
+import time, random, hashlib
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Optional, Dict, Tuple, List
 
 # Optional (recommended): JS rendering tool
 # pip install playwright
@@ -17,185 +18,12 @@ try:
 except Exception:
     PLAYWRIGHT_OK = False
 
-@dataclass
-class FetchResult:
-    ok: bool
-    source: Optional[str]
-    status: Optional[int]
-    html: str
-    text: str
-    reason: Optional[str]
-
-class FetchAgent:
-    """
-    A deterministic "resolver agent":
-    - tries multiple strategies in order
-    - validates extracted content (length + not blocked)
-    - retries + UA rotation + backoff
-    - optional JS rendering (Playwright)
-    - optional manual fallback (user paste) so no competitor is missing
-    """
-
-    def __init__(self, default_headers: dict, ignore_tags: set, clean_fn, looks_blocked_fn):
-        self.default_headers = default_headers
-        self.ignore_tags = ignore_tags
-        self.clean = clean_fn
-        self.looks_blocked = looks_blocked_fn
-
-        self.user_agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36",
-        ]
-
-    def _http_get(self, url: str, timeout: int = 25, tries: int = 3) -> Tuple[int, str]:
-        import requests
-        last_code, last_text = 0, ""
-        for i in range(tries):
-            headers = dict(self.default_headers)
-            headers["User-Agent"] = random.choice(self.user_agents)
-            try:
-                r = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
-                last_code, last_text = r.status_code, (r.text or "")
-
-                # retry on transient/rate-limit responses
-                if r.status_code in (429, 500, 502, 503, 504):
-                    time.sleep(1.2 * (i + 1))
-                    continue
-
-                return last_code, last_text
-            except Exception as e:
-                last_code, last_text = 0, str(e)
-                time.sleep(1.2 * (i + 1))
-        return last_code, last_text
-
-    def _jina_url(self, url: str) -> str:
-        if url.startswith("https://"):
-            return "https://r.jina.ai/https://" + url[len("https://"):]
-        if url.startswith("http://"):
-            return "https://r.jina.ai/http://" + url[len("http://"):]
-        return "https://r.jina.ai/https://" + url
-
-    def _textise_url(self, url: str) -> str:
-        from urllib.parse import quote_plus
-        return f"https://textise.org/showtext.aspx?strURL={quote_plus(url)}"
-
-    def _validate_text(self, text: str, min_len: int) -> bool:
-        t = self.clean(text)
-        if len(t) < min_len:
-            return False
-        if self.looks_blocked(t):
-            return False
-        return True
-
-    def _extract_article_text_from_html(self, html: str) -> str:
-        soup = BeautifulSoup(html, "html.parser")
-        for t in soup.find_all(list(self.ignore_tags)):
-            t.decompose()
-        article = soup.find("article") or soup
-        return self.clean(article.get_text(" "))
-
-    def _fetch_playwright_html(self, url: str, timeout_ms: int = 25000) -> Tuple[bool, str]:
-        if not PLAYWRIGHT_OK:
-            return False, ""
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
-                ctx = browser.new_context(user_agent=random.choice(self.user_agents))
-                page = ctx.new_page()
-                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-                page.wait_for_timeout(1400)  # let JS render
-                html = page.content()
-                browser.close()
-            return True, html
-        except Exception:
-            return False, ""
-
-    def resolve(self, url: str) -> FetchResult:
-        url = (url or "").strip()
-        if not url:
-            return FetchResult(False, None, None, "", "", "empty_url")
-
-        # Strategy 1: direct HTML
-        code, html = self._http_get(url)
-        if code == 200 and html:
-            text = self._extract_article_text_from_html(html)
-            if self._validate_text(text, min_len=500):
-                return FetchResult(True, "direct", code, html, text, None)
-
-        # Strategy 2: JS-rendered HTML (Playwright)
-        ok, html2 = self._fetch_playwright_html(url)
-        if ok and html2:
-            text2 = self._extract_article_text_from_html(html2)
-            if self._validate_text(text2, min_len=500):
-                return FetchResult(True, "playwright", 200, html2, text2, None)
-
-        # Strategy 3: Jina reader
-        jurl = self._jina_url(url)
-        code3, txt3 = self._http_get(jurl)
-        if code3 == 200 and txt3:
-            text3 = self.clean(txt3)
-            if self._validate_text(text3, min_len=500):
-                return FetchResult(True, "jina", code3, "", text3, None)
-
-        # Strategy 4: Textise
-        turl = self._textise_url(url)
-        code4, html4 = self._http_get(turl)
-        if code4 == 200 and html4:
-            soup = BeautifulSoup(html4, "html.parser")
-            text4 = self.clean(soup.get_text(" "))
-            if self._validate_text(text4, min_len=350):
-                return FetchResult(True, "textise", code4, "", text4, None)
-
-        return FetchResult(False, None, None, "", "", "blocked_or_no_content")
-
-
-def resolve_all_or_require_manual(agent: FetchAgent, urls: List[str], st_key_prefix: str) -> Dict[str, FetchResult]:
-    """
-    Enforces "no exceptions":
-    - tries to resolve all
-    - if any fail, app asks for manual paste for those URLs
-    - only returns when all are resolved
-    """
-    results: Dict[str, FetchResult] = {}
-    failed: List[str] = []
-
-    for u in urls:
-        r = agent.resolve(u)
-        results[u] = r
-        if not r.ok:
-            failed.append(u)
-
-        # small polite delay to reduce blocking across many URLs
-        time.sleep(0.3)
-
-    if not failed:
-        return results
-
-    st.error("Some competitor URLs could not be fetched automatically. Paste the article text for each failed URL to continue (no missing competitors).")
-
-    for u in failed:
-        with st.expander(f"Manual fallback required: {u}", expanded=True):
-            pasted = st.text_area(
-                "Paste the full article text (or readable HTML) هنا:",
-                key=f"{st_key_prefix}__paste__{u}",
-                height=180,
-            )
-            if pasted and len(pasted.strip()) > 400:
-                # Treat manual paste like a successful fetch
-                results[u] = FetchResult(True, "manual", 200, "", pasted.strip(), None)
-
-    still_failed = [u for u in failed if not results[u].ok]
-    if still_failed:
-        st.stop()
-
-    return results
-
 
 # =====================================================
-# PAGE CONFIG
+# PAGE CONFIG (MUST BE FIRST STREAMLIT CALL)
 # =====================================================
 st.set_page_config(page_title="Bayut Competitor Gap Analysis", layout="wide")
+
 
 # =====================================================
 # STYLE (LIGHT GREEN BACKGROUND + CENTERED MODE BUTTONS)
@@ -320,6 +148,11 @@ st.markdown(
         font-weight: 800 !important;
         text-decoration: underline !important;
       }}
+      code {{
+        background: rgba(0,0,0,0.04);
+        padding: 2px 6px;
+        border-radius: 8px;
+      }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -329,14 +162,15 @@ st.markdown(
     f"""
     <div class="hero">
       <h1><span class="bayut">Bayut</span> Competitor Gap Analysis</h1>
-      <p>Update an existing article, or plan a new one using competitor coverage</p>
+      <p>Update an existing article, or plan a new one using competitor coverage — <b>no missing competitors</b></p>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
+
 # =====================================================
-# FETCH (ROBUST FALLBACKS)
+# FETCH (NO MISSING COMPETITORS — ENFORCED)
 # =====================================================
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -352,24 +186,10 @@ DEFAULT_HEADERS = {
 
 IGNORE_TAGS = {"nav", "footer", "header", "aside", "script", "style", "noscript"}
 
+
 def clean(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "")).strip()
 
-@st.cache_data(show_spinner=False, ttl=60 * 30)
-def fetch_direct(url: str, timeout: int = 20) -> tuple[int, str]:
-    r = requests.get(url, headers=DEFAULT_HEADERS, timeout=timeout, allow_redirects=True)
-    return r.status_code, r.text
-
-@st.cache_data(show_spinner=False, ttl=60 * 30)
-def fetch_jina(url: str, timeout: int = 20) -> tuple[int, str]:
-    if url.startswith("https://"):
-        jina_url = "https://r.jina.ai/https://" + url[len("https://"):]
-    elif url.startswith("http://"):
-        jina_url = "https://r.jina.ai/http://" + url[len("http://"):]
-    else:
-        jina_url = "https://r.jina.ai/https://" + url
-    r = requests.get(jina_url, headers=DEFAULT_HEADERS, timeout=timeout, allow_redirects=True)
-    return r.status_code, r.text
 
 def looks_blocked(text: str) -> bool:
     t = (text or "").lower()
@@ -378,48 +198,190 @@ def looks_blocked(text: str) -> bool:
         "cloudflare", "access denied", "captcha", "forbidden", "service unavailable"
     ])
 
-def fetch_best_effort(url: str) -> dict:
-    url = (url or "").strip()
-    if not url:
-        return {"ok": False, "source": None, "html": "", "text": "", "status": None}
 
-    # 1) direct HTML
-    try:
-        code, html = fetch_direct(url)
+@dataclass
+class FetchResult:
+    ok: bool
+    source: Optional[str]
+    status: Optional[int]
+    html: str
+    text: str
+    reason: Optional[str]
+
+
+class FetchAgent:
+    """
+    Deterministic resolver:
+    - direct HTML
+    - optional JS render (Playwright)
+    - Jina reader
+    - Textise
+    If all fail => app forces manual paste (hard gate).
+    """
+
+    def __init__(self, default_headers: dict, ignore_tags: set, clean_fn, looks_blocked_fn):
+        self.default_headers = default_headers
+        self.ignore_tags = ignore_tags
+        self.clean = clean_fn
+        self.looks_blocked = looks_blocked_fn
+
+        self.user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36",
+        ]
+
+    def _http_get(self, url: str, timeout: int = 25, tries: int = 3) -> Tuple[int, str]:
+        last_code, last_text = 0, ""
+        for i in range(tries):
+            headers = dict(self.default_headers)
+            headers["User-Agent"] = random.choice(self.user_agents)
+            try:
+                r = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
+                last_code, last_text = r.status_code, (r.text or "")
+
+                # transient/rate-limit responses
+                if r.status_code in (429, 500, 502, 503, 504):
+                    time.sleep(1.2 * (i + 1))
+                    continue
+
+                return last_code, last_text
+            except Exception as e:
+                last_code, last_text = 0, str(e)
+                time.sleep(1.2 * (i + 1))
+        return last_code, last_text
+
+    def _jina_url(self, url: str) -> str:
+        if url.startswith("https://"):
+            return "https://r.jina.ai/https://" + url[len("https://"):]
+        if url.startswith("http://"):
+            return "https://r.jina.ai/http://" + url[len("http://"):]
+        return "https://r.jina.ai/https://" + url
+
+    def _textise_url(self, url: str) -> str:
+        return f"https://textise.org/showtext.aspx?strURL={quote_plus(url)}"
+
+    def _validate_text(self, text: str, min_len: int) -> bool:
+        t = self.clean(text)
+        if len(t) < min_len:
+            return False
+        if self.looks_blocked(t):
+            return False
+        return True
+
+    def _extract_article_text_from_html(self, html: str) -> str:
+        soup = BeautifulSoup(html, "html.parser")
+        for t in soup.find_all(list(self.ignore_tags)):
+            t.decompose()
+        article = soup.find("article") or soup
+        return self.clean(article.get_text(" "))
+
+    def _fetch_playwright_html(self, url: str, timeout_ms: int = 25000) -> Tuple[bool, str]:
+        if not PLAYWRIGHT_OK:
+            return False, ""
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+                ctx = browser.new_context(user_agent=random.choice(self.user_agents))
+                page = ctx.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                page.wait_for_timeout(1400)
+                html = page.content()
+                browser.close()
+            return True, html
+        except Exception:
+            return False, ""
+
+    def resolve(self, url: str) -> FetchResult:
+        url = (url or "").strip()
+        if not url:
+            return FetchResult(False, None, None, "", "", "empty_url")
+
+        # 1) direct HTML
+        code, html = self._http_get(url)
         if code == 200 and html:
-            soup = BeautifulSoup(html, "html.parser")
-            for t in soup.find_all(list(IGNORE_TAGS)):
-                t.decompose()
-            article = soup.find("article") or soup
-            text = clean(article.get_text(" "))
-            if len(text) > 400 and not looks_blocked(text):
-                return {"ok": True, "source": "direct", "html": html, "text": text, "status": code}
-    except Exception:
-        pass
+            text = self._extract_article_text_from_html(html)
+            if self._validate_text(text, min_len=500):
+                return FetchResult(True, "direct", code, html, text, None)
 
-    # 2) jina reader
-    try:
-        code, txt = fetch_jina(url)
-        if code == 200 and txt:
-            text = clean(txt)
-            if len(text) > 400 and not looks_blocked(text):
-                return {"ok": True, "source": "jina", "html": "", "text": text, "status": code}
-    except Exception:
-        pass
+        # 2) JS-rendered HTML
+        ok, html2 = self._fetch_playwright_html(url)
+        if ok and html2:
+            text2 = self._extract_article_text_from_html(html2)
+            if self._validate_text(text2, min_len=500):
+                return FetchResult(True, "playwright", 200, html2, text2, None)
 
-    # 3) textise fallback
-    try:
-        encoded = quote_plus(url)
-        t_url = f"https://textise.org/showtext.aspx?strURL={encoded}"
-        code, html = fetch_direct(t_url)
-        if code == 200 and html:
-            text = clean(BeautifulSoup(html, "html.parser").get_text(" "))
-            if len(text) > 300 and not looks_blocked(text):
-                return {"ok": True, "source": "textise", "html": "", "text": text, "status": code}
-    except Exception:
-        pass
+        # 3) Jina reader
+        jurl = self._jina_url(url)
+        code3, txt3 = self._http_get(jurl)
+        if code3 == 200 and txt3:
+            text3 = self.clean(txt3)
+            if self._validate_text(text3, min_len=500):
+                return FetchResult(True, "jina", code3, "", text3, None)
 
-    return {"ok": False, "source": None, "html": "", "text": "", "status": None}
+        # 4) Textise
+        turl = self._textise_url(url)
+        code4, html4 = self._http_get(turl)
+        if code4 == 200 and html4:
+            soup = BeautifulSoup(html4, "html.parser")
+            text4 = self.clean(soup.get_text(" "))
+            if self._validate_text(text4, min_len=350):
+                return FetchResult(True, "textise", code4, "", text4, None)
+
+        return FetchResult(False, None, code or None, "", "", "blocked_or_no_content")
+
+
+agent = FetchAgent(
+    default_headers=DEFAULT_HEADERS,
+    ignore_tags=IGNORE_TAGS,
+    clean_fn=clean,
+    looks_blocked_fn=looks_blocked,
+)
+
+
+def _safe_key(prefix: str, url: str) -> str:
+    h = hashlib.md5((url or "").encode("utf-8")).hexdigest()
+    return f"{prefix}__{h}"
+
+
+def resolve_all_or_require_manual(agent: FetchAgent, urls: List[str], st_key_prefix: str) -> Dict[str, FetchResult]:
+    """
+    HARD ENFORCEMENT:
+    - tries to resolve all URLs
+    - if any fail, forces manual paste for EACH failed URL
+    - stops app until all are resolved
+    """
+    results: Dict[str, FetchResult] = {}
+    failed: List[str] = []
+
+    for u in urls:
+        r = agent.resolve(u)
+        results[u] = r
+        if not r.ok:
+            failed.append(u)
+        time.sleep(0.25)
+
+    if not failed:
+        return results
+
+    st.error("Some URLs could not be fetched automatically. Paste the article HTML/text for EACH failed URL to continue. (No missing competitors.)")
+
+    for u in failed:
+        with st.expander(f"Manual fallback required: {u}", expanded=True):
+            pasted = st.text_area(
+                "Paste the full article HTML OR the readable article text:",
+                key=_safe_key(st_key_prefix + "__paste", u),
+                height=220,
+            )
+            if pasted and len(pasted.strip()) > 400:
+                results[u] = FetchResult(True, "manual", 200, "", pasted.strip(), None)
+
+    still_failed = [u for u in failed if not results[u].ok]
+    if still_failed:
+        st.stop()
+
+    return results
+
 
 # =====================================================
 # HEADING TREE + FILTERS
@@ -439,11 +401,13 @@ NOISE_PATTERNS = [
     r"\bnext\b", r"\bprevious\b", r"\bcomments\b",
 ]
 
+
 def norm_header(h: str) -> str:
     h = clean(h).lower()
     h = re.sub(r"[^a-z0-9\s]", "", h)
     h = re.sub(r"\s+", " ", h).strip()
     return h
+
 
 def is_noise_header(h: str) -> bool:
     s = clean(h)
@@ -461,13 +425,15 @@ def is_noise_header(h: str) -> bool:
             return True
     return False
 
+
 def level_of(tag_name: str) -> int:
     try:
         return int(tag_name[1])
     except Exception:
         return 9
 
-def build_tree_from_html(html: str) -> list[dict]:
+
+def build_tree_from_html(html: str) -> List[dict]:
     soup = BeautifulSoup(html, "html.parser")
     for t in soup.find_all(list(IGNORE_TAGS)):
         t.decompose()
@@ -475,8 +441,8 @@ def build_tree_from_html(html: str) -> list[dict]:
     root = soup.find("article") or soup
     headings = root.find_all(["h1", "h2", "h3", "h4"])
 
-    nodes: list[dict] = []
-    stack: list[dict] = []
+    nodes: List[dict] = []
+    stack: List[dict] = []
 
     def pop_to_level(lvl: int):
         while stack and stack[-1]["level"] >= lvl:
@@ -502,7 +468,6 @@ def build_tree_from_html(html: str) -> list[dict]:
         node = {"level": lvl, "header": header, "content": "", "children": []}
         add_node(node)
 
-        # Collect only lightweight text for keyword extraction (no quoting later)
         content_parts = []
         for sib in h.find_all_next():
             if sib == h:
@@ -518,10 +483,12 @@ def build_tree_from_html(html: str) -> list[dict]:
 
     return nodes
 
-def build_tree_from_reader_text(text: str) -> list[dict]:
+
+def build_tree_from_reader_text(text: str) -> List[dict]:
+    # Jina often returns markdown-ish headings (#, ##)
     lines = [l.rstrip() for l in (text or "").splitlines()]
-    nodes: list[dict] = []
-    stack: list[dict] = []
+    nodes: List[dict] = []
+    stack: List[dict] = []
 
     def md_level(line: str):
         m = re.match(r"^(#{1,4})\s+(.*)$", line.strip())
@@ -570,13 +537,112 @@ def build_tree_from_reader_text(text: str) -> list[dict]:
 
     return [walk(n) for n in nodes]
 
-def get_tree(url: str) -> dict:
-    fetched = fetch_best_effort(url)
-    if not fetched["ok"]:
-        return {"ok": False, "source": None, "nodes": [], "status": fetched.get("status")}
-    if fetched["html"]:
-        return {"ok": True, "source": fetched["source"], "nodes": build_tree_from_html(fetched["html"]), "status": fetched.get("status")}
-    return {"ok": True, "source": fetched["source"], "nodes": build_tree_from_reader_text(fetched["text"]), "status": fetched.get("status")}
+
+def build_tree_from_plain_text_heuristic(text: str) -> List[dict]:
+    """
+    Last-resort heuristic when we only have plain text (e.g., Textise or manual paste).
+    This is NOT perfect, but it prevents "empty headings" when the content has visible headings as lines.
+    """
+    raw = (text or "").replace("\r", "")
+    lines = [clean(l) for l in raw.split("\n")]
+    lines = [l for l in lines if l]
+
+    # heading-like line heuristic
+    def looks_like_heading(line: str) -> bool:
+        if len(line) < 5 or len(line) > 80:
+            return False
+        if line.endswith("."):
+            return False
+        if is_noise_header(line):
+            return False
+        words = line.split()
+        if len(words) < 2 or len(words) > 12:
+            return False
+        # title-case-ish or ALLCAPS-ish
+        caps_ratio = sum(1 for w in words if w[:1].isupper()) / max(len(words), 1)
+        allcaps_ratio = sum(1 for c in line if c.isupper()) / max(sum(1 for c in line if c.isalpha()), 1)
+        return (caps_ratio >= 0.6) or (allcaps_ratio >= 0.5)
+
+    nodes: List[dict] = []
+    current = None
+
+    for line in lines:
+        if looks_like_heading(line):
+            current = {"level": 2, "header": line, "content": "", "children": []}
+            nodes.append(current)
+        else:
+            if current is None:
+                # create an implicit wrapper if we never found headings
+                current = {"level": 2, "header": "Overview", "content": "", "children": []}
+                nodes.append(current)
+            current["content"] = clean(current["content"] + " " + line)
+
+    return nodes
+
+
+def get_tree_from_fetchresult(fr: FetchResult) -> dict:
+    if not fr.ok:
+        return {"ok": False, "source": None, "nodes": [], "status": fr.status}
+
+    # If user manually pasted HTML, we should detect it and parse as HTML.
+    txt = fr.text or ""
+    maybe_html = ("<html" in txt.lower()) or ("<article" in txt.lower()) or ("<h1" in txt.lower()) or ("<h2" in txt.lower())
+
+    if fr.html:
+        nodes = build_tree_from_html(fr.html)
+    elif fr.source == "manual" and maybe_html:
+        nodes = build_tree_from_html(txt)
+    else:
+        # try markdown headings first (Jina)
+        nodes = build_tree_from_reader_text(txt)
+        if not nodes:
+            nodes = build_tree_from_plain_text_heuristic(txt)
+
+    return {"ok": True, "source": fr.source, "nodes": nodes, "status": fr.status}
+
+
+def ensure_headings_or_require_repaste(urls: List[str], fr_map: Dict[str, FetchResult], st_key_prefix: str) -> Dict[str, dict]:
+    """
+    Second hard gate:
+    If fetch succeeded but we still couldn't extract headings, force re-paste as HTML/text per URL.
+    """
+    tree_map: Dict[str, dict] = {}
+    bad: List[str] = []
+
+    for u in urls:
+        tr = get_tree_from_fetchresult(fr_map[u])
+        tree_map[u] = tr
+        if not tr.get("nodes"):
+            bad.append(u)
+
+    if not bad:
+        return tree_map
+
+    st.error("Some URLs were fetched, but headings could not be extracted. Paste readable HTML (preferred) or clearly structured text for EACH URL below to continue.")
+
+    for u in bad:
+        with st.expander(f"Headings extraction required: {u}", expanded=True):
+            repaste = st.text_area(
+                "Paste readable HTML (preferred) OR structured text with headings:",
+                key=_safe_key(st_key_prefix + "__repaste", u),
+                height=240,
+            )
+            if repaste and len(repaste.strip()) > 400:
+                fr_map[u] = FetchResult(True, "manual", 200, "", repaste.strip(), None)
+
+    # rebuild after repaste attempt
+    still_bad = []
+    for u in bad:
+        tr = get_tree_from_fetchresult(fr_map[u])
+        tree_map[u] = tr
+        if not tr.get("nodes"):
+            still_bad.append(u)
+
+    if still_bad:
+        st.stop()
+
+    return tree_map
+
 
 # =====================================================
 # HELPERS
@@ -590,22 +656,34 @@ def site_name(url: str) -> str:
     except Exception:
         return "Source"
 
+
 def source_link(url: str) -> str:
     n = site_name(url)
     return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{n}</a>'
 
-def flatten(nodes: list[dict]) -> list[dict]:
+
+def flatten(nodes: List[dict]) -> List[dict]:
     out = []
+
     def walk(n: dict, parent=None):
-        out.append({"level": n["level"], "header": n["header"], "content": n.get("content", ""), "parent": parent, "children": n.get("children", [])})
+        out.append({
+            "level": n["level"],
+            "header": n["header"],
+            "content": n.get("content", ""),
+            "parent": parent,
+            "children": n.get("children", [])
+        })
         for c in n.get("children", []):
             walk(c, n)
+
     for n in nodes:
         walk(n, None)
     return out
 
-def list_headers(nodes: list[dict], level: int) -> list[str]:
+
+def list_headers(nodes: List[dict], level: int) -> List[str]:
     return [x["header"] for x in flatten(nodes) if x["level"] == level and not is_noise_header(x["header"])]
+
 
 def is_subpoint_heading(h: str) -> bool:
     s = clean(h)
@@ -622,28 +700,33 @@ def is_subpoint_heading(h: str) -> bool:
             return True
     return False
 
+
 def strip_label(h: str) -> str:
     return clean(re.sub(r"\s*:\s*$", "", (h or "").strip()))
+
 
 def header_is_faq(header: str) -> bool:
     nh = norm_header(header)
     return ("faq" in nh) or ("frequently asked" in nh)
 
-def find_faq_nodes(nodes: list[dict]) -> list[dict]:
+
+def find_faq_nodes(nodes: List[dict]) -> List[dict]:
     faq = []
     for x in flatten(nodes):
-        if x["level"] in (2, 3):
-            if header_is_faq(x["header"]):
-                faq.append(x)
+        if x["level"] in (2, 3) and header_is_faq(x["header"]):
+            faq.append(x)
     return faq
+
 
 def normalize_question(q: str) -> str:
     q = clean(q or "")
     q = re.sub(r"^\s*\d+[\.\)]\s*", "", q)
     return q
 
-def extract_questions_from_node(node: dict) -> list[str]:
+
+def extract_questions_from_node(node: dict) -> List[str]:
     qs = []
+
     def walk(n: dict):
         for c in n.get("children", []):
             hdr = clean(c.get("header", ""))
@@ -653,6 +736,7 @@ def extract_questions_from_node(node: dict) -> list[str]:
             if "?" in hdr or re.match(r"^\s*\d+[\.\)]\s+.*", hdr):
                 qs.append(normalize_question(hdr))
             walk(c)
+
     walk(node)
     seen = set()
     out = []
@@ -664,21 +748,23 @@ def extract_questions_from_node(node: dict) -> list[str]:
         out.append(q)
     return out[:18]
 
+
 # =====================================================
 # FORCED, STABLE SUMMARIES (NO QUOTING COMPETITOR TEXT)
 # =====================================================
 STOP = {
-    "the","and","for","with","that","this","from","you","your","are","was","were","will","have","has","had",
-    "but","not","can","may","more","most","into","than","then","they","them","their","our","out","about",
-    "also","over","under","between","within","near","where","when","what","why","how","who","which",
-    "a","an","to","of","in","on","at","as","is","it","be","or","by","we","i","us"
+    "the", "and", "for", "with", "that", "this", "from", "you", "your", "are", "was", "were", "will", "have", "has", "had",
+    "but", "not", "can", "may", "more", "most", "into", "than", "then", "they", "them", "their", "our", "out", "about",
+    "also", "over", "under", "between", "within", "near", "where", "when", "what", "why", "how", "who", "which",
+    "a", "an", "to", "of", "in", "on", "at", "as", "is", "it", "be", "or", "by", "we", "i", "us"
 }
 GENERIC_STOP = {
-    "business","bay","dubai","area","community","living","life","lifestyle","location",
-    "pros","cons","guide","things","places","also","one","like"
+    "business", "bay", "dubai", "area", "community", "living", "life", "lifestyle", "location",
+    "pros", "cons", "guide", "things", "places", "also", "one", "like"
 }
 
-def top_keywords(text: str, n: int = 7) -> list[str]:
+
+def top_keywords(text: str, n: int = 7) -> List[str]:
     words = re.findall(r"[a-zA-Z]{4,}", (text or "").lower())
     freq = {}
     for w in words:
@@ -687,7 +773,8 @@ def top_keywords(text: str, n: int = 7) -> list[str]:
         freq[w] = freq.get(w, 0) + 1
     return [w for w, _ in sorted(freq.items(), key=lambda x: (-x[1], x[0]))[:n]]
 
-def collect_norm_set(nodes: list[dict], keep_levels=(2, 3)) -> set[str]:
+
+def collect_norm_set(nodes: List[dict], keep_levels=(2, 3)) -> set:
     out = set()
     for x in flatten(nodes):
         if x["level"] in keep_levels:
@@ -696,7 +783,8 @@ def collect_norm_set(nodes: list[dict], keep_levels=(2, 3)) -> set[str]:
                 out.add(nh)
     return out
 
-def index_by_norm(nodes: list[dict], levels=(2,3)) -> dict[str, dict]:
+
+def index_by_norm(nodes: List[dict], levels=(2, 3)) -> Dict[str, dict]:
     idx = {}
     for x in flatten(nodes):
         if x["level"] in levels:
@@ -705,14 +793,8 @@ def index_by_norm(nodes: list[dict], levels=(2,3)) -> dict[str, dict]:
                 idx[nh] = x
     return idx
 
-def summarize_h2_children(h2_node: dict) -> tuple[list[str], list[str]]:
-    """
-    Returns:
-      - options: label-like subpoints (Downtown Dubai, Dubai Marina, ...)
-      - themes: normal H3 headings (non-label)
-    Strips colons.
-    Excludes FAQ child headings completely.
-    """
+
+def summarize_h2_children(h2_node: dict) -> Tuple[List[str], List[str]]:
     options = []
     themes = []
     for c in (h2_node.get("children", []) or []):
@@ -728,7 +810,6 @@ def summarize_h2_children(h2_node: dict) -> tuple[list[str], list[str]]:
         else:
             themes.append(h)
 
-    # dedupe preserve order
     def dedupe(seq):
         seen = set()
         out = []
@@ -742,22 +823,29 @@ def summarize_h2_children(h2_node: dict) -> tuple[list[str], list[str]]:
 
     return dedupe(options)[:6], dedupe(themes)[:8]
 
+
 def describe_missing_h2(h2_header: str, h2_node: dict) -> str:
     h = strip_label(h2_header)
     nh = norm_header(h)
 
-    # special stable phrasing for common sections (matches your approved table)
     if ("considering" in nh) and ("pros" in nh) and ("cons" in nh):
-        return "The competitor includes an early decision framing angle — it sets expectations that moving decisions depend on trade-offs, and highlights the idea of weighing lifestyle benefits against practical drawbacks before committing."
+        return (
+            "The competitor includes an early decision framing angle — it sets expectations that moving decisions depend on trade-offs, "
+            "and highlights the idea of weighing lifestyle benefits against practical drawbacks before committing."
+        )
     if "comparison" in nh or ("other dubai" in nh) or ("neighborhood" in nh) or ("neighbourhood" in nh):
         options, _themes = summarize_h2_children(h2_node)
         if options:
-            return "The competitor compares Business Bay with other popular Dubai areas to help the reader benchmark it. The comparison is organized by nearby options such as " + ", ".join(options) + ", focusing on how they differ in vibe, convenience, and suitability."
-        return "The competitor compares Business Bay with other popular Dubai areas to help the reader benchmark it, focusing on differences in vibe, convenience, and suitability."
+            return (
+                "The competitor compares the topic with other popular Dubai areas to help the reader benchmark it. "
+                "The comparison is organized by nearby options such as " + ", ".join(options) + ", focusing on how they differ in vibe, convenience, and suitability."
+            )
+        return (
+            "The competitor compares the topic with other popular Dubai areas to help the reader benchmark it, focusing on differences in vibe, convenience, and suitability."
+        )
     if "conclusion" in nh or "final thoughts" in nh or "wrap up" in nh:
-        return "The competitor closes with a wrap-up that summarizes the overall verdict and the main takeaway from the pros/cons discussion (who the area suits and what kind of lifestyle it supports)."
+        return "The competitor closes with a wrap-up that summarizes the overall verdict and the main takeaway (who it suits and what kind of lifestyle it supports)."
 
-    # generic stable description (no quotes)
     options, themes = summarize_h2_children(h2_node)
     kws = top_keywords(h2_node.get("content", ""), n=7)
 
@@ -770,6 +858,7 @@ def describe_missing_h2(h2_header: str, h2_node: dict) -> str:
         parts.append("It focuses on topics like " + ", ".join(kws) + ".")
     return clean(" ".join(parts))
 
+
 def describe_missing_h3(h3_header: str, h3_node: dict) -> str:
     h = strip_label(h3_header)
     kws = top_keywords(h3_node.get("content", ""), n=7)
@@ -777,12 +866,12 @@ def describe_missing_h3(h3_header: str, h3_node: dict) -> str:
         return f"The competitor includes a subsection about {h} and focuses on topics like " + ", ".join(kws) + "."
     return f"The competitor includes a subsection about {h}."
 
-def describe_faq_block(comp_faq_nodes: list[dict], bayut_faq_nodes: list[dict]) -> str:
+
+def describe_faq_block(comp_faq_nodes: List[dict], bayut_faq_nodes: List[dict]) -> str:
     comp_qs = []
     for fn in comp_faq_nodes:
         comp_qs.extend(extract_questions_from_node(fn))
 
-    # if bayut has FAQs: show missing questions vs bayut
     if bayut_faq_nodes:
         bayut_qs = []
         for fn in bayut_faq_nodes:
@@ -794,27 +883,31 @@ def describe_faq_block(comp_faq_nodes: list[dict], bayut_faq_nodes: list[dict]) 
         bayut_set = {q_key(q) for q in bayut_qs}
         missing = [q for q in comp_qs if q_key(q) not in bayut_set]
         if missing:
-            return "The competitor includes a dedicated FAQ block with questions around practical living decisions, including: " + "; ".join(missing[:12]) + ("…" if len(missing) > 12 else "") + "."
-        # if none missing, still describe that competitor has FAQ
+            return (
+                "The competitor includes a dedicated FAQ block with questions around practical living decisions, including: "
+                + "; ".join(missing[:12]) + ("…" if len(missing) > 12 else "") + "."
+            )
         if comp_qs:
             return "The competitor includes a dedicated FAQ block covering common living questions (cost, schools, suitability, attractions, and safety)."
         return "The competitor includes a dedicated FAQ block covering common living questions."
 
-    # if bayut has no FAQs: describe competitor FAQ topics (not “missing vs bayut”)
     if comp_qs:
-        return "The competitor includes a dedicated FAQ block with questions around practical living decisions, including: " + "; ".join(comp_qs[:12]) + ("…" if len(comp_qs) > 12 else "") + "."
+        return (
+            "The competitor includes a dedicated FAQ block with questions around practical living decisions, including: "
+            + "; ".join(comp_qs[:12]) + ("…" if len(comp_qs) > 12 else "") + "."
+        )
     return "The competitor includes a dedicated FAQ block covering common living questions (cost, schools, suitability, attractions, and safety)."
+
 
 # =====================================================
 # UPDATE MODE ROWS (FORCED OUTPUT)
 # =====================================================
-def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: str) -> list[dict]:
+def update_mode_rows(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: str) -> List[dict]:
     rows = []
-    bayut_norm = collect_norm_set(bayut_nodes, keep_levels=(2,3))
-    bayut_idx = index_by_norm(bayut_nodes, levels=(2,3))
-    comp_idx = index_by_norm(comp_nodes, levels=(2,3))
+    bayut_norm = collect_norm_set(bayut_nodes, keep_levels=(2, 3))
+    bayut_idx = index_by_norm(bayut_nodes, levels=(2, 3))
+    comp_idx = index_by_norm(comp_nodes, levels=(2, 3))
 
-    # Prepare FAQ nodes first (so FAQ never gets absorbed under Conclusion)
     bayut_faq_nodes = find_faq_nodes(bayut_nodes)
     comp_faq_nodes = find_faq_nodes(comp_nodes)
 
@@ -827,7 +920,7 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
         if not nh2 or nh2 in bayut_norm:
             continue
         if header_is_faq(x["header"]):
-            continue  # FAQ handled separately
+            continue
         missing_h2_norms.add(nh2)
 
         rows.append({
@@ -848,11 +941,11 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
             continue
 
         parent = x.get("parent")
-        parent_n = norm_header(parent.get("header","")) if parent else ""
+        parent_n = norm_header(parent.get("header", "")) if parent else ""
         if parent and parent.get("level") == 2 and parent_n in missing_h2_norms:
-            continue  # absorbed into missing H2 row by design
+            continue
         if is_subpoint_heading(x["header"]):
-            continue  # NO Downtown Dubai: rows
+            continue
 
         rows.append({
             "Header (Gap)": strip_label(x["header"]),
@@ -861,7 +954,7 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
             "_key": f"missing_h3::{nh3}::{comp_url}"
         })
 
-    # C) FAQ row (always separate; stable summary; no “Conclusion absorbs FAQ”)
+    # C) FAQ row always separate
     if comp_faq_nodes:
         msg = describe_faq_block(comp_faq_nodes, bayut_faq_nodes)
         rows.append({
@@ -871,9 +964,8 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
             "_key": f"faq::{comp_url}"
         })
 
-    # D) Content depth gaps (NO QUOTED EXAMPLES)
-    # Keep your same logic trigger, but output stable summary
-    def tokens_set(text: str) -> set[str]:
+    # D) Content depth gaps
+    def tokens_set(text: str) -> set:
         ws = re.findall(r"[a-zA-Z]{3,}", (text or "").lower())
         return {w for w in ws if w not in STOP}
 
@@ -882,8 +974,8 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
         if nh not in bayut_idx:
             continue
         b = bayut_idx[nh]
-        comp_text = (comp_item.get("content","") or "")
-        bayut_text = (b.get("content","") or "")
+        comp_text = (comp_item.get("content", "") or "")
+        bayut_text = (b.get("content", "") or "")
 
         if len(comp_text) < 180:
             continue
@@ -894,10 +986,11 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
 
         if (len(comp_text) > max(260, len(bayut_text) * 1.35)) and len(new_terms) >= 6:
             kw = top_keywords(comp_text, n=6)
-            if kw:
-                msg = "The competitor covers the same topic but goes into more detail, with extra context around: " + ", ".join(kw) + "."
-            else:
-                msg = "The competitor covers the same topic but goes into more detail, adding more context than the Bayut section."
+            msg = (
+                "The competitor covers the same topic but goes into more detail, with extra context around: " + ", ".join(kw) + "."
+                if kw else
+                "The competitor covers the same topic but goes into more detail, adding more context than the Bayut section."
+            )
             content_gap_rows.append({
                 "Header (Gap)": f"{strip_label(b['header'])} (Content Gap)",
                 "What the competitor talks about": msg,
@@ -912,7 +1005,7 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
         seen.add(r["_key"])
         rows.append(r)
 
-    # de-dupe + keep stable order
+    # de-dupe stable
     final = []
     seenk = set()
     for r in rows:
@@ -925,10 +1018,11 @@ def update_mode_rows(bayut_nodes: list[dict], comp_nodes: list[dict], comp_url: 
 
     return final
 
+
 # =====================================================
-# NEW POST MODE (FORCED TO MATCH AGREED TABLES)
+# NEW POST MODE
 # =====================================================
-def detect_main_angle(comp_nodes: list[dict]) -> str:
+def detect_main_angle(comp_nodes: List[dict]) -> str:
     h2s = [norm_header(h) for h in list_headers(comp_nodes, 2)]
     blob = " ".join(h2s)
     if ("pros" in blob and "cons" in blob) or ("advantages" in blob and "disadvantages" in blob):
@@ -939,8 +1033,8 @@ def detect_main_angle(comp_nodes: list[dict]) -> str:
         return "schools / education guide"
     return "decision-led overview"
 
-def new_post_coverage_rows(comp_nodes: list[dict], comp_url: str) -> list[dict]:
-    # H1
+
+def new_post_coverage_rows(comp_nodes: List[dict], comp_url: str) -> List[dict]:
     h1s = list_headers(comp_nodes, 1)
     h1_title = strip_label(h1s[0]) if h1s else ""
     angle = detect_main_angle(comp_nodes)
@@ -950,12 +1044,9 @@ def new_post_coverage_rows(comp_nodes: list[dict], comp_url: str) -> list[dict]:
         else "The competitor frames the page around a clear main angle to guide the reader’s decision."
     )
     if h1_title:
-        # keep title (like your sample) but still stable
         h1_text = f"{h1_title} — {h1_text}"
 
-    # H2 sections covered (derived)
     h2s = [strip_label(h) for h in list_headers(comp_nodes, 2)]
-    # keep it short and stable
     h2_main = [h for h in h2s if h and not header_is_faq(h)]
     h2_main = h2_main[:6]
     has_faq = any(header_is_faq(h) for h in h2s)
@@ -967,17 +1058,15 @@ def new_post_coverage_rows(comp_nodes: list[dict], comp_url: str) -> list[dict]:
     if has_faq:
         h2_text += " It also includes a separate FAQ section."
 
-    # H3 subsections covered (themes)
     h3s = [strip_label(h) for h in list_headers(comp_nodes, 3)]
-    # remove noise + avoid label-like items in new-post themes
     h3_clean = []
     for h in h3s:
         if not h or is_noise_header(h) or header_is_faq(h):
             continue
-        if is_subpoint_heading(h + ":"):  # treat short proper-noun labels as subpoints
+        if is_subpoint_heading(h + ":"):
             continue
         h3_clean.append(h)
-    # dedupe preserve order
+
     seen = set()
     themes = []
     for h in h3_clean:
@@ -1001,6 +1090,7 @@ def new_post_coverage_rows(comp_nodes: list[dict], comp_url: str) -> list[dict]:
         {"Headers covered": "H3 (subsections covered)", "Content covered": h3_text, "Source": site_name(comp_url)},
     ]
 
+
 # =====================================================
 # HTML TABLE RENDER (with hyperlinks)
 # =====================================================
@@ -1010,6 +1100,7 @@ def render_table(df: pd.DataFrame):
         return
     html = df.to_html(index=False, escape=False)
     st.markdown(html, unsafe_allow_html=True)
+
 
 # =====================================================
 # MODE SELECTOR (CENTERED BUTTONS)
@@ -1038,11 +1129,11 @@ with outer_m:
         ):
             st.session_state.mode = "new"
 st.markdown("</div>", unsafe_allow_html=True)
-st.markdown("<div class='mode-note'>Tip: add competitors one per line (as many as you want).</div>", unsafe_allow_html=True)
+st.markdown("<div class='mode-note'>Tip: competitors one per line (as many as you want). If any page blocks the server, you will be forced to paste it — so nothing is missing.</div>", unsafe_allow_html=True)
 
 show_internal_fetch = st.sidebar.checkbox("Admin: show internal fetch log", value=False)
 
-# Keep last results visible (prevents “tables then rerun changes” feeling)
+# Keep last results visible
 if "update_df" not in st.session_state:
     st.session_state.update_df = pd.DataFrame()
 if "update_fetch" not in st.session_state:
@@ -1052,6 +1143,7 @@ if "new_df" not in st.session_state:
     st.session_state.new_df = pd.DataFrame()
 if "new_fetch" not in st.session_state:
     st.session_state.new_fetch = []
+
 
 # =====================================================
 # UI - UPDATE MODE
@@ -1077,36 +1169,37 @@ if st.session_state.mode == "update":
             st.error("Add at least one competitor URL.")
             st.stop()
 
-        with st.spinner("Fetching Bayut…"):
-            bayut_data = get_tree(bayut_url.strip())
+        # 1) HARD: Bayut must be available (or paste)
+        with st.spinner("Fetching Bayut (no exceptions)…"):
+            bayut_fr_map = resolve_all_or_require_manual(agent, [bayut_url.strip()], st_key_prefix="bayut")
+            bayut_tree_map = ensure_headings_or_require_repaste([bayut_url.strip()], bayut_fr_map, st_key_prefix="bayut_tree")
+        bayut_nodes = bayut_tree_map[bayut_url.strip()]["nodes"]
 
-        if not bayut_data["ok"] or not bayut_data["nodes"]:
-            st.error("Could not extract headings from Bayut (blocked/no headings).")
-            st.stop()
+        # 2) HARD: ALL competitors must be available (or paste)
+        with st.spinner("Fetching ALL competitors (no exceptions)…"):
+            comp_fr_map = resolve_all_or_require_manual(agent, competitors, st_key_prefix="comp_update")
+            comp_tree_map = ensure_headings_or_require_repaste(competitors, comp_fr_map, st_key_prefix="comp_update_tree")
 
+        # 3) Build rows (no skipping)
         all_rows = []
         internal_fetch = []
 
         for comp_url in competitors:
-            with st.spinner("Fetching competitor…"):
-                comp_data = get_tree(comp_url)
-
-            if not comp_data["ok"] or not comp_data["nodes"]:
-                internal_fetch.append((comp_url, "blocked/no headings"))
-                continue
-
-            internal_fetch.append((comp_url, f"ok ({comp_data['source']})"))
-            all_rows.extend(update_mode_rows(bayut_data["nodes"], comp_data["nodes"], comp_url))
+            src = comp_fr_map[comp_url].source
+            internal_fetch.append((comp_url, f"ok ({src})"))
+            comp_nodes = comp_tree_map[comp_url]["nodes"]
+            all_rows.extend(update_mode_rows(bayut_nodes, comp_nodes, comp_url))
 
         st.session_state.update_fetch = internal_fetch
-
-        if all_rows:
-            st.session_state.update_df = pd.DataFrame(all_rows)[["Header (Gap)", "What the competitor talks about", "Source"]]
-        else:
-            st.session_state.update_df = pd.DataFrame(columns=["Header (Gap)", "What the competitor talks about", "Source"])
+        st.session_state.update_df = (
+            pd.DataFrame(all_rows)[["Header (Gap)", "What the competitor talks about", "Source"]]
+            if all_rows
+            else pd.DataFrame(columns=["Header (Gap)", "What the competitor talks about", "Source"])
+        )
 
     if show_internal_fetch and st.session_state.update_fetch:
         st.sidebar.markdown("### Internal fetch log (Update Mode)")
+        st.sidebar.write(f"Playwright enabled: {PLAYWRIGHT_OK}")
         for u, s in st.session_state.update_fetch:
             st.sidebar.write(u, "—", s)
 
@@ -1115,10 +1208,8 @@ if st.session_state.mode == "update":
     if st.session_state.update_df is None or st.session_state.update_df.empty:
         st.info("Run analysis to see results.")
     else:
-        blocked = sum(1 for _, s in st.session_state.update_fetch if not str(s).startswith("ok"))
-        if blocked:
-            st.warning(f"{blocked} competitor URL(s) could not be fetched. Results are based on the pages that were accessible.")
         render_table(st.session_state.update_df)
+
 
 # =====================================================
 # UI - NEW POST MODE
@@ -1144,29 +1235,29 @@ else:
             st.error("Add at least one competitor URL.")
             st.stop()
 
+        with st.spinner("Fetching ALL competitors (no exceptions)…"):
+            comp_fr_map = resolve_all_or_require_manual(agent, competitors, st_key_prefix="comp_new")
+            comp_tree_map = ensure_headings_or_require_repaste(competitors, comp_fr_map, st_key_prefix="comp_new_tree")
+
         rows = []
         internal_fetch = []
 
         for comp_url in competitors:
-            with st.spinner("Fetching competitor…"):
-                comp_data = get_tree(comp_url)
-
-            if not comp_data["ok"] or not comp_data["nodes"]:
-                internal_fetch.append((comp_url, "blocked/no headings"))
-                continue
-
-            internal_fetch.append((comp_url, f"ok ({comp_data['source']})"))
-            rows.extend(new_post_coverage_rows(comp_data["nodes"], comp_url))
+            src = comp_fr_map[comp_url].source
+            internal_fetch.append((comp_url, f"ok ({src})"))
+            comp_nodes = comp_tree_map[comp_url]["nodes"]
+            rows.extend(new_post_coverage_rows(comp_nodes, comp_url))
 
         st.session_state.new_fetch = internal_fetch
-
-        if rows:
-            st.session_state.new_df = pd.DataFrame(rows)[["Headers covered", "Content covered", "Source"]]
-        else:
-            st.session_state.new_df = pd.DataFrame(columns=["Headers covered", "Content covered", "Source"])
+        st.session_state.new_df = (
+            pd.DataFrame(rows)[["Headers covered", "Content covered", "Source"]]
+            if rows
+            else pd.DataFrame(columns=["Headers covered", "Content covered", "Source"])
+        )
 
     if show_internal_fetch and st.session_state.new_fetch:
         st.sidebar.markdown("### Internal fetch log (New Post Mode)")
+        st.sidebar.write(f"Playwright enabled: {PLAYWRIGHT_OK}")
         for u, s in st.session_state.new_fetch:
             st.sidebar.write(u, "—", s)
 
@@ -1175,7 +1266,4 @@ else:
     if st.session_state.new_df is None or st.session_state.new_df.empty:
         st.info("Generate competitor coverage to see results.")
     else:
-        blocked = sum(1 for _, s in st.session_state.new_fetch if not str(s).startswith("ok"))
-        if blocked:
-            st.warning(f"{blocked} competitor URL(s) could not be fetched. Results are based on the pages that were accessible.")
         render_table(st.session_state.new_df)
