@@ -722,15 +722,25 @@ def theme_flags(text: str) -> set:
     return flags
 
 def summarize_missing_section_action(header: str, subheaders: Optional[List[str]], comp_content: str) -> str:
-    # Keep it short, table-style.
+    """
+    Neutral description:
+    - describes what competitor covers under this header
+    - implies Bayut doesn't cover it (because this function is used for missing headers)
+    """
     hn = norm_header(header)
 
+    # Special: decision framing intro
     if ("importance" in hn and "pros" in hn and "cons" in hn) or ("consider" in hn and "pros" in hn and "cons" in hn):
-        return "Add a short decision-framing intro that explains how to weigh the benefits vs drawbacks before the pros/cons list."
+        return "Competitor includes decision framing on how to weigh pros vs cons before concluding."
 
-    if "comparison" in hn or "compare" in hn or "vs" in hn:
-        return "Add a comparison section that explains how this topic differs from close alternatives, and who each option suits best."
+    # Special: comparisons
+    if "comparison" in hn or "compare" in hn or "vs" in hn or "versus" in hn:
+        if subheaders:
+            hint = ", ".join(subheaders[:3])
+            return f"Competitor includes a comparison section and breaks it into alternatives such as: {hint}."
+        return "Competitor includes a comparison section explaining alternatives and how they differ."
 
+    # General: infer themes from content (short + neutral)
     themes = list(theme_flags(comp_content))
     if themes:
         human_map = {
@@ -744,11 +754,16 @@ def summarize_missing_section_action(header: str, subheaders: Optional[List[str]
             "comparison": "comparison context",
         }
         picks = [human_map.get(x, x) for x in themes][:3]
-        return f"Add this as a dedicated section with practical details (e.g., {', '.join(picks)})."
+        return f"Competitor covers this as a dedicated section with practical details (e.g., {', '.join(picks)})."
 
-    return "Add this as a dedicated section with practical, decision-led details."
+    return "Competitor covers this as a dedicated section with additional practical details."
+
 
 def summarize_content_gap_action(header: str, comp_content: str, bayut_content: str) -> str:
+    """
+    Neutral description for (missing parts):
+    - describes what competitor covers inside this header that Bayut doesn’t (themes only)
+    """
     comp_flags = theme_flags(comp_content)
     bayut_flags = theme_flags(bayut_content)
     missing = list(comp_flags - bayut_flags)
@@ -766,8 +781,66 @@ def summarize_content_gap_action(header: str, comp_content: str, bayut_content: 
     missing_human = [human_map.get(x, x) for x in missing][:3]
 
     if missing_human:
-        return "Expand this section by adding missing angles: " + ", ".join(missing_human) + "."
-    return "Expand this section with more practical specifics and decision-led detail."
+        return "Competitor goes deeper on: " + ", ".join(missing_human) + "."
+    return "Competitor provides more depth and practical specifics than Bayut under the same header."
+
+
+def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: str) -> Optional[dict]:
+    """
+    ONE FAQs row, neutral description:
+    - 'Missing FAQ topics: ...'
+    """
+
+    # Competitor questions: prefer FAQ section, else fallback to question-like headings
+    comp_faq_nodes = find_faq_nodes(comp_nodes)
+    comp_qs = []
+    if comp_faq_nodes:
+        for fn in comp_faq_nodes:
+            comp_qs.extend(extract_questions_from_node(fn))
+    if not comp_qs:
+        comp_qs = extract_all_questions(comp_nodes)
+
+    comp_qs = [q for q in comp_qs if q and len(q) > 5]
+    if not comp_qs:
+        return None
+
+    # Bayut questions: prefer FAQ section, else fallback
+    bayut_faq_nodes = find_faq_nodes(bayut_nodes)
+    bayut_qs = []
+    if bayut_faq_nodes:
+        for fn in bayut_faq_nodes:
+            bayut_qs.extend(extract_questions_from_node(fn))
+    if not bayut_qs:
+        bayut_qs = extract_all_questions(bayut_nodes)
+
+    def q_key(q: str) -> str:
+        q2 = normalize_question(q)
+        q2 = re.sub(r"[^a-z0-9\s]", "", q2.lower())
+        q2 = re.sub(r"\s+", " ", q2).strip()
+        return q2
+
+    bayut_set = {q_key(q) for q in bayut_qs if q}
+    missing_qs = [q for q in comp_qs if q_key(q) not in bayut_set]
+
+    # If Bayut has no FAQ/questions detected at all
+    if not bayut_qs:
+        topics = faq_subjects_from_questions(comp_qs, limit=10)
+        return {
+            "Headers": "FAQs",
+            "Description": "Competitor includes FAQ topics such as: " + ", ".join(topics) + ".",
+            "Source": source_link(comp_url),
+        }
+
+    # If nothing missing
+    if not missing_qs:
+        return None
+
+    topics = faq_subjects_from_questions(missing_qs, limit=10)
+    return {
+        "Headers": "FAQs",
+        "Description": "Missing FAQ topics: " + ", ".join(topics) + ".",
+        "Source": source_link(comp_url),
+    }
 
 
 # =====================================================
