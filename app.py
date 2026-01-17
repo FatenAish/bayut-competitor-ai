@@ -383,10 +383,10 @@ NOISE_PATTERNS = [
 
 # extra “generic headings” that should NOT create missing-header rows
 GENERIC_SECTION_HEADERS = {
-    "introduction", "overview", "conclusion", "final thoughts", "summary",
-    "closing thoughts", "wrap up", "in summary", "takeaway", "key takeaways",
+    "introduction", "overview",
+    # DO NOT treat conclusion/final thoughts as noise (user wants them)
+    # "conclusion", "final thoughts", "summary", "closing thoughts", "wrap up", "in summary", "takeaway", "key takeaways",
 }
-
 def norm_header(h: str) -> str:
     h = clean(h).lower()
     h = re.sub(r"[^a-z0-9\s]", "", h)
@@ -787,31 +787,29 @@ def summarize_content_gap_action(header: str, comp_content: str, bayut_content: 
 
 def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: str) -> Optional[dict]:
     """
-    ONE FAQs row, neutral description:
-    - 'Missing FAQ topics: ...'
+    ONE FAQs row only IF the competitor has an explicit FAQ section heading.
+    Description = missing FAQ TOPICS only (not questions).
     """
 
-    # Competitor questions: prefer FAQ section, else fallback to question-like headings
+    # Competitor must have explicit FAQ section
     comp_faq_nodes = find_faq_nodes(comp_nodes)
+    if not comp_faq_nodes:
+        return None
+
     comp_qs = []
-    if comp_faq_nodes:
-        for fn in comp_faq_nodes:
-            comp_qs.extend(extract_questions_from_node(fn))
-    if not comp_qs:
-        comp_qs = extract_all_questions(comp_nodes)
+    for fn in comp_faq_nodes:
+        comp_qs.extend(extract_questions_from_node(fn))
 
     comp_qs = [q for q in comp_qs if q and len(q) > 5]
     if not comp_qs:
         return None
 
-    # Bayut questions: prefer FAQ section, else fallback
+    # Bayut FAQ section (explicit only)
     bayut_faq_nodes = find_faq_nodes(bayut_nodes)
     bayut_qs = []
     if bayut_faq_nodes:
         for fn in bayut_faq_nodes:
             bayut_qs.extend(extract_questions_from_node(fn))
-    if not bayut_qs:
-        bayut_qs = extract_all_questions(bayut_nodes)
 
     def q_key(q: str) -> str:
         q2 = normalize_question(q)
@@ -820,10 +818,9 @@ def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: 
         return q2
 
     bayut_set = {q_key(q) for q in bayut_qs if q}
-    missing_qs = [q for q in comp_qs if q_key(q) not in bayut_set]
 
-    # If Bayut has no FAQ/questions detected at all
-    if not bayut_qs:
+    # If Bayut has no FAQ section at all => all competitor FAQ topics are missing
+    if not bayut_faq_nodes:
         topics = faq_subjects_from_questions(comp_qs, limit=10)
         return {
             "Headers": "FAQs",
@@ -831,7 +828,7 @@ def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: 
             "Source": source_link(comp_url),
         }
 
-    # If nothing missing
+    missing_qs = [q for q in comp_qs if q_key(q) not in bayut_set]
     if not missing_qs:
         return None
 
