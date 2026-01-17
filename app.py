@@ -5,7 +5,7 @@ import re
 from bs4 import BeautifulSoup
 from urllib.parse import quote_plus, urlparse
 import pandas as pd
-import time, random, hashlib
+import time, random, hashlib, json
 from dataclasses import dataclass
 from typing import Optional, Dict, Tuple, List
 from difflib import SequenceMatcher
@@ -18,6 +18,14 @@ try:
     PLAYWRIGHT_OK = True
 except Exception:
     PLAYWRIGHT_OK = False
+
+# Optional: Google Search Console for ranking
+try:
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build as gbuild
+    GSC_OK = True
+except Exception:
+    GSC_OK = False
 
 
 # =====================================================
@@ -46,13 +54,13 @@ st.markdown(
       }}
       section.main > div.block-container {{
         max-width: 1180px !important;
-        padding-top: 1.6rem !important;
-        padding-bottom: 2.4rem !important;
+        padding-top: 1.2rem !important;
+        padding-bottom: 2.2rem !important;
       }}
       .hero {{
         text-align:center;
         margin-top: 0.6rem;
-        margin-bottom: 1.2rem;
+        margin-bottom: 1.0rem;
       }}
       .hero h1 {{
         font-size: 52px;
@@ -78,7 +86,11 @@ st.markdown(
         font-weight: 900;
         color: {TEXT_DARK};
         display: inline-block;
-        margin: 8px 0 4px 0; /* closer to table */
+        margin: 6px 0 6px 0;
+      }}
+      .tight {{
+        margin-top: 4px !important;
+        margin-bottom: 6px !important;
       }}
       .stTextInput input, .stTextArea textarea {{
         background: {LIGHT_GREEN} !important;
@@ -144,11 +156,20 @@ st.markdown(
         border: 1px solid #E5E7EB;
         border-radius: 14px;
         padding: 14px 14px;
-        margin: 6px 0 10px 0;
+        margin: 8px 0 10px 0;
       }}
       .muted {{
         color:#6B7280;
         font-size: 13px;
+      }}
+      .small-note {{
+        color:#6B7280;
+        font-size: 12px;
+        margin-top: -6px;
+      }}
+      .btn-row {{
+        margin-top: 0px !important;
+        margin-bottom: 0px !important;
       }}
     </style>
     """,
@@ -164,6 +185,31 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+
+# =====================================================
+# SMALL UI HELPERS (HEADER + BUTTON SAME LINE)
+# =====================================================
+def section_title_with_button(title: str, button_label: str, btn_key: str, show_key: str) -> bool:
+    if show_key not in st.session_state:
+        st.session_state[show_key] = False
+
+    left, right = st.columns([4.2, 1.3], gap="small")
+    with left:
+        st.markdown(f"<div class='section-pill tight'>{title}</div>", unsafe_allow_html=True)
+    with right:
+        pressed = st.button(button_label, type="secondary", use_container_width=True, key=btn_key)
+        if pressed:
+            st.session_state[show_key] = True
+    return bool(st.session_state.get(show_key))
+
+
+def render_table(df: pd.DataFrame):
+    if df is None or df.empty:
+        st.info("No results to show.")
+        return
+    html = df.to_html(index=False, escape=False)
+    st.markdown(html, unsafe_allow_html=True)
 
 
 # =====================================================
@@ -394,7 +440,7 @@ NOISE_PATTERNS = [
 
 GENERIC_SECTION_HEADERS = {
     "introduction", "overview",
-    # user wants conclusion/final thoughts visible, so don't add them here
+    # user wants conclusion visible, so don't add them here
 }
 
 STOP = {
@@ -402,11 +448,6 @@ STOP = {
     "but","not","can","may","more","most","into","than","then","they","them","their","our","out","about",
     "also","over","under","between","within","near","where","when","what","why","how","who","which",
     "a","an","to","of","in","on","at","as","is","it","be","or","by","we","i","us"
-}
-
-GENERIC_STOP = {
-    "dubai","uae","business","bay","community","area","living","pros","cons",
-    "property","properties","rent","sale","apartments","villas","guide"
 }
 
 def norm_header(h: str) -> str:
@@ -582,8 +623,10 @@ def get_tree_from_fetchresult(fr: FetchResult) -> dict:
     txt = fr.text or ""
     maybe_html = ("<html" in txt.lower()) or ("<article" in txt.lower()) or ("<h1" in txt.lower()) or ("<h2" in txt.lower())
 
+    # If fr.html exists, always use it
     if fr.html:
         nodes = build_tree_from_html(fr.html)
+    # If manual paste looks like HTML, use HTML parser
     elif fr.source == "manual" and maybe_html:
         nodes = build_tree_from_html(txt)
     else:
@@ -643,6 +686,13 @@ def site_name(url: str) -> str:
     except Exception:
         return "Source"
 
+def domain_of(url: str) -> str:
+    try:
+        host = urlparse(url).netloc.lower().replace("www.", "")
+        return host.split(":")[0]
+    except Exception:
+        return ""
+
 def source_link(url: str) -> str:
     n = site_name(url)
     return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{n}</a>'
@@ -665,29 +715,6 @@ def flatten(nodes: List[dict]) -> List[dict]:
 
 def strip_label(h: str) -> str:
     return clean(re.sub(r"\s*:\s*$", "", (h or "").strip()))
-
-def section_header_with_button(title: str, button_label: str, button_key: str) -> bool:
-    """
-    One line: left = section pill, right = button.
-    This makes the button sit at the same level as the section header and aligns to the table's right edge.
-    """
-    left, right = st.columns([7.5, 2.5], vertical_alignment="center")
-    with left:
-        st.markdown(f"<div class='section-pill'>{title}</div>", unsafe_allow_html=True)
-    with right:
-        return st.button(button_label, key=button_key, use_container_width=True)
-
-def render_ai_box(title: str, subtitle: str, body: str):
-    st.markdown(
-        f"""
-        <div class='ai-summary'>
-          <b>{title}</b>
-          <div class='muted'>{subtitle}</div>
-          <pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{body}</pre>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
 
 
 # =====================================================
@@ -716,18 +743,6 @@ def _looks_like_question(s: str) -> bool:
     if any(p in s_low for p in ["what is", "how to", "is it", "are there", "can i", "should i"]):
         return True
     return False
-
-def find_faq_nodes(nodes: List[dict]) -> List[dict]:
-    faq = []
-    for x in flatten(nodes):
-        if x.get("level") not in (2, 3):
-            continue
-        if not header_is_faq(x.get("header", "")):
-            continue
-        qs = extract_questions_from_node(x)
-        if len(qs) >= 3:
-            faq.append(x)
-    return faq
 
 def normalize_question(q: str) -> str:
     q = clean(q or "")
@@ -771,6 +786,18 @@ def extract_questions_from_node(node: dict) -> List[str]:
         seen.add(k)
         out.append(q)
     return out[:25]
+
+def find_faq_nodes(nodes: List[dict]) -> List[dict]:
+    faq = []
+    for x in flatten(nodes):
+        if x.get("level") not in (2, 3):
+            continue
+        if not header_is_faq(x.get("header", "")):
+            continue
+        qs = extract_questions_from_node(x)
+        if len(qs) >= 3:
+            faq.append(x)
+    return faq
 
 def extract_all_questions(nodes: List[dict]) -> List[str]:
     qs = []
@@ -1036,6 +1063,7 @@ def update_mode_rows_header_first(
     comp_h2 = [s for s in comp_secs if s["level"] == 2]
     comp_h3 = [s for s in comp_secs if s["level"] == 3]
 
+    # Rank competitor H2 by importance (content length + #children)
     comp_h2_ranked = []
     for h2 in comp_h2:
         child_count = sum(
@@ -1048,6 +1076,7 @@ def update_mode_rows_header_first(
 
     missing_h2_norms = set()
 
+    # 1) Missing H2
     missing_rows = []
     for _, cs in comp_h2_ranked:
         m = find_best_bayut_match(cs["header"], bayut_h2, min_score=0.73)
@@ -1079,6 +1108,7 @@ def update_mode_rows_header_first(
 
     rows.extend(missing_rows)
 
+    # 2) Missing H3 only if parent H2 is NOT missing
     if len(rows) < max_missing_headers:
         for cs in comp_h3:
             parent = cs.get("parent_h2") or ""
@@ -1104,6 +1134,7 @@ def update_mode_rows_header_first(
             if len(rows) >= max_missing_headers:
                 break
 
+    # 3) Matching headers where competitor is stronger => (missing parts)
     missing_parts_rows = []
     for cs in comp_secs:
         m = find_best_bayut_match(cs["header"], bayut_secs, min_score=0.73)
@@ -1135,6 +1166,7 @@ def update_mode_rows_header_first(
 
     rows.extend(missing_parts_rows)
 
+    # 4) FAQs — ONE row only (only when competitor truly has FAQ heading)
     faq_row = missing_faqs_row(bayut_nodes, comp_nodes, comp_url)
     if faq_row:
         rows.append(faq_row)
@@ -1143,7 +1175,7 @@ def update_mode_rows_header_first(
 
 
 # =====================================================
-# SEO ANALYSIS (UPDATED: remove SKW + remove long-tail, add rank column)
+# SEO HELPERS (TRUE header counts from HTML tags only)
 # =====================================================
 def url_slug(url: str) -> str:
     try:
@@ -1192,78 +1224,28 @@ def extract_media_used(html: str) -> str:
 
     return " | ".join(parts) if parts else "None detected"
 
-def count_header_tags_from_html(html: str) -> Optional[Dict[str, int]]:
+def count_headers_from_html(html: str) -> Dict[str, int]:
     """
-    TRUE tag counts (H1/H2/H3/H4) from HTML.
-    If no HTML available => None (so we don't lie).
+    TRUE counts (only if HTML exists). Uses real H1/H2/H3/H4 tags inside <article> if present.
     """
+    counts = {"H1": 0, "H2": 0, "H3": 0, "H4": 0}
     if not html:
-        return None
+        return counts
     soup = BeautifulSoup(html, "html.parser")
     for t in soup.find_all(list(IGNORE_TAGS)):
         t.decompose()
     root = soup.find("article") or soup
-    return {
-        "H1": len(root.find_all("h1")),
-        "H2": len(root.find_all("h2")),
-        "H3": len(root.find_all("h3")),
-        "H4": len(root.find_all("h4")),
-    }
 
-def headers_summary_from_html_or_none(html: str) -> str:
-    hc = count_header_tags_from_html(html)
-    if not hc:
-        return "Not available (no HTML)"
-    return f"H1:{hc['H1']} | H2:{hc['H2']} | H3:{hc['H3']} | H4:{hc['H4']}"
-
-def tokenize(text: str) -> List[str]:
-    text = (text or "").lower()
-    text = re.sub(r"[^a-z0-9\s]", " ", text)
-    toks = [t for t in text.split() if t and len(t) >= 3]
-    return toks
-
-def phrase_candidates(text: str, n_min=2, n_max=4) -> Dict[str, int]:
-    toks = tokenize(text)
-    freq: Dict[str, int] = {}
-    for n in range(n_min, n_max + 1):
-        for i in range(0, max(len(toks) - n + 1, 0)):
-            chunk = toks[i:i+n]
-            if not chunk:
-                continue
-            if chunk[0] in STOP or chunk[-1] in STOP:
-                continue
-            if all(w in STOP or w in GENERIC_STOP for w in chunk):
-                continue
-            phrase = " ".join(chunk)
-            if len(phrase) < 8:
-                continue
-            freq[phrase] = freq.get(phrase, 0) + 1
-    return freq
-
-def pick_fkw_auto(seo_title: str, h1: str, headings_blob_text: str, body_text: str) -> str:
-    """
-    Auto-FKW only (no SKW, no long tail).
-    """
-    base = " ".join([seo_title or "", h1 or "", headings_blob_text or "", body_text or ""])
-    freq = phrase_candidates(base, n_min=2, n_max=4)
-    if not freq:
-        return "Not available"
-
-    title_low = (seo_title or "").lower()
-    h1_low = (h1 or "").lower()
-
-    scored = []
-    for ph, c in freq.items():
-        boost = 1.0
-        if ph in title_low:
-            boost += 0.9
-        if ph in h1_low:
-            boost += 0.6
-        score = (c * boost)
-        scored.append((score, ph))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return scored[0][1] if scored else "Not available"
+    # Only count headings that look non-noise (so the number stays meaningful)
+    for tag, key in [("h1","H1"),("h2","H2"),("h3","H3"),("h4","H4")]:
+        hs = root.find_all(tag)
+        kept = 0
+        for h in hs:
+            txt = clean(h.get_text(" "))
+            if txt and not is_noise_header(txt):
+                kept += 1
+        counts[key] = kept
+    return counts
 
 def get_first_h1(nodes: List[dict]) -> str:
     for x in flatten(nodes):
@@ -1280,41 +1262,301 @@ def headings_blob(nodes: List[dict]) -> str:
             h = clean(x.get("header",""))
             if h and not is_noise_header(h):
                 hs.append(h)
-    return " ".join(hs[:120])
+    return " ".join(hs[:80])
 
-def count_phrase_occurrences(text: str, phrase: str) -> int:
-    if not text or not phrase or phrase == "Not available":
+def kw_in_text_count(text: str, phrase: str) -> int:
+    if not text or not phrase:
         return 0
     t = " " + re.sub(r"\s+", " ", (text or "").lower()) + " "
     p = " " + re.sub(r"\s+", " ", (phrase or "").lower()) + " "
     return t.count(p)
 
-def seo_row_for_page(label: str, url: str, fr: FetchResult, nodes: List[dict], target_fkw: str) -> dict:
-    seo_title, meta_desc = extract_head_seo(fr.html or "")
-    h1 = get_first_h1(nodes)
+def kw_present(text: str, phrase: str) -> str:
+    if not text or not phrase:
+        return "No"
+    return "Yes" if kw_in_text_count(text, phrase) > 0 else "No"
 
+
+# =====================================================
+# GOOGLE SEARCH CONSOLE: UAE ranking (desktop + mobile)
+# =====================================================
+def init_gsc_service() -> Tuple[Optional[object], str]:
+    """
+    Uses env vars:
+      - GSC_SERVICE_ACCOUNT_JSON: full service account json as a string
+      - GSC_SITE_URL: e.g. "sc-domain:bayut.com" OR "https://www.bayut.com/"
+    """
+    sa_json = (st.secrets.get("GSC_SERVICE_ACCOUNT_JSON", None) if hasattr(st, "secrets") else None)  # optional
+    site_url = (st.secrets.get("GSC_SITE_URL", None) if hasattr(st, "secrets") else None)
+
+    # allow env too
+    import os
+    if not sa_json:
+        sa_json = os.environ.get("GSC_SERVICE_ACCOUNT_JSON", "")
+    if not site_url:
+        site_url = os.environ.get("GSC_SITE_URL", "")
+
+    if not GSC_OK:
+        return (None, "")
+    if not sa_json or not site_url:
+        return (None, "")
+
+    try:
+        info = json.loads(sa_json) if isinstance(sa_json, str) else sa_json
+        creds = service_account.Credentials.from_service_account_info(
+            info,
+            scopes=["https://www.googleapis.com/auth/webmasters.readonly"],
+        )
+        service = gbuild("searchconsole", "v1", credentials=creds, cache_discovery=False)
+        return (service, site_url)
+    except Exception:
+        return (None, "")
+
+def gsc_avg_position_for_page(
+    service,
+    site_url: str,
+    page_url: str,
+    days: int,
+    country_iso3: str,
+    device: str,
+    query_filter: Optional[str] = None
+) -> str:
+    """
+    Returns average position (float) for the page in a country+device over last N days.
+    If query_filter provided, attempts to filter to that query too (best effort).
+    """
+    if not service or not site_url or not page_url:
+        return "Not available"
+
+    # dates
+    import datetime as dt
+    end = dt.date.today()
+    start = end - dt.timedelta(days=max(days, 7))
+
+    # Build request
+    req = {
+        "startDate": start.isoformat(),
+        "endDate": end.isoformat(),
+        "dimensions": ["page"],
+        "rowLimit": 50,
+        "dimensionFilterGroups": [{
+            "filters": [
+                {"dimension": "page", "operator": "equals", "expression": page_url},
+                {"dimension": "country", "operator": "equals", "expression": country_iso3},
+                {"dimension": "device", "operator": "equals", "expression": device},
+            ]
+        }]
+    }
+
+    # best-effort query filter (API may accept it even if dimension not included)
+    if query_filter and clean(query_filter):
+        req["dimensionFilterGroups"][0]["filters"].append(
+            {"dimension": "query", "operator": "equals", "expression": clean(query_filter)}
+        )
+
+    try:
+        resp = service.searchanalytics().query(siteUrl=site_url, body=req).execute()
+        rows = resp.get("rows", [])
+        if not rows:
+            return "Not available"
+        # For a single page, aggregate: use weighted avg position if clicks/impressions present
+        impressions = 0
+        weighted = 0.0
+        for r in rows:
+            imp = int(r.get("impressions", 0) or 0)
+            pos = float(r.get("position", 0.0) or 0.0)
+            impressions += imp
+            weighted += pos * imp
+        if impressions > 0:
+            return f"{(weighted / impressions):.2f}"
+        # fallback: plain avg of positions
+        poss = [float(r.get("position", 0.0) or 0.0) for r in rows]
+        poss = [p for p in poss if p > 0]
+        return f"{(sum(poss)/len(poss)):.2f}" if poss else "Not available"
+    except Exception:
+        return "Not available"
+
+
+# =====================================================
+# AI VISIBILITY (SERP API - optional)
+# =====================================================
+def serpapi_ai_overview_status(query: str, device: str, gl: str = "ae", hl: str = "en") -> dict:
+    """
+    Optional: fills AI Overview presence + citations using SerpApi.
+    Requires env/secret: SERPAPI_KEY
+    """
+    import os
+    key = (st.secrets.get("SERPAPI_KEY", None) if hasattr(st, "secrets") else None)
+    if not key:
+        key = os.environ.get("SERPAPI_KEY", "")
+
+    if not key or not query:
+        return {"ok": False, "reason": "missing_serpapi_key_or_query"}
+
+    params = {
+        "engine": "google",
+        "q": query,
+        "gl": gl,
+        "hl": hl,
+        "device": "mobile" if device.upper() == "MOBILE" else "desktop",
+        "api_key": key,
+    }
+
+    try:
+        r = requests.get("https://serpapi.com/search.json", params=params, timeout=25)
+        data = r.json() if r.ok else {}
+    except Exception:
+        return {"ok": False, "reason": "serpapi_request_failed"}
+
+    # best-effort parse across possible shapes
+    ai_block = None
+    for k in ["ai_overview", "ai_overviews", "ai_overview_results", "ai_overview_block", "ai_overview_response"]:
+        if isinstance(data.get(k), dict):
+            ai_block = data.get(k)
+            break
+        if isinstance(data.get(k), list) and data.get(k):
+            ai_block = {"items": data.get(k)}
+            break
+
+    has_ai = bool(ai_block)
+
+    citations = []
+    if ai_block:
+        # common places for sources
+        possible_lists = []
+        for k in ["sources", "citations", "links", "references", "source_links", "items"]:
+            v = ai_block.get(k)
+            if isinstance(v, list):
+                possible_lists.extend(v)
+
+        # also check nested
+        if isinstance(ai_block.get("sections"), list):
+            for s in ai_block["sections"]:
+                if isinstance(s, dict):
+                    for k in ["sources", "citations", "links"]:
+                        v = s.get(k)
+                        if isinstance(v, list):
+                            possible_lists.extend(v)
+
+        for item in possible_lists[:60]:
+            if isinstance(item, str):
+                citations.append(item)
+            elif isinstance(item, dict):
+                u = item.get("link") or item.get("url") or item.get("source") or item.get("href")
+                if u and isinstance(u, str):
+                    citations.append(u)
+
+    # clean citations to urls
+    out_urls = []
+    seen = set()
+    for u in citations:
+        u = clean(u)
+        if not u or not u.startswith("http"):
+            continue
+        if u in seen:
+            continue
+        seen.add(u)
+        out_urls.append(u)
+
+    return {"ok": True, "has_ai": has_ai, "citations": out_urls}
+
+
+def build_ai_visibility_table(target_query: str, sites: List[Tuple[str, str]]) -> pd.DataFrame:
+    """
+    sites: list of tuples (label, domain)
+    """
+    rows = []
+    for device in ["DESKTOP", "MOBILE"]:
+        status = serpapi_ai_overview_status(target_query, device=device, gl="ae", hl="en")
+        if not status.get("ok"):
+            # still show table, but mark not available
+            for label, dom in sites:
+                rows.append({
+                    "Site": label,
+                    "Device": "Desktop" if device == "DESKTOP" else "Mobile",
+                    "UAE AI Overview present": "Not available",
+                    "Cited in AI Overview": "Not available",
+                    "Example cited URL": "Not available",
+                })
+            continue
+
+        has_ai = status.get("has_ai", False)
+        cites = status.get("citations", []) or []
+
+        for label, dom in sites:
+            cited_urls = [u for u in cites if dom and dom in domain_of(u)]
+            rows.append({
+                "Site": label,
+                "Device": "Desktop" if device == "DESKTOP" else "Mobile",
+                "UAE AI Overview present": "Yes" if has_ai else "No",
+                "Cited in AI Overview": "Yes" if cited_urls else "No",
+                "Example cited URL": cited_urls[0] if cited_urls else ("—" if has_ai else "—"),
+            })
+    return pd.DataFrame(rows)
+
+
+# =====================================================
+# SEO ROW (uses TARGET FKW input; long-tails removed)
+# =====================================================
+def seo_row_for_page(
+    label: str,
+    url: str,
+    fr: FetchResult,
+    nodes: List[dict],
+    target_fkw: str,
+    gsc_service=None,
+    gsc_site_url: str = "",
+    gsc_days: int = 28,
+) -> dict:
+    seo_title, meta_desc = extract_head_seo(fr.html or "")
+
+    # Fallback for SEO title if head not available: use H1
+    h1 = get_first_h1(nodes)
     if seo_title == "Not available" and h1:
         seo_title = h1
 
     media = extract_media_used(fr.html or "")
     slug = url_slug(url)
 
-    headers_summary = headers_summary_from_html_or_none(fr.html or "")
+    # TRUE header counts only when HTML exists
+    if fr.html:
+        hc = count_headers_from_html(fr.html)
+        headers_summary = f"H1:{hc['H1']} | H2:{hc['H2']} | H3:{hc['H3']} | H4:{hc['H4']}"
+    else:
+        headers_summary = "Not available (no HTML)"
 
-    blob = headings_blob(nodes)
+    # Target keyword signals (user-provided)
+    tfkw = clean(target_fkw)
+    headings_text = headings_blob(nodes)
     body_text = fr.text or ""
 
-    fkw_auto = pick_fkw_auto(seo_title, h1, blob, body_text)
+    fkw_in_title = kw_present(seo_title, tfkw) if tfkw else "Not provided"
+    fkw_in_h1 = kw_present(h1, tfkw) if tfkw else "Not provided"
+    fkw_in_headings_n = str(kw_in_text_count(headings_text, tfkw)) if tfkw else "Not provided"
+    fkw_repeats_body = str(kw_in_text_count(body_text, tfkw)) if tfkw else "Not provided"
 
-    # Target checks (user-selected FKW)
-    target = (target_fkw or "").strip()
-    if not target:
-        target = fkw_auto
-
-    in_title = "Yes" if count_phrase_occurrences(seo_title, target) > 0 else "No"
-    in_h1 = "Yes" if count_phrase_occurrences(h1, target) > 0 else "No"
-    in_headings_n = count_phrase_occurrences(blob, target)
-    repeats_body = count_phrase_occurrences(body_text, target)
+    # Google ranking (UAE desktop + mobile) via GSC
+    rank_uae_desktop = "Not available"
+    rank_uae_mobile = "Not available"
+    if gsc_service and gsc_site_url and url.startswith("http"):
+        rank_uae_desktop = gsc_avg_position_for_page(
+            service=gsc_service,
+            site_url=gsc_site_url,
+            page_url=url,
+            days=gsc_days,
+            country_iso3="ARE",
+            device="DESKTOP",
+            query_filter=tfkw if tfkw else None,
+        )
+        rank_uae_mobile = gsc_avg_position_for_page(
+            service=gsc_service,
+            site_url=gsc_site_url,
+            page_url=url,
+            days=gsc_days,
+            country_iso3="ARE",
+            device="MOBILE",
+            query_filter=tfkw if tfkw else None,
+        )
 
     return {
         "Page": label,
@@ -1323,13 +1565,13 @@ def seo_row_for_page(label: str, url: str, fr: FetchResult, nodes: List[dict], t
         "Slug": slug,
         "Media used": media,
         "Headers count": headers_summary,
-        "FKW (auto)": fkw_auto,
-        "Target FKW": target if target else "Not available",
-        "Target FKW in title": in_title,
-        "Target FKW in H1": in_h1,
-        "Target FKW in headings (#)": str(in_headings_n) if target else "Not available",
-        "Target FKW repeats (body)": str(repeats_body) if target else "Not available",
-        "Google ranking (manual)": "Not provided",
+        "Target FKW": tfkw if tfkw else "Not provided",
+        "FKW in title": fkw_in_title,
+        "FKW in H1": fkw_in_h1,
+        "FKW in headings (#)": fkw_in_headings_n,
+        "FKW repeats (body)": fkw_repeats_body,
+        "Rank UAE (Desktop)": rank_uae_desktop,
+        "Rank UAE (Mobile)": rank_uae_mobile,
     }
 
 def build_seo_analysis_update(
@@ -1339,124 +1581,146 @@ def build_seo_analysis_update(
     competitors: List[str],
     comp_fr_map: Dict[str, FetchResult],
     comp_tree_map: Dict[str, dict],
-    target_fkw: str
+    target_fkw: str,
+    gsc_service=None,
+    gsc_site_url: str = "",
 ) -> pd.DataFrame:
     rows = []
-    rows.append(seo_row_for_page("Bayut", bayut_url, bayut_fr, bayut_nodes, target_fkw))
+    rows.append(seo_row_for_page("Bayut", bayut_url, bayut_fr, bayut_nodes, target_fkw, gsc_service, gsc_site_url))
     for u in competitors:
         fr = comp_fr_map[u]
         nodes = comp_tree_map[u]["nodes"]
-        rows.append(seo_row_for_page(site_name(u), u, fr, nodes, target_fkw))
+        rows.append(seo_row_for_page(site_name(u), u, fr, nodes, target_fkw, gsc_service, gsc_site_url))
     return pd.DataFrame(rows)
 
 def build_seo_analysis_newpost(
+    new_title: str,
     competitors: List[str],
     comp_fr_map: Dict[str, FetchResult],
     comp_tree_map: Dict[str, dict],
-    target_fkw: str
+    target_fkw: str,
+    gsc_service=None,
+    gsc_site_url: str = "",
 ) -> pd.DataFrame:
     rows = []
     for u in competitors:
         fr = comp_fr_map[u]
         nodes = comp_tree_map[u]["nodes"]
-        rows.append(seo_row_for_page(site_name(u), u, fr, nodes, target_fkw))
+        rows.append(seo_row_for_page(site_name(u), u, fr, nodes, target_fkw, gsc_service, gsc_site_url))
+
+    # Target row (New post) - keep clean + no fake ranking
+    fake_nodes = [{"level": 1, "header": new_title, "content": "", "children": []}]
+    fake_fr = FetchResult(True, "synthetic", 200, "", new_title, None)
+    row = seo_row_for_page("Target (New Post)", "Not applicable", fake_fr, fake_nodes, target_fkw, None, "")
+    row["Slug"] = "Suggested: /" + re.sub(r"[^a-z0-9]+", "-", new_title.lower()).strip("-") + "/"
+    row["Meta description"] = "Suggested: write a 140–160 char meta based on the intro angle."
+    row["Media used"] = "Suggested: 1 hero image + 1 map/graphic (optional)"
+    row["Headers count"] = "Not applicable"
+    row["FKW in headings (#)"] = "Not applicable"
+    row["FKW repeats (body)"] = "Not applicable"
+    row["Rank UAE (Desktop)"] = "Not applicable"
+    row["Rank UAE (Mobile)"] = "Not applicable"
+    rows.insert(0, row)
+
     return pd.DataFrame(rows)
+
+def ai_summary_from_gaps_df(df: pd.DataFrame) -> str:
+    if df is None or df.empty:
+        return "No gaps to summarize."
+    # rows per competitor
+    src_counts = {}
+    header_counts = {}
+    for _, r in df.iterrows():
+        src = re.sub(r"<[^>]+>", "", str(r.get("Source", ""))).strip()
+        # source is an <a> tag in html; fall back to plain
+        if not src or src == "nan":
+            src = "Source"
+        # try to parse anchor text
+        m = re.search(r'>([^<]+)<', str(r.get("Source", "")))
+        if m:
+            src = m.group(1).strip()
+
+        src_counts[src] = src_counts.get(src, 0) + 1
+        h = str(r.get("Headers", "")).strip()
+        if h:
+            header_counts[h] = header_counts.get(h, 0) + 1
+
+    total = int(len(df))
+    src_lines = ", ".join([f"{k}: {v}" for k, v in sorted(src_counts.items(), key=lambda x: x[1], reverse=True)])
+
+    top_headers = sorted(header_counts.items(), key=lambda x: x[1], reverse=True)[:6]
+    top_headers_line = ", ".join([f"{h} ({c})" for h, c in top_headers])
+
+    return (
+        f"Total gap rows: {total}\n"
+        f"Rows by competitor: {src_lines}\n"
+        f"Most repeated gap headers: {top_headers_line}"
+    )
 
 def ai_summary_from_seo_df(df: pd.DataFrame) -> str:
     if df is None or df.empty:
         return "No SEO data to summarize."
+    # Focus on Target FKW + structure + ranks when present
+    lines = []
+    tfkw = ""
+    try:
+        tfkw = str(df.iloc[0].get("Target FKW", "")).strip()
+    except Exception:
+        tfkw = ""
 
-    # Prefer Bayut row if exists
-    bayut_row = None
+    if tfkw and tfkw != "Not provided":
+        lines.append(f"Target FKW: “{tfkw}”")
+
+    # Bayut vs competitors if exists
+    bayut = None
     for _, r in df.iterrows():
         if str(r.get("Page","")).lower() == "bayut":
-            bayut_row = r
+            bayut = r
             break
 
-    lines = []
+    def parse_h2(s: str) -> int:
+        m = re.search(r"H2:(\d+)", str(s))
+        return int(m.group(1)) if m else 0
 
-    def parse_hcounts(s: str) -> Tuple[int,int,int,int]:
-        m = re.findall(r"H1:(\d+)\s*\|\s*H2:(\d+)\s*\|\s*H3:(\d+)\s*\|\s*H4:(\d+)", str(s))
-        if not m:
-            return (0,0,0,0)
-        a,b,c,d = m[0]
-        return (int(a),int(b),int(c),int(d))
-
-    target = ""
-    if "Target FKW" in df.columns and not df.empty:
-        target = str(df.iloc[0].get("Target FKW","")).strip()
-
-    if bayut_row is not None:
-        b_h = parse_hcounts(bayut_row.get("Headers count",""))
-        b_title = str(bayut_row.get("SEO title",""))
-
-        lines.append(f"Target FKW: “{target}”" if target else "Target FKW: Not available")
+    if bayut is not None:
+        b_h2 = parse_h2(bayut.get("Headers count",""))
+        b_rank_d = str(bayut.get("Rank UAE (Desktop)", ""))
+        b_rank_m = str(bayut.get("Rank UAE (Mobile)", ""))
+        lines.append(f"Bayut H2 count: {b_h2}")
+        if b_rank_d != "Not available" or b_rank_m != "Not available":
+            lines.append(f"Bayut rank UAE: Desktop={b_rank_d} | Mobile={b_rank_m}")
 
         for _, r in df.iterrows():
             page = str(r.get("Page",""))
             if page.lower() == "bayut":
                 continue
+            c_h2 = parse_h2(r.get("Headers count",""))
+            if c_h2 and b_h2 and c_h2 > b_h2:
+                lines.append(f"{page} has more H2 sections than Bayut.")
+            if tfkw and tfkw != "Not provided":
+                tit = str(r.get("FKW in title",""))
+                h1 = str(r.get("FKW in H1",""))
+                if tit == "Yes" and h1 == "Yes":
+                    lines.append(f"{page} places FKW in both title + H1 (strong on intent).")
 
-            c_h = parse_hcounts(r.get("Headers count",""))
-            if c_h != (0,0,0,0) and b_h != (0,0,0,0) and c_h[1] > b_h[1]:
-                lines.append(f"• {page} has more H2 sections than Bayut (deeper structure).")
-            if len(str(r.get("SEO title",""))) > len(b_title) + 15:
-                lines.append(f"• {page} uses a longer SEO title (more modifiers/intent).")
-
-            rep = str(r.get("Target FKW repeats (body)","0"))
-            if rep.isdigit() and int(rep) >= 6:
-                lines.append(f"• {page} repeats the target FKW {rep} times in body (stronger exact targeting).")
-
-        if len(lines) == 1:
-            return "SEO summary: No clear differences detected from the available scrape."
-        return "SEO summary:\n" + "\n".join(lines[:10])
-
-    # New Post Mode: competitors only
-    lines.append(f"Target FKW: “{target}”" if target else "Target FKW: Not available")
-    for _, r in df.iterrows():
-        page = str(r.get("Page",""))
-        rep = str(r.get("Target FKW repeats (body)","0"))
-        in_h1 = str(r.get("Target FKW in H1","No"))
-        if in_h1 == "Yes":
-            lines.append(f"• {page} places target FKW in H1.")
-        if rep.isdigit() and int(rep) >= 6:
-            lines.append(f"• {page} repeats target FKW {rep} times in body.")
-    return "SEO summary:\n" + ("\n".join(lines[:10]) if lines else "Not enough SEO data to summarize.")
-
-
-# =====================================================
-# AI SUMMARY (GAPS)
-# =====================================================
-def strip_html_tags(s: str) -> str:
-    return re.sub(r"<[^>]+>", "", str(s or "")).strip()
-
-def ai_summary_from_gaps_df(df: pd.DataFrame) -> str:
-    if df is None or df.empty:
-        return "No gaps to summarize."
-
-    total = len(df)
-    # source names
-    srcs = df.get("Source", pd.Series([])).apply(strip_html_tags)
-    by_src = srcs.value_counts().to_dict()
-
-    # top repeated headers
-    headers = df.get("Headers", pd.Series([])).astype(str)
-    top_headers = headers.value_counts().head(8).to_dict()
-
-    lines = []
-    lines.append(f"Total gap rows: {total}.")
-    if by_src:
-        parts = [f"{k}: {v}" for k, v in by_src.items()]
-        lines.append("Rows by competitor: " + ", ".join(parts) + ".")
-    if top_headers:
-        parts = [f"{k} ({v})" for k, v in top_headers.items()]
-        lines.append("Most repeated gap headers: " + ", ".join(parts) + ".")
-
-    # FAQ signal
-    if any(norm_header(h) == "faqs" for h in headers.astype(str).tolist()):
-        lines.append("FAQs: at least one competitor has a true FAQ section gap.")
-
-    return "\n".join(lines)
+            rd = str(r.get("Rank UAE (Desktop)", ""))
+            rm = str(r.get("Rank UAE (Mobile)", ""))
+            if rd != "Not available" or rm != "Not available":
+                lines.append(f"{page} rank UAE: Desktop={rd} | Mobile={rm}")
+    else:
+        # New Post Mode: list competitor signals
+        for _, r in df.iterrows():
+            page = str(r.get("Page",""))
+            if page.lower().startswith("target"):
+                continue
+            if tfkw and tfkw != "Not provided":
+                if str(r.get("FKW in title","")) == "Yes":
+                    lines.append(f"{page} includes FKW in title.")
+                if str(r.get("FKW in H1","")) == "Yes":
+                    lines.append(f"{page} includes FKW in H1.")
+    if not lines:
+        return "SEO summary: Not enough data to summarize."
+    return "\n".join(lines[:10])
 
 
 # =====================================================
@@ -1523,17 +1787,6 @@ def new_post_coverage_rows(comp_nodes: List[dict], comp_url: str) -> List[dict]:
 
 
 # =====================================================
-# HTML TABLE RENDER (with hyperlinks)
-# =====================================================
-def render_table(df: pd.DataFrame):
-    if df.empty:
-        st.info("No results to show.")
-        return
-    html = df.to_html(index=False, escape=False)
-    st.markdown(html, unsafe_allow_html=True)
-
-
-# =====================================================
 # MODE SELECTOR (CENTERED BUTTONS)
 # =====================================================
 if "mode" not in st.session_state:
@@ -1564,6 +1817,14 @@ st.markdown("<div class='mode-note'>Tip: competitors one per line. If any page b
 
 show_internal_fetch = st.sidebar.checkbox("Admin: show internal fetch log", value=False)
 
+# Optional: GSC status (no UI config, purely env/secrets)
+gsc_service, gsc_site_url = init_gsc_service()
+gsc_days = 28
+if show_internal_fetch:
+    st.sidebar.markdown("### Integrations")
+    st.sidebar.write(f"Playwright enabled: {PLAYWRIGHT_OK}")
+    st.sidebar.write(f"GSC available: {bool(gsc_service and gsc_site_url)} (GSC lib: {GSC_OK})")
+
 # Keep last results visible
 if "update_df" not in st.session_state:
     st.session_state.update_df = pd.DataFrame()
@@ -1571,10 +1832,8 @@ if "update_fetch" not in st.session_state:
     st.session_state.update_fetch = []
 if "seo_update_df" not in st.session_state:
     st.session_state.seo_update_df = pd.DataFrame()
-if "gaps_update_summary_text" not in st.session_state:
-    st.session_state.gaps_update_summary_text = ""
-if "seo_update_summary_text" not in st.session_state:
-    st.session_state.seo_update_summary_text = ""
+if "ai_vis_update_df" not in st.session_state:
+    st.session_state.ai_vis_update_df = pd.DataFrame()
 
 if "new_df" not in st.session_state:
     st.session_state.new_df = pd.DataFrame()
@@ -1582,10 +1841,8 @@ if "new_fetch" not in st.session_state:
     st.session_state.new_fetch = []
 if "seo_new_df" not in st.session_state:
     st.session_state.seo_new_df = pd.DataFrame()
-if "gaps_new_summary_text" not in st.session_state:
-    st.session_state.gaps_new_summary_text = ""
-if "seo_new_summary_text" not in st.session_state:
-    st.session_state.seo_new_summary_text = ""
+if "ai_vis_new_df" not in st.session_state:
+    st.session_state.ai_vis_new_df = pd.DataFrame()
 
 
 # =====================================================
@@ -1602,11 +1859,11 @@ if st.session_state.mode == "update":
     )
     competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
 
-    # NEW: Target FKW option (acts on SEO table signals)
-    target_fkw_input = st.text_input(
-        "Target FKW (optional) — used for placement/repeats in the SEO table",
-        placeholder="e.g., living in business bay",
-        key="target_fkw_update",
+    # FKW OPTION (acts on SEO + ranking + AI visibility)
+    target_fkw = st.text_input(
+        "Target FKW (optional, but recommended)",
+        placeholder="e.g. living in business bay",
+        help="Used for keyword placement signals, UAE ranking (GSC if connected), and AI Visibility table."
     )
 
     run = st.button("Run analysis", type="primary")
@@ -1618,10 +1875,6 @@ if st.session_state.mode == "update":
         if not competitors:
             st.error("Add at least one competitor URL.")
             st.stop()
-
-        # reset summaries on new run
-        st.session_state.gaps_update_summary_text = ""
-        st.session_state.seo_update_summary_text = ""
 
         # 1) HARD: Bayut must be available (or paste)
         with st.spinner("Fetching Bayut (no exceptions)…"):
@@ -1659,7 +1912,7 @@ if st.session_state.mode == "update":
             else pd.DataFrame(columns=["Headers", "Description", "Source"])
         )
 
-        # 4) Build SEO Analysis table (Target FKW acts here)
+        # 4) SEO Analysis table (Target FKW + TRUE header counts + UAE ranking if GSC connected)
         st.session_state.seo_update_df = build_seo_analysis_update(
             bayut_url=bayut_url.strip(),
             bayut_fr=bayut_fr,
@@ -1667,48 +1920,102 @@ if st.session_state.mode == "update":
             competitors=competitors,
             comp_fr_map=comp_fr_map,
             comp_tree_map=comp_tree_map,
-            target_fkw=target_fkw_input.strip(),
+            target_fkw=target_fkw.strip(),
+            gsc_service=gsc_service,
+            gsc_site_url=gsc_site_url,
         )
+
+        # 5) AI Visibility table (UAE desktop + mobile) for Bayut + competitor domains (SERP API optional)
+        sites = [("Bayut", domain_of(bayut_url.strip()))] + [(site_name(u), domain_of(u)) for u in competitors]
+        st.session_state.ai_vis_update_df = build_ai_visibility_table(
+            target_query=clean(target_fkw) if clean(target_fkw) else "",
+            sites=sites
+        )
+
+        # reset summary boxes when re-run
+        st.session_state["show_gaps_summary_update"] = False
+        st.session_state["show_seo_summary_update"] = False
+        st.session_state["show_ai_vis_summary_update"] = False
+        st.session_state.pop("gaps_update_summary_text", None)
+        st.session_state.pop("seo_update_summary_text", None)
+        st.session_state.pop("ai_vis_update_summary_text", None)
 
     if show_internal_fetch and st.session_state.update_fetch:
         st.sidebar.markdown("### Internal fetch log (Update Mode)")
-        st.sidebar.write(f"Playwright enabled: {PLAYWRIGHT_OK}")
         for u, s in st.session_state.update_fetch:
             st.sidebar.write(u, "—", s)
 
-    # -------- GAPS TABLE HEADER + BUTTON (same line) --------
-    clicked = section_header_with_button("Gaps Table", "Summarize with AI", "btn_sum_gaps_update")
-    if clicked and st.session_state.update_df is not None and not st.session_state.update_df.empty:
-        st.session_state.gaps_update_summary_text = ai_summary_from_gaps_df(st.session_state.update_df)
-
-    if st.session_state.gaps_update_summary_text:
-        render_ai_box(
-            "AI Summary — Gaps",
-            "Generated on demand.",
-            st.session_state.gaps_update_summary_text
-        )
+    # -------------------------
+    # GAPS TABLE (header + button same level; summary appears only after click)
+    # -------------------------
+    show_gaps_summary = section_title_with_button(
+        title="Gaps Table",
+        button_label="Summarize with AI",
+        btn_key="btn_gaps_sum_update",
+        show_key="show_gaps_summary_update"
+    )
 
     if st.session_state.update_df is None or st.session_state.update_df.empty:
         st.info("Run analysis to see results.")
     else:
+        if show_gaps_summary:
+            st.session_state["gaps_update_summary_text"] = ai_summary_from_gaps_df(st.session_state.update_df)
+            st.markdown(
+                f"<div class='ai-summary'><b>AI Summary — Gaps</b><div class='muted'>Generated on demand.</div>"
+                f"<pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state['gaps_update_summary_text']}</pre></div>",
+                unsafe_allow_html=True
+            )
         render_table(st.session_state.update_df)
 
-    # -------- SEO TABLE HEADER + BUTTON (same line) --------
-    clicked2 = section_header_with_button("SEO Analysis", "Summarize with AI", "btn_sum_seo_update")
-    if clicked2 and st.session_state.seo_update_df is not None and not st.session_state.seo_update_df.empty:
-        st.session_state.seo_update_summary_text = ai_summary_from_seo_df(st.session_state.seo_update_df)
-
-    if st.session_state.seo_update_summary_text:
-        render_ai_box(
-            "AI Summary — SEO",
-            "Generated on demand (target FKW + structure differences).",
-            st.session_state.seo_update_summary_text
-        )
+    # -------------------------
+    # SEO TABLE
+    # -------------------------
+    show_seo_summary = section_title_with_button(
+        title="SEO Analysis",
+        button_label="Summarize with AI",
+        btn_key="btn_seo_sum_update",
+        show_key="show_seo_summary_update"
+    )
 
     if st.session_state.seo_update_df is None or st.session_state.seo_update_df.empty:
         st.info("Run analysis to see SEO comparison.")
     else:
+        if show_seo_summary:
+            st.session_state["seo_update_summary_text"] = ai_summary_from_seo_df(st.session_state.seo_update_df)
+            st.markdown(
+                f"<div class='ai-summary'><b>AI Summary — SEO</b><div class='muted'>Target-FKW signals + structure + UAE rank (if GSC connected).</div>"
+                f"<pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state['seo_update_summary_text']}</pre></div>",
+                unsafe_allow_html=True
+            )
         render_table(st.session_state.seo_update_df)
+
+    # -------------------------
+    # AI VISIBILITY TABLE
+    # -------------------------
+    show_ai_vis_summary = section_title_with_button(
+        title="AI Visibility (UAE)",
+        button_label="Summarize with AI",
+        btn_key="btn_ai_vis_sum_update",
+        show_key="show_ai_vis_summary_update"
+    )
+
+    if st.session_state.ai_vis_update_df is None or st.session_state.ai_vis_update_df.empty:
+        st.info("Provide Target FKW and run analysis to see AI Visibility. (Requires SERP API key to be fully automatic.)")
+    else:
+        if show_ai_vis_summary:
+            dfv = st.session_state.ai_vis_update_df
+            total_yes = int((dfv["Cited in AI Overview"] == "Yes").sum()) if "Cited in AI Overview" in dfv.columns else 0
+            present = dfv["UAE AI Overview present"].iloc[0] if "UAE AI Overview present" in dfv.columns and len(dfv) else "Not available"
+            st.session_state["ai_vis_update_summary_text"] = (
+                f"AI Overview present (UAE): {present}\n"
+                f"Total site/device rows cited: {total_yes}"
+            )
+            st.markdown(
+                f"<div class='ai-summary'><b>AI Summary — Visibility</b><div class='muted'>UAE desktop + mobile.</div>"
+                f"<pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state['ai_vis_update_summary_text']}</pre></div>",
+                unsafe_allow_html=True
+            )
+        render_table(st.session_state.ai_vis_update_df)
 
 
 # =====================================================
@@ -1725,11 +2032,11 @@ else:
     )
     competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
 
-    # NEW: FKW box (no Bayut row in New Post Mode)
-    target_fkw_input_new = st.text_input(
-        "Target FKW (optional) — used for placement/repeats in the SEO table",
-        placeholder="e.g., living in business bay",
-        key="target_fkw_new",
+    # FKW BOX (requested)
+    target_fkw = st.text_input(
+        "Target FKW (optional, but recommended)",
+        placeholder="e.g. living in business bay",
+        help="Used for keyword placement signals (SEO table) and AI Visibility table."
     )
 
     run = st.button("Generate competitor coverage", type="primary")
@@ -1741,10 +2048,6 @@ else:
         if not competitors:
             st.error("Add at least one competitor URL.")
             st.stop()
-
-        # reset summaries on new run
-        st.session_state.gaps_new_summary_text = ""
-        st.session_state.seo_new_summary_text = ""
 
         with st.spinner("Fetching ALL competitors (no exceptions)…"):
             comp_fr_map = resolve_all_or_require_manual(agent, competitors, st_key_prefix="comp_new")
@@ -1766,53 +2069,104 @@ else:
             else pd.DataFrame(columns=["Headers covered", "Content covered", "Source"])
         )
 
-        # SEO Analysis (competitors only) + target FKW acts here
+        # SEO Analysis (New Post Mode) — no long-tail, uses Target FKW
         st.session_state.seo_new_df = build_seo_analysis_newpost(
+            new_title=new_title.strip(),
             competitors=competitors,
             comp_fr_map=comp_fr_map,
             comp_tree_map=comp_tree_map,
-            target_fkw=target_fkw_input_new.strip() or pick_fkw_auto(new_title.strip(), new_title.strip(), new_title.strip(), ""),
+            target_fkw=target_fkw.strip(),
+            gsc_service=gsc_service,
+            gsc_site_url=gsc_site_url,
         )
+
+        # AI Visibility (UAE) — competitor domains only (SERP API optional)
+        sites = [(site_name(u), domain_of(u)) for u in competitors]
+        st.session_state.ai_vis_new_df = build_ai_visibility_table(
+            target_query=clean(target_fkw) if clean(target_fkw) else "",
+            sites=sites
+        )
+
+        # reset summary boxes when re-run
+        st.session_state["show_coverage_summary_new"] = False
+        st.session_state["show_seo_summary_new"] = False
+        st.session_state["show_ai_vis_summary_new"] = False
+        st.session_state.pop("coverage_new_summary_text", None)
+        st.session_state.pop("seo_new_summary_text", None)
+        st.session_state.pop("ai_vis_new_summary_text", None)
 
     if show_internal_fetch and st.session_state.new_fetch:
         st.sidebar.markdown("### Internal fetch log (New Post Mode)")
-        st.sidebar.write(f"Playwright enabled: {PLAYWRIGHT_OK}")
         for u, s in st.session_state.new_fetch:
             st.sidebar.write(u, "—", s)
 
-    # Coverage table header + button (same line)
-    clicked = section_header_with_button("Competitor Coverage", "Summarize with AI", "btn_sum_cov_new")
-    if clicked and st.session_state.new_df is not None and not st.session_state.new_df.empty:
-        # simple deterministic summary for coverage
-        df = st.session_state.new_df
-        total = len(df)
-        by_src = df["Source"].value_counts().to_dict() if "Source" in df.columns else {}
-        lines = [f"Total coverage rows: {total}."]
-        if by_src:
-            lines.append("Rows by competitor: " + ", ".join([f"{k}: {v}" for k,v in by_src.items()]) + ".")
-        st.session_state.gaps_new_summary_text = "\n".join(lines)
-
-    if st.session_state.gaps_new_summary_text:
-        render_ai_box("AI Summary — Coverage", "Generated on demand.", st.session_state.gaps_new_summary_text)
+    # Competitor Coverage
+    show_cov_summary = section_title_with_button(
+        title="Competitor Coverage",
+        button_label="Summarize with AI",
+        btn_key="btn_cov_sum_new",
+        show_key="show_coverage_summary_new"
+    )
 
     if st.session_state.new_df is None or st.session_state.new_df.empty:
         st.info("Generate competitor coverage to see results.")
     else:
+        if show_cov_summary:
+            # deterministic summary
+            dfc = st.session_state.new_df
+            src_counts = dfc["Source"].value_counts().to_dict() if "Source" in dfc.columns else {}
+            st.session_state["coverage_new_summary_text"] = (
+                "Rows by competitor: " + ", ".join([f"{k}: {v}" for k, v in src_counts.items()])
+            )
+            st.markdown(
+                f"<div class='ai-summary'><b>AI Summary — Coverage</b><div class='muted'>Generated on demand.</div>"
+                f"<pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state['coverage_new_summary_text']}</pre></div>",
+                unsafe_allow_html=True
+            )
         render_table(st.session_state.new_df)
 
-    # SEO table header + button (same line)
-    clicked2 = section_header_with_button("SEO Analysis", "Summarize with AI", "btn_sum_seo_new")
-    if clicked2 and st.session_state.seo_new_df is not None and not st.session_state.seo_new_df.empty:
-        st.session_state.seo_new_summary_text = ai_summary_from_seo_df(st.session_state.seo_new_df)
-
-    if st.session_state.seo_new_summary_text:
-        render_ai_box(
-            "AI Summary — SEO",
-            "Generated on demand (target FKW + competitor structure signals).",
-            st.session_state.seo_new_summary_text
-        )
+    # SEO Analysis
+    show_seo_summary = section_title_with_button(
+        title="SEO Analysis",
+        button_label="Summarize with AI",
+        btn_key="btn_seo_sum_new",
+        show_key="show_seo_summary_new"
+    )
 
     if st.session_state.seo_new_df is None or st.session_state.seo_new_df.empty:
         st.info("Generate competitor coverage to see SEO comparison.")
     else:
+        if show_seo_summary:
+            st.session_state["seo_new_summary_text"] = ai_summary_from_seo_df(st.session_state.seo_new_df)
+            st.markdown(
+                f"<div class='ai-summary'><b>AI Summary — SEO</b><div class='muted'>Target-FKW signals + structure.</div>"
+                f"<pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state['seo_new_summary_text']}</pre></div>",
+                unsafe_allow_html=True
+            )
         render_table(st.session_state.seo_new_df)
+
+    # AI Visibility
+    show_ai_vis_summary = section_title_with_button(
+        title="AI Visibility (UAE)",
+        button_label="Summarize with AI",
+        btn_key="btn_ai_vis_sum_new",
+        show_key="show_ai_vis_summary_new"
+    )
+
+    if st.session_state.ai_vis_new_df is None or st.session_state.ai_vis_new_df.empty:
+        st.info("Provide Target FKW and run analysis to see AI Visibility. (Requires SERP API key to be fully automatic.)")
+    else:
+        if show_ai_vis_summary:
+            dfv = st.session_state.ai_vis_new_df
+            total_yes = int((dfv["Cited in AI Overview"] == "Yes").sum()) if "Cited in AI Overview" in dfv.columns else 0
+            present = dfv["UAE AI Overview present"].iloc[0] if "UAE AI Overview present" in dfv.columns and len(dfv) else "Not available"
+            st.session_state["ai_vis_new_summary_text"] = (
+                f"AI Overview present (UAE): {present}\n"
+                f"Total competitor site/device rows cited: {total_yes}"
+            )
+            st.markdown(
+                f"<div class='ai-summary'><b>AI Summary — Visibility</b><div class='muted'>UAE desktop + mobile.</div>"
+                f"<pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state['ai_vis_new_summary_text']}</pre></div>",
+                unsafe_allow_html=True
+            )
+        render_table(st.session_state.ai_vis_new_df)
