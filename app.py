@@ -808,21 +808,25 @@ def summarize_content_gap_action(header: str, comp_content: str, bayut_content: 
 
 def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: str) -> Optional[dict]:
     """
-    ONE FAQs row only IF the competitor has an explicit FAQ section heading.
-    Description = missing FAQ TOPICS only (not questions).
+    ONE FAQs row only if competitor has an explicit FAQ heading AND it contains enough questions.
+    This prevents false "FAQs" when the page has a stray FAQ label.
     """
 
-    # Competitor must have explicit FAQ section
+    # Competitor must have explicit FAQ section heading
     comp_faq_nodes = find_faq_nodes(comp_nodes)
     if not comp_faq_nodes:
         return None
 
+    # Extract competitor FAQ questions
     comp_qs = []
     for fn in comp_faq_nodes:
         comp_qs.extend(extract_questions_from_node(fn))
 
     comp_qs = [q for q in comp_qs if q and len(q) > 5]
-    if not comp_qs:
+
+    # ✅ HARD GATE: if it's not a real FAQ block, don't show it
+    # (prevents PropertyFinder false positives)
+    if len(comp_qs) < 3:
         return None
 
     # Bayut FAQ section (explicit only)
@@ -840,7 +844,7 @@ def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: 
 
     bayut_set = {q_key(q) for q in bayut_qs if q}
 
-    # If Bayut has no FAQ section at all => all competitor FAQ topics are missing
+    # If Bayut has no FAQ section => competitor FAQ topics are considered missing
     if not bayut_faq_nodes:
         topics = faq_subjects_from_questions(comp_qs, limit=10)
         return {
@@ -859,7 +863,6 @@ def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: 
         "Description": "Missing FAQ topics: " + ", ".join(topics) + ".",
         "Source": source_link(comp_url),
     }
-
 
 # =====================================================
 # SECTION EXTRACTION (HEADER-FIRST COMPARISON)
