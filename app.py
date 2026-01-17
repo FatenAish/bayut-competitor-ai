@@ -644,44 +644,119 @@ def flatten(nodes: List[dict]) -> List[dict]:
 def strip_label(h: str) -> str:
     return clean(re.sub(r"\s*:\s*$", "", (h or "").strip()))
 
+# =========================
+# STRICT FAQ + QUESTION LOGIC (FIXED)
+# - No false FAQs (PropertyFinder issue)
+# - Only treats FAQ when header is EXACTLY "FAQ(s)" or "Frequently Asked Questions"
+# - Extracts questions from typical FAQ markup AND question-like headings/lists inside the FAQ block
+# =========================
+
+FAQ_TITLES = {
+    "faq",
+    "faqs",
+    "frequently asked questions",
+    "frequently asked question",
+}
+
 def header_is_faq(header: str) -> bool:
+    """
+    STRICT: only true when the header is exactly an FAQ title.
+    Prevents false positives like 'faq' appearing inside other words/labels.
+    """
     nh = norm_header(header)
-    return ("faq" in nh) or ("frequently asked" in nh)
+    return nh in FAQ_TITLES
+
 
 def find_faq_nodes(nodes: List[dict]) -> List[dict]:
+    """
+    Find real FAQ sections only:
+    - H2/H3 whose text is exactly FAQ/FAQs/Frequently Asked Questions
+    """
     faq = []
     for x in flatten(nodes):
-        if x["level"] in (2, 3) and header_is_faq(x["header"]):
+        if x["level"] in (2, 3) and header_is_faq(x.get("header", "")):
             faq.append(x)
     return faq
 
+
 def normalize_question(q: str) -> str:
     q = clean(q or "")
-    q = re.sub(r"^\s*\d+[\.\)]\s*", "", q)
+    q = re.sub(r"^\s*\d+[\.\)]\s*", "", q)          # remove "1." or "1)"
+    q = re.sub(r"^\s*[-•]\s*", "", q)              # remove bullets
     q = q.strip()
     return q
 
+
+def _looks_like_question(s: str) -> bool:
+    """
+    Accept questions in realistic FAQ formats:
+    - ends with ?
+    - starts with common question words
+    - short question-style line
+    """
+    s = clean(s)
+    if not s or len(s) < 6:
+        return False
+    s_low = s.lower()
+
+    if "?" in s:
+        return True
+
+    # question starters
+    if re.match(r"^(what|where|when|why|how|who|which|can|is|are|do|does|did|should)\b", s_low):
+        return True
+
+    # common FAQ phrasing without ?
+    if any(p in s_low for p in ["what is", "how to", "is it", "are there", "can i", "should i"]):
+        return True
+
+    return False
+
+
 def extract_questions_from_node(node: dict) -> List[str]:
-    qs = []
+    """
+    Extract questions ONLY from inside an FAQ node.
+    Works with:
+    - question-like headings (H3/H4)
+    - list items
+    - accordion/button labels
+    - short lines in content
+    """
+    qs: List[str] = []
+
     def walk(n: dict):
+        # 1) children headings
         for c in n.get("children", []):
             hdr = clean(c.get("header", ""))
-            if not hdr or is_noise_header(hdr):
-                walk(c)
-                continue
-            if "?" in hdr or re.match(r"^\s*\d+[\.\)]\s+.*", hdr):
+            if hdr and not is_noise_header(hdr) and _looks_like_question(hdr):
                 qs.append(normalize_question(hdr))
+
+            # 2) also inspect content chunks (some sites put Qs in text)
+            txt = clean(c.get("content", ""))
+            if txt:
+                # split into short lines/sentences and pick question-like ones
+                chunks = re.split(r"[\\n\\r]+|(?<=[\.\?\!])\s+", txt)
+                for ch in chunks[:50]:
+                    ch = clean(ch)
+                    if not ch or len(ch) > 120:
+                        continue
+                    if _looks_like_question(ch):
+                        qs.append(normalize_question(ch))
+
             walk(c)
+
     walk(node)
 
+    # de-dupe (strict)
     seen = set()
     out = []
     for q in qs:
-        k = norm_header(q).replace(" ", "")
-        if k in seen:
+        k = norm_header(q)
+        if not k or k in seen:
             continue
         seen.add(k)
         out.append(q)
+
     return out[:25]
 
 
