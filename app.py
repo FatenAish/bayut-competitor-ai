@@ -722,25 +722,17 @@ def theme_flags(text: str) -> set:
     return flags
 
 def summarize_missing_section_action(header: str, subheaders: Optional[List[str]], comp_content: str) -> str:
-    """
-    Neutral description:
-    - describes what competitor covers under this header
-    - implies Bayut doesn't cover it (because this function is used for missing headers)
-    """
     hn = norm_header(header)
 
-    # Special: decision framing intro
     if ("importance" in hn and "pros" in hn and "cons" in hn) or ("consider" in hn and "pros" in hn and "cons" in hn):
         return "Competitor includes decision framing on how to weigh pros vs cons before concluding."
 
-    # Special: comparisons
     if "comparison" in hn or "compare" in hn or "vs" in hn or "versus" in hn:
         if subheaders:
             hint = ", ".join(subheaders[:3])
             return f"Competitor includes a comparison section and breaks it into alternatives such as: {hint}."
         return "Competitor includes a comparison section explaining alternatives and how they differ."
 
-    # General: infer themes from content (short + neutral)
     themes = list(theme_flags(comp_content))
     if themes:
         human_map = {
@@ -754,9 +746,38 @@ def summarize_missing_section_action(header: str, subheaders: Optional[List[str]
             "comparison": "comparison context",
         }
         picks = [human_map.get(x, x) for x in themes][:3]
-        return f"Competitor covers this as a dedicated section with practical details (e.g., {', '.join(picks)})."
+        return (
+            f"Competitor covers this as a dedicated section with practical details (e.g., {', '.join(picks)}). "
+            f"It adds context and specifics beyond a general mention."
+        )
 
-    return "Competitor covers this as a dedicated section with additional practical details."
+    return "Competitor covers this as a dedicated section with extra context and practical specifics."
+
+
+def summarize_content_gap_action(header: str, comp_content: str, bayut_content: str) -> str:
+    comp_flags = theme_flags(comp_content)
+    bayut_flags = theme_flags(bayut_content)
+    missing = list(comp_flags - bayut_flags)
+
+    human_map = {
+        "transport": "commute & connectivity",
+        "traffic_parking": "traffic/parking realities",
+        "cost": "cost considerations",
+        "lifestyle": "lifestyle & vibe",
+        "daily_life": "day-to-day convenience",
+        "safety": "safety angle",
+        "decision_frame": "decision framing",
+        "comparison": "comparison context",
+    }
+    missing_human = [human_map.get(x, x) for x in missing][:4]
+
+    if missing_human:
+        return (
+            "Competitor goes deeper on: " + ", ".join(missing_human) + ". "
+            "Bayut mentions the header but doesn’t cover these angles as clearly."
+        )
+
+    return "Competitor provides more depth and clearer specifics than Bayut under the same header."
 
 
 def summarize_content_gap_action(header: str, comp_content: str, bayut_content: str) -> str:
