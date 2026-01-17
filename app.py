@@ -669,13 +669,43 @@ def header_is_faq(header: str) -> bool:
 
 def find_faq_nodes(nodes: List[dict]) -> List[dict]:
     """
-    Find real FAQ sections only:
-    - H2/H3 whose text is exactly FAQ/FAQs/Frequently Asked Questions
+    Find REAL FAQ sections only:
+    - H2/H3 header is exactly FAQ/FAQs/Frequently Asked Questions (handled by header_is_faq)
+    - AND the node has meaningful structure (children OR enough question-like text nearby)
+    This prevents false positives where a page has a stray "FAQs" label.
     """
     faq = []
+
     for x in flatten(nodes):
-        if x["level"] in (2, 3) and header_is_faq(x.get("header", "")):
-            faq.append(x)
+        if x.get("level") not in (2, 3):
+            continue
+
+        if not header_is_faq(x.get("header", "")):
+            continue
+
+        # Must look like a real FAQ block:
+        # (A) has children headings/items OR
+        # (B) has multiple question-like lines in its own content
+        children = x.get("children", []) or []
+        own_content = clean(x.get("content", ""))
+
+        # Count question-like lines in own content (if any)
+        qlike_in_content = 0
+        if own_content:
+            chunks = re.split(r"[\n\r]+|(?<=[\.\?\!])\s+", own_content)
+            for ch in chunks[:60]:
+                ch = clean(ch)
+                if not ch or len(ch) > 140:
+                    continue
+                if _looks_like_question(ch):
+                    qlike_in_content += 1
+
+        # Hard gate: require structure
+        if len(children) == 0 and qlike_in_content < 3:
+            continue
+
+        faq.append(x)
+
     return faq
 
 
@@ -692,21 +722,20 @@ def _looks_like_question(s: str) -> bool:
     Accept questions in realistic FAQ formats:
     - ends with ?
     - starts with common question words
-    - short question-style line
+    - common FAQ phrasing without ?
     """
     s = clean(s)
     if not s or len(s) < 6:
         return False
+
     s_low = s.lower()
 
     if "?" in s:
         return True
 
-    # question starters
     if re.match(r"^(what|where|when|why|how|who|which|can|is|are|do|does|did|should)\b", s_low):
         return True
 
-    # common FAQ phrasing without ?
     if any(p in s_low for p in ["what is", "how to", "is it", "are there", "can i", "should i"]):
         return True
 
@@ -716,32 +745,36 @@ def _looks_like_question(s: str) -> bool:
 def extract_questions_from_node(node: dict) -> List[str]:
     """
     Extract questions ONLY from inside an FAQ node.
-    Works with:
-    - question-like headings (H3/H4)
-    - list items
-    - accordion/button labels
-    - short lines in content
+
+    Fixes:
+    - Extract from FAQ node's OWN content too (some sites place questions directly under the FAQ heading)
+    - Also reads headings + content from children
+    - Dedupes cleanly
     """
     qs: List[str] = []
 
+    def add_from_text_block(txt: str):
+        txt = clean(txt or "")
+        if not txt:
+            return
+        chunks = re.split(r"[\n\r]+|(?<=[\.\?\!])\s+", txt)
+        for ch in chunks[:80]:
+            ch = clean(ch)
+            if not ch or len(ch) > 140:
+                continue
+            if _looks_like_question(ch):
+                qs.append(normalize_question(ch))
+
+    # 0) FAQ node own content (important)
+    add_from_text_block(node.get("content", ""))
+
     def walk(n: dict):
-        # 1) children headings
         for c in n.get("children", []):
             hdr = clean(c.get("header", ""))
             if hdr and not is_noise_header(hdr) and _looks_like_question(hdr):
                 qs.append(normalize_question(hdr))
 
-            # 2) also inspect content chunks (some sites put Qs in text)
-            txt = clean(c.get("content", ""))
-            if txt:
-                # split into short lines/sentences and pick question-like ones
-                chunks = re.split(r"[\\n\\r]+|(?<=[\.\?\!])\s+", txt)
-                for ch in chunks[:50]:
-                    ch = clean(ch)
-                    if not ch or len(ch) > 120:
-                        continue
-                    if _looks_like_question(ch):
-                        qs.append(normalize_question(ch))
+            add_from_text_block(c.get("content", ""))
 
             walk(c)
 
@@ -758,6 +791,7 @@ def extract_questions_from_node(node: dict) -> List[str]:
         out.append(q)
 
     return out[:25]
+
 
 
 # =====================================================
