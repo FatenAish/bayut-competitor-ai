@@ -150,14 +150,12 @@ st.markdown(
         color:#6B7280;
         font-size: 13px;
       }}
-      .right-col {{
-        position: sticky;
-        top: 12px;
-      }}
-      .helper {{
-        color:#6B7280;
-        font-size: 12px;
-        margin-top: 6px;
+
+      /* Make the popover button look consistent */
+      [data-testid="stPopover"] button {{
+        background: {BAYUT_GREEN} !important;
+        color: white !important;
+        border: 0 !important;
       }}
     </style>
     """,
@@ -403,6 +401,7 @@ NOISE_PATTERNS = [
 
 GENERIC_SECTION_HEADERS = {
     "introduction", "overview",
+    # user wants conclusion/final thoughts visible, so don't add them here
 }
 
 STOP = {
@@ -658,6 +657,9 @@ def source_link(url: str) -> str:
     n = site_name(url)
     return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{n}</a>'
 
+def strip_html(s: str) -> str:
+    return clean(re.sub(r"<[^>]+>", "", str(s or "")))
+
 def flatten(nodes: List[dict]) -> List[dict]:
     out = []
     def walk(n: dict, parent=None):
@@ -677,33 +679,40 @@ def flatten(nodes: List[dict]) -> List[dict]:
 def strip_label(h: str) -> str:
     return clean(re.sub(r"\s*:\s*$", "", (h or "").strip()))
 
-def parse_competitors_with_fkw(text: str) -> Tuple[List[str], Dict[str, str]]:
+def parse_competitor_lines(text: str) -> Tuple[List[str], Dict[str, str]]:
     """
-    Each line:
-      URL
-      OR
-      URL | FKW
+    Allows per-competitor forced FKW:
+    - URL
+    - URL | forced fkw
+    - URL || forced fkw
     """
     urls: List[str] = []
-    fkw_map: Dict[str, str] = {}
+    forced: Dict[str, str] = {}
 
     for raw in (text or "").splitlines():
         line = raw.strip()
         if not line:
             continue
 
-        if "|" in line:
-            left, right = line.split("|", 1)
-            url = left.strip()
-            fkw = right.strip()
-            if url:
-                urls.append(url)
-                if fkw:
-                    fkw_map[url] = clean(fkw)
+        if "||" in line:
+            parts = [p.strip() for p in line.split("||", 1)]
+        elif " | " in line:
+            parts = [p.strip() for p in line.split(" | ", 1)]
+        elif "|" in line:
+            parts = [p.strip() for p in line.split("|", 1)]
         else:
-            urls.append(line)
+            parts = [line]
 
-    # de-dupe while preserving order
+        url = parts[0].strip()
+        if url:
+            urls.append(url)
+
+        if len(parts) > 1:
+            fkw = clean(parts[1])
+            if fkw:
+                forced[url] = fkw
+
+    # dedupe but keep order
     seen = set()
     out = []
     for u in urls:
@@ -712,7 +721,7 @@ def parse_competitors_with_fkw(text: str) -> Tuple[List[str], Dict[str, str]]:
         seen.add(u)
         out.append(u)
 
-    return out, fkw_map
+    return out, forced
 
 
 # =====================================================
@@ -743,23 +752,15 @@ def _looks_like_question(s: str) -> bool:
     return False
 
 def find_faq_nodes(nodes: List[dict]) -> List[dict]:
-    """
-    Finds FAQ nodes only if:
-    - Header is exactly FAQ/FAQs/Frequently Asked Questions
-    AND
-    - It has real question structure: >= 3 question-like items inside
-    """
     faq = []
     for x in flatten(nodes):
         if x.get("level") not in (2, 3):
             continue
         if not header_is_faq(x.get("header", "")):
             continue
-
         qs = extract_questions_from_node(x)
         if len(qs) >= 3:
             faq.append(x)
-
     return faq
 
 def normalize_question(q: str) -> str:
@@ -962,7 +963,7 @@ def dedupe_rows(rows: List[dict]) -> List[dict]:
     seen = set()
     for r in rows:
         hk = norm_header(r.get("Headers", ""))
-        sk = norm_header(re.sub(r"<[^>]+>", "", r.get("Source", "")))
+        sk = norm_header(strip_html(r.get("Source", "")))
         k = hk + "||" + sk
         if k in seen:
             continue
@@ -1081,6 +1082,7 @@ def update_mode_rows_header_first(
 
     missing_h2_norms = set()
 
+    # 1) Missing H2
     missing_rows = []
     for _, cs in comp_h2_ranked:
         m = find_best_bayut_match(cs["header"], bayut_h2, min_score=0.73)
@@ -1112,6 +1114,7 @@ def update_mode_rows_header_first(
 
     rows.extend(missing_rows)
 
+    # 2) Missing H3 only if parent H2 is NOT missing
     if len(rows) < max_missing_headers:
         for cs in comp_h3:
             parent = cs.get("parent_h2") or ""
@@ -1137,6 +1140,7 @@ def update_mode_rows_header_first(
             if len(rows) >= max_missing_headers:
                 break
 
+    # 3) Matching headers where competitor is stronger => (missing parts)
     missing_parts_rows = []
     for cs in comp_secs:
         m = find_best_bayut_match(cs["header"], bayut_secs, min_score=0.73)
@@ -1168,6 +1172,7 @@ def update_mode_rows_header_first(
 
     rows.extend(missing_parts_rows)
 
+    # 4) FAQs — ONE row only (only when competitor truly has FAQ heading)
     faq_row = missing_faqs_row(bayut_nodes, comp_nodes, comp_url)
     if faq_row:
         rows.append(faq_row)
@@ -1176,7 +1181,7 @@ def update_mode_rows_header_first(
 
 
 # =====================================================
-# SEO ANALYSIS (NO LONG-TAIL COLUMN + TRUE HEADER COUNTS)
+# SEO ANALYSIS (NEW TABLE) — TRUE HEADER COUNTS + NO LONG-TAIL COLUMN
 # =====================================================
 def url_slug(url: str) -> str:
     try:
@@ -1227,8 +1232,7 @@ def extract_media_used(html: str) -> str:
 
 def count_headers_true_from_html(html: str) -> Optional[Dict[str, int]]:
     """
-    TRUE counts only when HTML exists.
-    No 'noise' filtering. Counts actual H1-H4 tags inside <article> if present, else whole page.
+    TRUE tag counts (only if we have real HTML for the page).
     """
     if not html:
         return None
@@ -1243,12 +1247,6 @@ def count_headers_true_from_html(html: str) -> Optional[Dict[str, int]]:
         "H4": len(root.find_all("h4")),
     }
 
-def headers_summary_true(fr: FetchResult) -> str:
-    hc = count_headers_true_from_html(fr.html or "")
-    if not hc:
-        return "Not available (no HTML)"
-    return f"H1:{hc['H1']} | H2:{hc['H2']} | H3:{hc['H3']} | H4:{hc['H4']}"
-
 def tokenize(text: str) -> List[str]:
     text = (text or "").lower()
     text = re.sub(r"[^a-z0-9\s]", " ", text)
@@ -1256,6 +1254,9 @@ def tokenize(text: str) -> List[str]:
     return toks
 
 def phrase_candidates(text: str, n_min=2, n_max=4) -> Dict[str, int]:
+    """
+    No long-tail extraction here. We keep phrases 2–4 words max.
+    """
     toks = tokenize(text)
     freq: Dict[str, int] = {}
     for n in range(n_min, n_max + 1):
@@ -1268,19 +1269,18 @@ def phrase_candidates(text: str, n_min=2, n_max=4) -> Dict[str, int]:
             if all(w in STOP or w in GENERIC_STOP for w in chunk):
                 continue
             phrase = " ".join(chunk)
-            if len(phrase) < 7:
+            if len(phrase) < 8:
                 continue
             freq[phrase] = freq.get(phrase, 0) + 1
     return freq
 
-def pick_fkw_skw(seo_title: str, h1: str, headings_blob: str) -> Tuple[str, str]:
+def pick_fkw_skw(seo_title: str, h1: str, headings_blob: str, body_text: str) -> Tuple[str, str]:
     """
-    Cleaner, more logical extraction:
-    - Use ONLY title + H1 + headings (not body) to avoid noisy generic long phrases.
-    - FKW: best scoring 2-4 word phrase (title/H1 boosted).
-    - SKWs: 3-6 additional phrases (2-4 words) with low overlap.
+    Returns (FKW, SKWs)
+    - FKW: best 2–4 word phrase boosted by title/H1 presence
+    - SKWs: 3–6 phrases (2–4 words)
     """
-    base = " ".join([seo_title or "", h1 or "", headings_blob or ""])
+    base = " ".join([seo_title or "", h1 or "", headings_blob or "", body_text or ""])
     freq = phrase_candidates(base, n_min=2, n_max=4)
     if not freq:
         return ("Not available", "Not available")
@@ -1293,34 +1293,32 @@ def pick_fkw_skw(seo_title: str, h1: str, headings_blob: str) -> Tuple[str, str]
         n = len(ph.split())
         boost = 1.0
         if ph in title_low:
-            boost += 1.0
+            boost += 0.9
         if ph in h1_low:
-            boost += 0.7
-        # discourage phrases made mostly of generic terms
-        generic_hits = sum(1 for w in ph.split() if w in GENERIC_STOP)
-        generic_penalty = 0.85 if generic_hits >= 2 else (0.92 if generic_hits == 1 else 1.0)
-        score = (c * boost) * generic_penalty * (1.05 if n == 3 else 1.0)
-        scored.append((score, ph))
+            boost += 0.6
+        # prefer 2-4 words only
+        length_bonus = 1.15 if 2 <= n <= 4 else 0.8
+        score = (c * boost) * length_bonus
+        scored.append((score, ph, c, n))
 
     scored.sort(key=lambda x: x[0], reverse=True)
 
-    fkw = scored[0][1]
+    fkw = scored[0][1] if scored else "Not available"
 
     fkw_set = set(fkw.split())
     skws = []
-    for _, ph in scored[1:]:
+    for _, ph, _, _ in scored:
+        if ph == fkw:
+            continue
         ph_set = set(ph.split())
         overlap = len(ph_set & fkw_set) / max(len(ph_set | fkw_set), 1)
-        if overlap >= 0.70:
+        if overlap >= 0.75:
             continue
         skws.append(ph)
         if len(skws) >= 5:
             break
 
-    return (
-        fkw,
-        ", ".join(skws) if skws else "Not available",
-    )
+    return (fkw, ", ".join(skws) if skws else "Not available")
 
 def get_first_h1(nodes: List[dict]) -> str:
     for x in flatten(nodes):
@@ -1337,7 +1335,7 @@ def headings_blob(nodes: List[dict]) -> str:
             h = clean(x.get("header",""))
             if h and not is_noise_header(h):
                 hs.append(h)
-    return " ".join(hs[:90])
+    return " ".join(hs[:80])
 
 def compute_kw_repetition(text: str, phrase: str) -> str:
     if not text or not phrase or phrase == "Not available":
@@ -1346,7 +1344,7 @@ def compute_kw_repetition(text: str, phrase: str) -> str:
     p = " " + re.sub(r"\s+", " ", (phrase or "").lower()) + " "
     return str(t.count(p))
 
-def seo_row_for_page(label: str, url: str, fr: FetchResult, nodes: List[dict], manual_fkw: Optional[str] = None) -> dict:
+def seo_row_for_page(label: str, url: str, fr: FetchResult, nodes: List[dict], forced_fkw: Optional[str] = None) -> dict:
     seo_title, meta_desc = extract_head_seo(fr.html or "")
 
     h1 = get_first_h1(nodes)
@@ -1356,15 +1354,22 @@ def seo_row_for_page(label: str, url: str, fr: FetchResult, nodes: List[dict], m
     media = extract_media_used(fr.html or "")
     slug = url_slug(url)
 
-    headers_summary = headers_summary_true(fr)
+    # TRUE tag counts only if HTML exists
+    true_counts = count_headers_true_from_html(fr.html or "")
+    if true_counts is None:
+        headers_summary = "Not available"
+    else:
+        headers_summary = f"H1:{true_counts['H1']} | H2:{true_counts['H2']} | H3:{true_counts['H3']} | H4:{true_counts['H4']}"
 
     blob = headings_blob(nodes)
-
-    auto_fkw, skws = pick_fkw_skw(seo_title, h1, blob)
-
-    fkw = clean(manual_fkw) if manual_fkw else auto_fkw
-
     body_text = fr.text or ""
+
+    auto_fkw, skws = pick_fkw_skw(seo_title, h1, blob, body_text)
+
+    fkw = clean(forced_fkw) if forced_fkw else auto_fkw
+    if not fkw:
+        fkw = "Not available"
+
     fkw_count = compute_kw_repetition(body_text, fkw)
 
     return {
@@ -1380,141 +1385,154 @@ def seo_row_for_page(label: str, url: str, fr: FetchResult, nodes: List[dict], m
     }
 
 def build_seo_analysis_update(
-    bayut_url: str, bayut_fr: FetchResult, bayut_nodes: List[dict],
-    competitors: List[str], comp_fr_map: Dict[str, FetchResult], comp_tree_map: Dict[str, dict],
-    comp_manual_fkw: Dict[str, str]
+    bayut_url: str,
+    bayut_fr: FetchResult,
+    bayut_nodes: List[dict],
+    competitors: List[str],
+    comp_fr_map: Dict[str, FetchResult],
+    comp_tree_map: Dict[str, dict],
+    forced_fkw_map: Dict[str, str],
 ) -> pd.DataFrame:
     rows = []
-    rows.append(seo_row_for_page("Bayut", bayut_url, bayut_fr, bayut_nodes, manual_fkw=None))
+    rows.append(seo_row_for_page("Bayut", bayut_url, bayut_fr, bayut_nodes, forced_fkw=None))
     for u in competitors:
         fr = comp_fr_map[u]
         nodes = comp_tree_map[u]["nodes"]
-        rows.append(seo_row_for_page(site_name(u), u, fr, nodes, manual_fkw=comp_manual_fkw.get(u)))
+        rows.append(seo_row_for_page(site_name(u), u, fr, nodes, forced_fkw=forced_fkw_map.get(u)))
     return pd.DataFrame(rows)
 
 def build_seo_analysis_newpost(
-    competitors: List[str], comp_fr_map: Dict[str, FetchResult], comp_tree_map: Dict[str, dict],
-    comp_manual_fkw: Dict[str, str]
+    new_title: str,
+    competitors: List[str],
+    comp_fr_map: Dict[str, FetchResult],
+    comp_tree_map: Dict[str, dict],
+    forced_fkw_map: Dict[str, str],
+    target_fkw: Optional[str],
 ) -> pd.DataFrame:
     rows = []
+
     for u in competitors:
         fr = comp_fr_map[u]
         nodes = comp_tree_map[u]["nodes"]
-        rows.append(seo_row_for_page(site_name(u), u, fr, nodes, manual_fkw=comp_manual_fkw.get(u)))
+        rows.append(seo_row_for_page(site_name(u), u, fr, nodes, forced_fkw=forced_fkw_map.get(u)))
+
+    # Target row (New post) — title only, allow manual FKW box
+    fake_nodes = [{"level": 1, "header": new_title, "content": "", "children": []}]
+    fake_fr = FetchResult(True, "synthetic", 200, "", new_title, None)
+
+    forced = clean(target_fkw) if target_fkw else None
+    row = seo_row_for_page("Target (New Post)", "Not applicable", fake_fr, fake_nodes, forced_fkw=forced)
+
+    row["Slug"] = "Suggested: /" + re.sub(r"[^a-z0-9]+", "-", new_title.lower()).strip("-") + "/"
+    row["Meta description"] = "Suggested: write a 140–160 char meta based on the intro angle."
+    row["Media used"] = "Suggested: 1 hero image + 1 map/graphic (optional)"
+    row["Headers count"] = "Not applicable"
+    row["FKW repeats (body)"] = "Not applicable"
+
+    rows.insert(0, row)
     return pd.DataFrame(rows)
 
-
-# =====================================================
-# "SUMMARIZE WITH AI" (deterministic but presented as AI box)
-# =====================================================
-def ai_summary_gaps(df: pd.DataFrame) -> str:
+def ai_summary_from_gaps_df(df: pd.DataFrame) -> str:
     if df is None or df.empty:
-        return "No gap rows to summarize."
+        return "No gaps to summarize."
+
+    # normalize source labels
+    src_col = df.get("Source")
+    if src_col is None:
+        return "No gaps to summarize."
+
+    sources = [strip_html(x) for x in df["Source"].tolist()]
+    headers = [clean(str(x)) for x in df["Headers"].tolist()]
 
     total = len(df)
-    by_comp = df["Source"].astype(str).value_counts().to_dict()
+    by_src: Dict[str, int] = {}
+    for s in sources:
+        by_src[s] = by_src.get(s, 0) + 1
 
-    # extract readable competitor names (anchor text) if present
-    def clean_source(s: str) -> str:
-        return re.sub(r"<[^>]+>", "", s).strip()
-
-    comp_counts = {}
-    for k, v in by_comp.items():
-        comp_counts[clean_source(k)] = v
-
-    # most repeated headers
-    headers = df["Headers"].astype(str).tolist()
-    h_counts = {}
+    header_counts: Dict[str, int] = {}
     for h in headers:
-        hk = clean(h)
-        if not hk:
-            continue
-        h_counts[hk] = h_counts.get(hk, 0) + 1
-    top_headers = sorted(h_counts.items(), key=lambda x: x[1], reverse=True)[:6]
+        header_counts[h] = header_counts.get(h, 0) + 1
 
-    lines = []
-    lines.append(f"High-level snapshot (what matters first).")
-    lines.append(f"Total gap rows: {total}. Rows by competitor:")
+    top_headers = sorted(header_counts.items(), key=lambda x: x[1], reverse=True)[:6]
+    top_headers_txt = ", ".join([f"{h} ({c})" for h, c in top_headers]) if top_headers else "None"
 
-    for name, c in list(comp_counts.items())[:8]:
-        lines.append(f"{name}: {c}")
+    by_src_txt = ", ".join([f"{k}: {v}" for k, v in sorted(by_src.items(), key=lambda x: x[1], reverse=True)])
 
-    if top_headers:
-        lines.append("")
-        lines.append("Most repeated gap headers:")
-        lines.append(", ".join([f"{h} ({c})" for h, c in top_headers]))
+    has_faq = any(norm_header(h) == "faqs" or norm_header(h) == "faq" for h in headers)
 
-    # FAQ mention
-    if any(norm_header(h) == "faqs" or "faq" in norm_header(h) for h in headers):
-        lines.append("")
+    lines = [
+        "High-level snapshot (what matters first):",
+        f"Total gap rows: {total}. Rows by competitor: {by_src_txt or 'None'}.",
+        f"Most repeated gap headers: {top_headers_txt}.",
+    ]
+    if has_faq:
         lines.append("FAQs: at least one competitor has a true FAQ section gap.")
-
     return "\n".join(lines)
 
-def ai_summary_seo_update(df: pd.DataFrame) -> str:
+def ai_summary_from_seo_df(df: pd.DataFrame) -> str:
     if df is None or df.empty:
         return "No SEO data to summarize."
 
-    # Find Bayut
-    bayut = None
+    # Identify Target + Bayut if present
+    def get_row(page_name: str):
+        for _, r in df.iterrows():
+            if str(r.get("Page","")).strip().lower() == page_name.lower():
+                return r
+        return None
+
+    target = None
     for _, r in df.iterrows():
-        if str(r.get("Page","")).lower() == "bayut":
-            bayut = r
+        if str(r.get("Page","")).lower().startswith("target"):
+            target = r
             break
 
-    if bayut is None:
-        return "No Bayut row found to summarize against."
+    bayut = get_row("Bayut")
 
-    def parse_h2(s: str) -> int:
-        m = re.search(r"H2:(\d+)", str(s))
-        return int(m.group(1)) if m else 0
+    lines = ["Target-FKW signals + structure differences."]
 
-    b_h2 = parse_h2(bayut.get("Headers count", ""))
-    b_fkw = str(bayut.get("FKW",""))
-    b_rep = str(bayut.get("FKW repeats (body)",""))
+    if target is not None:
+        lines.append(f"Target FKW: “{str(target.get('FKW','Not available'))}” (from title/H1/headings/body).")
 
-    lines = []
-    lines.append("Target-FKW signals + structure differences.")
-    lines.append(f"Bayut FKW: “{b_fkw}” | repeats in body: {b_rep} | H2 sections: {b_h2}")
+    if bayut is not None:
+        lines.append(f"Bayut structure (true tag counts): {str(bayut.get('Headers count','Not available'))}.")
+        lines.append(f"Bayut FKW: “{str(bayut.get('FKW','Not available'))}” | repeats: {str(bayut.get('FKW repeats (body)','Not available'))}.")
 
+        for _, r in df.iterrows():
+            page = str(r.get("Page",""))
+            if page.lower() in ("bayut",) or page.lower().startswith("target"):
+                continue
+
+            hc = str(r.get("Headers count", "Not available"))
+            fkw = str(r.get("FKW", "Not available"))
+            rep = str(r.get("FKW repeats (body)", "Not available"))
+
+            notes = []
+            if hc != "Not available" and str(bayut.get("Headers count","")) != "Not available":
+                # quick depth check on H2
+                m1 = re.search(r"H2:(\d+)", hc)
+                m2 = re.search(r"H2:(\d+)", str(bayut.get("Headers count","")))
+                if m1 and m2 and int(m1.group(1)) > int(m2.group(1)):
+                    notes.append("more H2 sections")
+
+            if fkw != "Not available":
+                notes.append(f"FKW: “{fkw}”")
+            if rep != "Not available":
+                notes.append(f"body repeats: {rep}")
+
+            if notes:
+                lines.append(f"{page}: " + ", ".join(notes) + ".")
+
+        return "\n".join(lines[:10])
+
+    # New Post Mode (no Bayut)
     for _, r in df.iterrows():
         page = str(r.get("Page",""))
-        if page.lower() == "bayut":
+        if page.lower().startswith("target"):
             continue
-        c_h2 = parse_h2(r.get("Headers count",""))
-        c_fkw = str(r.get("FKW",""))
-        c_rep = str(r.get("FKW repeats (body)",""))
-        signals = []
-        if c_h2 > b_h2:
-            signals.append(f"+more H2 ({c_h2} vs {b_h2})")
-        if c_rep.isdigit() and b_rep.isdigit():
-            if int(c_rep) > int(b_rep):
-                signals.append(f"more FKW repeats ({c_rep} vs {b_rep})")
-        sig_txt = ("; " + ", ".join(signals)) if signals else ""
-        lines.append(f"{page}: FKW “{c_fkw}”, repeats={c_rep}{sig_txt}")
-
-    return "\n".join(lines)
-
-def ai_summary_seo_new(df: pd.DataFrame, target_fkw: str) -> str:
-    if df is None or df.empty:
-        return "No SEO data to summarize."
-
-    t = clean(target_fkw)
-    lines = []
-    lines.append("Target-FKW signals + competitor keyword intent.")
-    if t:
-        lines.append(f"Target FKW (set by you): “{t}”")
-    else:
-        lines.append("Target FKW: not set (optional).")
-
-    for _, r in df.iterrows():
-        page = str(r.get("Page",""))
-        fkw = str(r.get("FKW",""))
-        rep = str(r.get("FKW repeats (body)",""))
-        hcount = str(r.get("Headers count",""))
-        lines.append(f"{page}: FKW “{fkw}” | repeats={rep} | {hcount}")
-
-    return "\n".join(lines)
+        fkw = str(r.get("FKW","Not available"))
+        if fkw != "Not available":
+            lines.append(f"{page} targets FKW: “{fkw}”.")
+    return "\n".join(lines[:10])
 
 
 # =====================================================
@@ -1590,6 +1608,33 @@ def render_table(df: pd.DataFrame):
     html = df.to_html(index=False, escape=False)
     st.markdown(html, unsafe_allow_html=True)
 
+def render_table_with_ai_popover(df: pd.DataFrame, summary_fn, pop_key: str, title: str):
+    """
+    ✅ What you asked for:
+    - A *button only* ("Summarize with AI") aligned above the LAST COLUMN
+    - When user presses it, the summary POPS UP (popover)
+    """
+    if df is None or df.empty:
+        st.info("Run analysis to see results.")
+        return
+
+    ncols = max(int(df.shape[1]), 1)
+    ratios = ([1] * (ncols - 1)) + [0.9] if ncols >= 2 else [1]
+
+    cols = st.columns(ratios)
+    with cols[-1]:
+        with st.popover("Summarize with AI", use_container_width=True):
+            cache_key = f"{pop_key}__cached_summary"
+            if cache_key not in st.session_state:
+                st.session_state[cache_key] = summary_fn(df)
+            st.markdown(
+                f"<div class='ai-summary'><b>{title}</b><div class='muted'>Generated on demand.</div>"
+                f"<pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state[cache_key]}</pre></div>",
+                unsafe_allow_html=True
+            )
+
+    render_table(df)
+
 
 # =====================================================
 # MODE SELECTOR (CENTERED BUTTONS)
@@ -1618,10 +1663,7 @@ with outer_m:
         ):
             st.session_state.mode = "new"
 st.markdown("</div>", unsafe_allow_html=True)
-st.markdown(
-    "<div class='mode-note'>Tip: competitor lines can be <b>URL</b> or <b>URL | FKW</b>. If a page blocks the server, you will be forced to paste it — so nothing is missing.</div>",
-    unsafe_allow_html=True
-)
+st.markdown("<div class='mode-note'>Tip: competitors one per line. Optional per-line forced FKW: <code>URL | your fkw</code>. If any page blocks the server, you will be forced to paste it — so nothing is missing.</div>", unsafe_allow_html=True)
 
 show_internal_fetch = st.sidebar.checkbox("Admin: show internal fetch log", value=False)
 
@@ -1649,12 +1691,12 @@ if st.session_state.mode == "update":
 
     bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
     competitors_text = st.text_area(
-        "Competitor URLs (one per line). Optional: add FKW after |",
+        "Competitor URLs (one per line) — optional: add forced FKW per line: URL | FKW",
         height=140,
         placeholder="https://example.com/article\nhttps://example.com/another | business bay pros and cons"
     )
 
-    competitors, comp_manual_fkw = parse_competitors_with_fkw(competitors_text)
+    competitors, forced_fkw_map = parse_competitor_lines(competitors_text)
 
     run = st.button("Run analysis", type="primary")
 
@@ -1666,16 +1708,23 @@ if st.session_state.mode == "update":
             st.error("Add at least one competitor URL.")
             st.stop()
 
+        # reset cached popovers
+        st.session_state.pop("gaps_update__cached_summary", None)
+        st.session_state.pop("seo_update__cached_summary", None)
+
+        # 1) HARD: Bayut must be available (or paste)
         with st.spinner("Fetching Bayut (no exceptions)…"):
             bayut_fr_map = resolve_all_or_require_manual(agent, [bayut_url.strip()], st_key_prefix="bayut")
             bayut_tree_map = ensure_headings_or_require_repaste([bayut_url.strip()], bayut_fr_map, st_key_prefix="bayut_tree")
         bayut_fr = bayut_fr_map[bayut_url.strip()]
         bayut_nodes = bayut_tree_map[bayut_url.strip()]["nodes"]
 
+        # 2) HARD: ALL competitors must be available (or paste)
         with st.spinner("Fetching ALL competitors (no exceptions)…"):
             comp_fr_map = resolve_all_or_require_manual(agent, competitors, st_key_prefix="comp_update")
             comp_tree_map = ensure_headings_or_require_repaste(competitors, comp_fr_map, st_key_prefix="comp_update_tree")
 
+        # 3) Build content-gap rows
         all_rows = []
         internal_fetch = []
 
@@ -1699,6 +1748,7 @@ if st.session_state.mode == "update":
             else pd.DataFrame(columns=["Headers", "Description", "Source"])
         )
 
+        # 4) Build SEO Analysis table (true counts, no long-tails, optional forced FKW)
         st.session_state.seo_update_df = build_seo_analysis_update(
             bayut_url=bayut_url.strip(),
             bayut_fr=bayut_fr,
@@ -1706,12 +1756,8 @@ if st.session_state.mode == "update":
             competitors=competitors,
             comp_fr_map=comp_fr_map,
             comp_tree_map=comp_tree_map,
-            comp_manual_fkw=comp_manual_fkw
+            forced_fkw_map=forced_fkw_map,
         )
-
-        # clear old summaries so they don't linger after a new run
-        st.session_state.pop("update_gap_summary", None)
-        st.session_state.pop("update_seo_summary", None)
 
     if show_internal_fetch and st.session_state.update_fetch:
         st.sidebar.markdown("### Internal fetch log (Update Mode)")
@@ -1719,59 +1765,23 @@ if st.session_state.mode == "update":
         for u, s in st.session_state.update_fetch:
             st.sidebar.write(u, "—", s)
 
-    # ---- Gaps row ----
+    # Gaps Table
     st.markdown("<div class='section-pill'>Gaps Table</div>", unsafe_allow_html=True)
-    g_left, g_right = st.columns([2.25, 1], gap="large")
+    render_table_with_ai_popover(
+        st.session_state.update_df,
+        summary_fn=ai_summary_from_gaps_df,
+        pop_key="gaps_update",
+        title="AI Summary — Gaps"
+    )
 
-    with g_left:
-        if st.session_state.update_df is None or st.session_state.update_df.empty:
-            st.info("Run analysis to see results.")
-        else:
-            render_table(st.session_state.update_df)
-
-    with g_right:
-        st.markdown("<div class='right-col'>", unsafe_allow_html=True)
-        if st.button("Summarize with AI", type="primary", use_container_width=True, key="btn_sum_gaps_update"):
-            st.session_state.update_gap_summary = ai_summary_gaps(st.session_state.update_df)
-        if st.session_state.get("update_gap_summary"):
-            st.markdown(
-                f"""
-                <div class='ai-summary'>
-                  <b>AI Summary — Gaps</b>
-                  <div class='muted'>Generated on demand.</div>
-                  <pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state.update_gap_summary}</pre>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    # ---- SEO row ----
+    # SEO Analysis table
     st.markdown("<div class='section-pill'>SEO Analysis</div>", unsafe_allow_html=True)
-    s_left, s_right = st.columns([2.25, 1], gap="large")
-
-    with s_left:
-        if st.session_state.seo_update_df is None or st.session_state.seo_update_df.empty:
-            st.info("Run analysis to see SEO comparison.")
-        else:
-            render_table(st.session_state.seo_update_df)
-
-    with s_right:
-        st.markdown("<div class='right-col'>", unsafe_allow_html=True)
-        if st.button("Summarize with AI", type="primary", use_container_width=True, key="btn_sum_seo_update"):
-            st.session_state.update_seo_summary = ai_summary_seo_update(st.session_state.seo_update_df)
-        if st.session_state.get("update_seo_summary"):
-            st.markdown(
-                f"""
-                <div class='ai-summary'>
-                  <b>AI Summary — SEO</b>
-                  <div class='muted'>Generated on demand.</div>
-                  <pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state.update_seo_summary}</pre>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-        st.markdown("</div>", unsafe_allow_html=True)
+    render_table_with_ai_popover(
+        st.session_state.seo_update_df,
+        summary_fn=ai_summary_from_seo_df,
+        pop_key="seo_update",
+        title="AI Summary — SEO"
+    )
 
 
 # =====================================================
@@ -1781,12 +1791,19 @@ else:
     st.markdown("<div class='section-pill'>New Post Mode</div>", unsafe_allow_html=True)
 
     new_title = st.text_input("New post title", placeholder="Pros & Cons of Living in Business Bay (2026)")
+
+    target_fkw = st.text_input(
+        "Target FKW (optional) — if you want to force the main keyword for the new post",
+        placeholder="e.g., living in business bay"
+    )
+
     competitors_text = st.text_area(
-        "Competitor URLs (one per line). Optional: add FKW after |",
+        "Competitor URLs (one per line) — optional: add forced FKW per line: URL | FKW",
         height=140,
         placeholder="https://example.com/article\nhttps://example.com/another | business bay pros and cons"
     )
-    competitors, comp_manual_fkw = parse_competitors_with_fkw(competitors_text)
+
+    competitors, forced_fkw_map = parse_competitor_lines(competitors_text)
 
     run = st.button("Generate competitor coverage", type="primary")
 
@@ -1797,6 +1814,10 @@ else:
         if not competitors:
             st.error("Add at least one competitor URL.")
             st.stop()
+
+        # reset cached popovers
+        st.session_state.pop("coverage_new__cached_summary", None)
+        st.session_state.pop("seo_new__cached_summary", None)
 
         with st.spinner("Fetching ALL competitors (no exceptions)…"):
             comp_fr_map = resolve_all_or_require_manual(agent, competitors, st_key_prefix="comp_new")
@@ -1818,16 +1839,15 @@ else:
             else pd.DataFrame(columns=["Headers covered", "Content covered", "Source"])
         )
 
-        # SEO Analysis (NEW POST MODE): competitors only (no Bayut row, no target row)
+        # SEO Analysis (New Post Mode) — competitors only (+ target row), no Bayut row
         st.session_state.seo_new_df = build_seo_analysis_newpost(
+            new_title=new_title.strip(),
             competitors=competitors,
             comp_fr_map=comp_fr_map,
             comp_tree_map=comp_tree_map,
-            comp_manual_fkw=comp_manual_fkw
+            forced_fkw_map=forced_fkw_map,
+            target_fkw=target_fkw.strip() if target_fkw else None
         )
-
-        st.session_state.pop("new_cov_summary", None)
-        st.session_state.pop("new_seo_summary", None)
 
     if show_internal_fetch and st.session_state.new_fetch:
         st.sidebar.markdown("### Internal fetch log (New Post Mode)")
@@ -1835,92 +1855,21 @@ else:
         for u, s in st.session_state.new_fetch:
             st.sidebar.write(u, "—", s)
 
-    # ---- Coverage row ----
     st.markdown("<div class='section-pill'>Competitor Coverage</div>", unsafe_allow_html=True)
-    c_left, c_right = st.columns([2.25, 1], gap="large")
+    render_table_with_ai_popover(
+        st.session_state.new_df,
+        summary_fn=lambda df: "Coverage summary:\n" + "\n".join(
+            [f"• {src}: {cnt} rows" for src, cnt in
+             sorted(pd.Series(df["Source"]).value_counts().items(), key=lambda x: x[1], reverse=True)]
+        ) if df is not None and not df.empty else "No coverage to summarize.",
+        pop_key="coverage_new",
+        title="AI Summary — Coverage"
+    )
 
-    with c_left:
-        if st.session_state.new_df is None or st.session_state.new_df.empty:
-            st.info("Generate competitor coverage to see results.")
-        else:
-            render_table(st.session_state.new_df)
-
-    with c_right:
-        st.markdown("<div class='right-col'>", unsafe_allow_html=True)
-
-        # Target FKW box (requested)
-        target_fkw = st.text_input("Target FKW (optional)", placeholder="e.g., living in business bay", key="target_fkw_box")
-        st.markdown("<div class='helper'>This is your intended primary keyword for the new post (optional).</div>", unsafe_allow_html=True)
-
-        if st.button("Summarize with AI", type="primary", use_container_width=True, key="btn_sum_cov_new"):
-            if st.session_state.new_df is None or st.session_state.new_df.empty:
-                st.session_state.new_cov_summary = "No coverage rows to summarize."
-            else:
-                src_counts = st.session_state.new_df["Source"].astype(str).value_counts().to_dict()
-                angles = st.session_state.new_df[
-                    st.session_state.new_df["Headers covered"] == "H1 (main angle)"
-                ]["Content covered"].astype(str).tolist()
-
-                lines = []
-                lines.append("High-level snapshot (what matters first).")
-                lines.append(f"Competitors analyzed: {len(src_counts)}.")
-                if target_fkw.strip():
-                    lines.append(f"Target FKW (set by you): “{clean(target_fkw)}”")
-                lines.append("")
-                lines.append("Rows by competitor:")
-                for k, v in list(src_counts.items())[:8]:
-                    lines.append(f"{k}: {v}")
-                if angles:
-                    lines.append("")
-                    lines.append("Main angles detected:")
-                    for a in angles[:6]:
-                        lines.append("• " + a)
-
-                st.session_state.new_cov_summary = "\n".join(lines)
-
-        if st.session_state.get("new_cov_summary"):
-            st.markdown(
-                f"""
-                <div class='ai-summary'>
-                  <b>AI Summary — Coverage</b>
-                  <div class='muted'>Generated on demand.</div>
-                  <pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state.new_cov_summary}</pre>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    # ---- SEO row ----
     st.markdown("<div class='section-pill'>SEO Analysis</div>", unsafe_allow_html=True)
-    nseo_left, nseo_right = st.columns([2.25, 1], gap="large")
-
-    with nseo_left:
-        if st.session_state.seo_new_df is None or st.session_state.seo_new_df.empty:
-            st.info("Generate competitor coverage to see SEO comparison.")
-        else:
-            render_table(st.session_state.seo_new_df)
-
-    with nseo_right:
-        st.markdown("<div class='right-col'>", unsafe_allow_html=True)
-
-        if st.button("Summarize with AI", type="primary", use_container_width=True, key="btn_sum_seo_new"):
-            st.session_state.new_seo_summary = ai_summary_seo_new(
-                st.session_state.seo_new_df,
-                target_fkw=st.session_state.get("target_fkw_box", "")
-            )
-
-        if st.session_state.get("new_seo_summary"):
-            st.markdown(
-                f"""
-                <div class='ai-summary'>
-                  <b>AI Summary — SEO</b>
-                  <div class='muted'>Generated on demand.</div>
-                  <pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state.new_seo_summary}</pre>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-        st.markdown("</div>", unsafe_allow_html=True)
+    render_table_with_ai_popover(
+        st.session_state.seo_new_df,
+        summary_fn=ai_summary_from_seo_df,
+        pop_key="seo_new",
+        title="AI Summary — SEO"
+    )
