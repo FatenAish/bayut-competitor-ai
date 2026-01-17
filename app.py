@@ -1,5 +1,4 @@
 # app.py
-import os
 import streamlit as st
 import requests
 import re
@@ -140,6 +139,17 @@ st.markdown(
         padding: 2px 6px;
         border-radius: 8px;
       }}
+      .ai-summary {{
+        background: white;
+        border: 1px solid #E5E7EB;
+        border-radius: 14px;
+        padding: 14px 14px;
+        margin-top: 10px;
+      }}
+      .muted {{
+        color:#6B7280;
+        font-size: 13px;
+      }}
     </style>
     """,
     unsafe_allow_html=True,
@@ -149,7 +159,7 @@ st.markdown(
     f"""
     <div class="hero">
       <h1><span class="bayut">Bayut</span> Competitor Gap Analysis</h1>
-      <p><b>Header-first</b> logic — Missing headers first, then <b>(missing parts)</b> under matching headers. FAQs are <b>one row</b> (topics only) and only appear if the competitor page has a real FAQ section.</p>
+      <p><b>Header-first</b> gap logic — Missing headers first, then <b>(missing parts)</b> under matching headers. FAQs are <b>one row</b> (topics only).</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -354,7 +364,7 @@ def resolve_all_or_require_manual(agent: FetchAgent, urls: List[str], st_key_pre
                 height=220,
             )
             if pasted and len(pasted.strip()) > 400:
-                results[u] = FetchResult(True, "manual", 200, "", pasted.strip(), None)
+                results[u] = FetchResult(True, "manual", 200, pasted.strip(), pasted.strip(), None)
 
     still_failed = [u for u in failed if not results[u].ok]
     if still_failed:
@@ -382,8 +392,23 @@ NOISE_PATTERNS = [
     r"\bplease stand by\b", r"\bloading\b", r"\bjust a moment\b",
 ]
 
-# Keep intro/overview as noise, but NOT conclusion/final thoughts (you want them)
-GENERIC_SECTION_HEADERS = {"introduction", "overview"}
+GENERIC_SECTION_HEADERS = {
+    "introduction", "overview",
+    # user wants conclusion/final thoughts visible, so don't add them here
+}
+
+STOP = {
+    "the","and","for","with","that","this","from","you","your","are","was","were","will","have","has","had",
+    "but","not","can","may","more","most","into","than","then","they","them","their","our","out","about",
+    "also","over","under","between","within","near","where","when","what","why","how","who","which",
+    "a","an","to","of","in","on","at","as","is","it","be","or","by","we","i","us"
+}
+
+# Keep generic words out of KW phrases to make them useful for writers
+GENERIC_STOP = {
+    "dubai","uae","business","bay","community","area","living","pros","cons",
+    "property","properties","rent","sale","apartments","villas","guide"
+}
 
 def norm_header(h: str) -> str:
     h = clean(h).lower()
@@ -456,7 +481,7 @@ def build_tree_from_html(html: str) -> List[dict]:
                 continue
             if getattr(sib, "name", None) in ["h1", "h2", "h3", "h4"]:
                 break
-            if getattr(sib, "name", None) in ["p", "li", "button"]:
+            if getattr(sib, "name", None) in ["p", "li"]:
                 txt = clean(sib.get_text(" "))
                 if txt:
                     content_parts.append(txt)
@@ -558,8 +583,10 @@ def get_tree_from_fetchresult(fr: FetchResult) -> dict:
     txt = fr.text or ""
     maybe_html = ("<html" in txt.lower()) or ("<article" in txt.lower()) or ("<h1" in txt.lower()) or ("<h2" in txt.lower())
 
+    # If fr.html exists, always use it
     if fr.html:
         nodes = build_tree_from_html(fr.html)
+    # If manual paste looks like HTML, use HTML parser
     elif fr.source == "manual" and maybe_html:
         nodes = build_tree_from_html(txt)
     else:
@@ -582,7 +609,7 @@ def ensure_headings_or_require_repaste(urls: List[str], fr_map: Dict[str, FetchR
     if not bad:
         return tree_map
 
-    st.error("Some URLs were fetched, but headings could not be extracted. Paste readable HTML (preferred) or clearly structured text with headings for EACH URL below to continue.")
+    st.error("Some URLs were fetched, but headings could not be extracted. Paste readable HTML (preferred) or clearly structured text for EACH URL below to continue.")
 
     for u in bad:
         with st.expander(f"Headings extraction required: {u}", expanded=True):
@@ -592,7 +619,7 @@ def ensure_headings_or_require_repaste(urls: List[str], fr_map: Dict[str, FetchR
                 height=240,
             )
             if repaste and len(repaste.strip()) > 400:
-                fr_map[u] = FetchResult(True, "manual", 200, "", repaste.strip(), None)
+                fr_map[u] = FetchResult(True, "manual", 200, repaste.strip(), repaste.strip(), None)
 
     still_bad = []
     for u in bad:
@@ -628,7 +655,7 @@ def flatten(nodes: List[dict]) -> List[dict]:
     def walk(n: dict, parent=None):
         out.append({
             "level": n["level"],
-            "header": n["header"],
+            "header": n.get("header",""),
             "content": n.get("content", ""),
             "parent": parent,
             "children": n.get("children", [])
@@ -644,7 +671,7 @@ def strip_label(h: str) -> str:
 
 
 # =====================================================
-# STRICT FAQ (PER-PAGE, NO FALLBACK OUTSIDE FAQ)
+# STRICT FAQ DETECTION (only when competitor truly has FAQs)
 # =====================================================
 FAQ_TITLES = {
     "faq",
@@ -654,13 +681,8 @@ FAQ_TITLES = {
 }
 
 def header_is_faq(header: str) -> bool:
-    return norm_header(header) in FAQ_TITLES
-
-def normalize_question(q: str) -> str:
-    q = clean(q or "")
-    q = re.sub(r"^\s*\d+[\.\)]\s*", "", q)
-    q = re.sub(r"^\s*[-•]\s*", "", q)
-    return q.strip()
+    nh = norm_header(header)
+    return nh in FAQ_TITLES
 
 def _looks_like_question(s: str) -> bool:
     s = clean(s)
@@ -677,9 +699,10 @@ def _looks_like_question(s: str) -> bool:
 
 def find_faq_nodes(nodes: List[dict]) -> List[dict]:
     """
-    A real FAQ section must:
-    - be an H2/H3 with header exactly FAQ/FAQs/Frequently Asked Questions
-    - AND have enough question-like items inside (child headings or question-like lines in subtree content)
+    Finds FAQ nodes only if:
+    - Header is exactly FAQ/FAQs/Frequently Asked Questions
+    AND
+    - It has real question structure: >= 3 question-like items inside
     """
     faq = []
     for x in flatten(nodes):
@@ -688,65 +711,43 @@ def find_faq_nodes(nodes: List[dict]) -> List[dict]:
         if not header_is_faq(x.get("header", "")):
             continue
 
-        qlike = 0
-
-        # child headers
-        for c in x.get("children", []) or []:
-            hdr = clean(c.get("header", ""))
-            if hdr and _looks_like_question(hdr):
-                qlike += 1
-
-        # also scan subtree content lines (ONLY inside this FAQ node)
-        def scan_content(n: dict):
-            nonlocal qlike
-            txt = clean(n.get("content", ""))
-            if txt:
-                chunks = re.split(r"[\n\r]+|(?<=[\.\?\!])\s+", txt)
-                for ch in chunks[:60]:
-                    ch = clean(ch)
-                    if not ch or len(ch) > 140:
-                        continue
-                    if _looks_like_question(ch):
-                        qlike += 1
-            for cc in n.get("children", []) or []:
-                scan_content(cc)
-
-        scan_content(x)
-
-        # HARD GATE: must look like a FAQ block
-        if qlike < 4:
-            continue
-
-        faq.append(x)
+        # Count question-like signals inside the FAQ node
+        qs = extract_questions_from_node(x)
+        if len(qs) >= 3:
+            faq.append(x)
 
     return faq
 
+def normalize_question(q: str) -> str:
+    q = clean(q or "")
+    q = re.sub(r"^\s*\d+[\.\)]\s*", "", q)
+    q = re.sub(r"^\s*[-•]\s*", "", q)
+    return q.strip()
+
 def extract_questions_from_node(node: dict) -> List[str]:
-    """
-    Extract questions ONLY from within the FAQ node subtree.
-    """
     qs: List[str] = []
 
-    def add_from_text(txt: str):
+    def add_from_text_block(txt: str):
         txt = clean(txt or "")
         if not txt:
             return
         chunks = re.split(r"[\n\r]+|(?<=[\.\?\!])\s+", txt)
-        for ch in chunks[:80]:
+        for ch in chunks[:120]:
             ch = clean(ch)
-            if not ch or len(ch) > 140:
+            if not ch or len(ch) > 160:
                 continue
             if _looks_like_question(ch):
                 qs.append(normalize_question(ch))
 
-    add_from_text(node.get("content", ""))
+    # own content
+    add_from_text_block(node.get("content", ""))
 
     def walk(n: dict):
-        for c in n.get("children", []) or []:
+        for c in n.get("children", []):
             hdr = clean(c.get("header", ""))
             if hdr and not is_noise_header(hdr) and _looks_like_question(hdr):
                 qs.append(normalize_question(hdr))
-            add_from_text(c.get("content", ""))
+            add_from_text_block(c.get("content", ""))
             walk(c)
 
     walk(node)
@@ -761,84 +762,34 @@ def extract_questions_from_node(node: dict) -> List[str]:
         out.append(q)
     return out[:25]
 
+def extract_all_questions(nodes: List[dict]) -> List[str]:
+    """
+    Fallback: only used to compute question topics if a REAL FAQ heading exists.
+    (Avoids fake FAQs on pages that simply contain one question somewhere.)
+    """
+    qs = []
+    for x in flatten(nodes):
+        h = clean(x.get("header", ""))
+        if not h or is_noise_header(h):
+            continue
+        if _looks_like_question(h):
+            qs.append(normalize_question(h))
+    seen = set()
+    out = []
+    for q in qs:
+        k = norm_header(q)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(q)
+    return out[:30]
 
-# =====================================================
-# CONTENT THEMES (FOR "MISSING PARTS" DESCRIPTION)
-# =====================================================
-def theme_flags(text: str) -> set:
-    t = (text or "").lower()
-    flags = set()
-
-    def has_any(words: List[str]) -> bool:
-        return any(w in t for w in words)
-
-    if has_any(["metro", "public transport", "commute", "connectivity", "access", "highway", "roads", "bus", "train"]):
-        flags.add("transport")
-    if has_any(["parking", "traffic", "congestion", "rush hour", "gridlock"]):
-        flags.add("traffic_parking")
-    if has_any(["cost", "price", "pricing", "expensive", "afford", "budget", "rent", "fees", "charges"]):
-        flags.add("cost")
-    if has_any(["restaurants", "cafes", "nightlife", "vibe", "atmosphere", "social", "entertainment"]):
-        flags.add("lifestyle")
-    if has_any(["schools", "nursery", "kids", "family", "clinic", "hospital", "supermarket", "groceries", "pharmacy"]):
-        flags.add("daily_life")
-    if has_any(["safe", "safety", "security", "crime"]):
-        flags.add("safety")
-    if has_any(["pros", "cons", "advantages", "disadvantages", "weigh", "consider", "should you", "worth it"]):
-        flags.add("decision_frame")
-    if has_any(["compare", "comparison", "vs ", "versus", "alternative", "similar to"]):
-        flags.add("comparison")
-
-    return flags
-
-HUMAN_THEME = {
-    "transport": "commute & connectivity",
-    "traffic_parking": "traffic/parking realities",
-    "cost": "cost considerations",
-    "lifestyle": "lifestyle & vibe",
-    "daily_life": "day-to-day convenience",
-    "safety": "safety angle",
-    "decision_frame": "decision framing",
-    "comparison": "comparison context",
-}
-
-def summarize_missing_section_action(header: str, subheaders: Optional[List[str]], comp_content: str) -> str:
-    hn = norm_header(header)
-
-    if ("comparison" in hn or "compare" in hn or "vs" in hn or "versus" in hn):
-        if subheaders:
-            hint = ", ".join(subheaders[:3])
-            return f"Competitor includes a comparison section and breaks it into alternatives such as: {hint}."
-        return "Competitor includes a comparison section explaining alternatives and how they differ."
-
-    flags = list(theme_flags(comp_content))
-    picks = [HUMAN_THEME.get(x, x) for x in flags][:3]
-    if picks:
-        return f"Competitor covers this as a dedicated section with practical details (e.g., {', '.join(picks)})."
-    return "Competitor covers this as a dedicated section with extra context and practical specifics."
-
-def summarize_missing_parts(header: str, comp_content: str, bayut_content: str) -> str:
-    comp_flags = theme_flags(comp_content)
-    bayut_flags = theme_flags(bayut_content)
-    missing = list(comp_flags - bayut_flags)
-    picks = [HUMAN_THEME.get(x, x) for x in missing][:4]
-    if picks:
-        return "Competitor goes deeper on: " + ", ".join(picks) + "."
-    return "Competitor provides more depth and practical specifics than Bayut under the same header."
-
-
-# =====================================================
-# FAQ SUBJECT LOGIC (TOPICS ONLY)
-# =====================================================
 def faq_subject(q: str) -> str:
     s = norm_header(normalize_question(q))
-
     if any(k in s for k in ["how much", "cost", "price", "pricing", "fees", "budget"]):
         return "Pricing / cost"
     if any(k in s for k in ["where", "located", "location", "distance", "near", "how to get", "map"]):
         return "Location / nearby"
-    if any(k in s for k in ["how", "steps", "process", "apply", "register", "sign up", "book", "contact"]):
-        return "How it works / process"
     if any(k in s for k in ["who is it for", "who should", "is it for", "suitable", "best for"]):
         return "Who it suits"
     if any(k in s for k in ["pros", "cons", "advantages", "disadvantages", "worth it"]):
@@ -869,8 +820,7 @@ def faq_subjects_from_questions(questions: List[str], limit: int = 10) -> List[s
 
 def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: str) -> Optional[dict]:
     """
-    ONE row only if competitor has a REAL FAQ section.
-    No "?" fallback outside FAQ (fixes PropertyFinder when it has no FAQ).
+    ONLY create a FAQs row if competitor has an explicit FAQ heading (true FAQ section).
     """
     comp_faq_nodes = find_faq_nodes(comp_nodes)
     if not comp_faq_nodes:
@@ -879,14 +829,19 @@ def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: 
     comp_qs = []
     for fn in comp_faq_nodes:
         comp_qs.extend(extract_questions_from_node(fn))
+    if not comp_qs:
+        # still inside explicit FAQ section: ok to look for questions
+        comp_qs = extract_all_questions(comp_nodes)
+
     comp_qs = [q for q in comp_qs if q and len(q) > 5]
-    if len(comp_qs) < 4:
+    if len(comp_qs) < 3:
         return None
 
     bayut_faq_nodes = find_faq_nodes(bayut_nodes)
     bayut_qs = []
     for fn in bayut_faq_nodes:
         bayut_qs.extend(extract_questions_from_node(fn))
+    bayut_qs = [q for q in bayut_qs if q and len(q) > 5]
 
     def q_key(q: str) -> str:
         q2 = normalize_question(q)
@@ -896,11 +851,11 @@ def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: 
 
     bayut_set = {q_key(q) for q in bayut_qs if q}
 
-    if not bayut_faq_nodes:
+    if not bayut_qs:
         topics = faq_subjects_from_questions(comp_qs, limit=10)
         return {
             "Headers": "FAQs",
-            "Description": "Competitor includes FAQ topic coverage such as: " + ", ".join(topics) + ".",
+            "Description": "Competitor has an FAQ section covering topics such as: " + ", ".join(topics) + ".",
             "Source": source_link(comp_url),
         }
 
@@ -911,7 +866,7 @@ def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: 
     topics = faq_subjects_from_questions(missing_qs, limit=10)
     return {
         "Headers": "FAQs",
-        "Description": "Missing FAQ topic coverage: " + ", ".join(topics) + ".",
+        "Description": "Missing FAQ topics: " + ", ".join(topics) + ".",
         "Source": source_link(comp_url),
     }
 
@@ -922,7 +877,6 @@ def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: 
 def section_nodes(nodes: List[dict], levels=(2,3)) -> List[dict]:
     secs = []
     current_h2 = None
-
     for x in flatten(nodes):
         lvl = x["level"]
         h = strip_label(x.get("header",""))
@@ -983,7 +937,85 @@ def dedupe_rows(rows: List[dict]) -> List[dict]:
 
 
 # =====================================================
-# UPDATE MODE ENGINE (YOUR EXACT TABLE STYLE)
+# CONTENT GAP THEMES (NEUTRAL DESCRIPTION)
+# =====================================================
+def theme_flags(text: str) -> set:
+    t = (text or "").lower()
+    flags = set()
+
+    def has_any(words: List[str]) -> bool:
+        return any(w in t for w in words)
+
+    if has_any(["metro", "public transport", "commute", "connectivity", "access", "highway", "roads", "bus", "train"]):
+        flags.add("transport")
+    if has_any(["parking", "traffic", "congestion", "rush hour", "gridlock"]):
+        flags.add("traffic_parking")
+    if has_any(["cost", "price", "pricing", "expensive", "afford", "budget", "rent", "fees", "charges"]):
+        flags.add("cost")
+    if has_any(["restaurants", "cafes", "nightlife", "vibe", "atmosphere", "social", "entertainment"]):
+        flags.add("lifestyle")
+    if has_any(["schools", "nursery", "kids", "family", "clinic", "hospital", "supermarket", "groceries", "pharmacy"]):
+        flags.add("daily_life")
+    if has_any(["safe", "safety", "security", "crime"]):
+        flags.add("safety")
+    if has_any(["pros", "cons", "advantages", "disadvantages", "weigh", "consider", "should you", "worth it"]):
+        flags.add("decision_frame")
+    if has_any(["compare", "comparison", "vs ", "versus", "alternative", "similar to"]):
+        flags.add("comparison")
+
+    return flags
+
+def summarize_missing_section_action(header: str, subheaders: Optional[List[str]], comp_content: str) -> str:
+    hn = norm_header(header)
+
+    if ("importance" in hn and "pros" in hn and "cons" in hn) or ("consider" in hn and "pros" in hn and "cons" in hn):
+        return "Competitor includes decision framing on how to weigh pros vs cons before concluding."
+
+    if "comparison" in hn or "compare" in hn or "vs" in hn or "versus" in hn:
+        if subheaders:
+            hint = ", ".join(subheaders[:3])
+            return f"Competitor includes a comparison section and breaks it into alternatives such as: {hint}."
+        return "Competitor includes a comparison section explaining alternatives and how they differ."
+
+    themes = list(theme_flags(comp_content))
+    human_map = {
+        "transport": "commute & connectivity",
+        "traffic_parking": "traffic/parking realities",
+        "cost": "cost considerations",
+        "lifestyle": "lifestyle & vibe",
+        "daily_life": "day-to-day convenience",
+        "safety": "safety angle",
+        "decision_frame": "decision framing",
+        "comparison": "comparison context",
+    }
+    picks = [human_map.get(x, x) for x in themes][:3]
+    if picks:
+        return f"Competitor covers this as a dedicated section with practical details (e.g., {', '.join(picks)})."
+    return "Competitor covers this as a dedicated section with extra context and practical specifics."
+
+def summarize_content_gap_action(header: str, comp_content: str, bayut_content: str) -> str:
+    comp_flags = theme_flags(comp_content)
+    bayut_flags = theme_flags(bayut_content)
+    missing = list(comp_flags - bayut_flags)
+
+    human_map = {
+        "transport": "commute & connectivity",
+        "traffic_parking": "traffic/parking realities",
+        "cost": "cost considerations",
+        "lifestyle": "lifestyle & vibe",
+        "daily_life": "day-to-day convenience",
+        "safety": "safety angle",
+        "decision_frame": "decision framing",
+        "comparison": "comparison context",
+    }
+    missing_human = [human_map.get(x, x) for x in missing][:3]
+    if missing_human:
+        return "Competitor goes deeper on: " + ", ".join(missing_human) + "."
+    return "Competitor provides more depth and practical specifics than Bayut under the same header."
+
+
+# =====================================================
+# UPDATE MODE ENGINE (Headers | Description | Source)
 # =====================================================
 def update_mode_rows_header_first(
     bayut_nodes: List[dict],
@@ -1015,11 +1047,9 @@ def update_mode_rows_header_first(
 
     missing_h2_norms = set()
 
-    # 1) Missing H2 headers (group H3 inside description)
+    # 1) Missing H2
+    missing_rows = []
     for _, cs in comp_h2_ranked:
-        if len(rows) >= max_missing_headers:
-            break
-
         m = find_best_bayut_match(cs["header"], bayut_h2, min_score=0.73)
         if m:
             continue
@@ -1031,24 +1061,27 @@ def update_mode_rows_header_first(
             if norm_header(h3.get("parent_h2") or "") == norm_header(cs["header"]):
                 children.append(h3["header"])
 
-        comp_text = cs.get("content", "") or ""
+        comp_text = (cs.get("content", "") or "")
         desc = summarize_missing_section_action(cs["header"], children, comp_text)
+
         if children:
             hint = ", ".join(children[:3])
-            desc = desc + f" (Competitor breaks it into: {hint}.)"
+            desc = desc + f" (Breakdown: {hint}.)"
 
-        rows.append({
+        missing_rows.append({
             "Headers": cs["header"],
             "Description": desc,
             "Source": source_link(comp_url),
         })
 
+        if len(missing_rows) >= max_missing_headers:
+            break
+
+    rows.extend(missing_rows)
+
     # 2) Missing H3 only if parent H2 is NOT missing
     if len(rows) < max_missing_headers:
         for cs in comp_h3:
-            if len(rows) >= max_missing_headers:
-                break
-
             parent = cs.get("parent_h2") or ""
             if parent and norm_header(parent) in missing_h2_norms:
                 continue
@@ -1069,12 +1102,12 @@ def update_mode_rows_header_first(
                 "Source": source_link(comp_url),
             })
 
+            if len(rows) >= max_missing_headers:
+                break
+
     # 3) Matching headers where competitor is stronger => (missing parts)
     missing_parts_rows = []
     for cs in comp_secs:
-        if len(missing_parts_rows) >= max_missing_parts:
-            break
-
         m = find_best_bayut_match(cs["header"], bayut_secs, min_score=0.73)
         if not m:
             continue
@@ -1083,34 +1116,352 @@ def update_mode_rows_header_first(
         c_txt = clean(cs.get("content", ""))
         b_txt = clean(bs.get("content", ""))
 
-        # must be meaningful
-        if len(c_txt) < 160:
+        if len(c_txt) < 140:
             continue
-
-        # competitor must be longer
         if len(c_txt) < (1.30 * max(len(b_txt), 1)):
             continue
 
-        # must add at least one theme (or be very long)
         comp_flags = theme_flags(c_txt)
         bayut_flags = theme_flags(b_txt)
-        if len(comp_flags - bayut_flags) < 1 and len(c_txt) < 700:
+        if len(comp_flags - bayut_flags) < 1 and len(c_txt) < 650:
             continue
 
         missing_parts_rows.append({
             "Headers": f"{bs['header']} (missing parts)",
-            "Description": summarize_missing_parts(bs["header"], c_txt, b_txt),
+            "Description": summarize_content_gap_action(bs["header"], c_txt, b_txt),
             "Source": source_link(comp_url),
         })
 
+        if len(missing_parts_rows) >= max_missing_parts:
+            break
+
     rows.extend(missing_parts_rows)
 
-    # 4) FAQs — ONE row only (ONLY if competitor has real FAQ section)
+    # 4) FAQs — ONE row only (only when competitor truly has FAQ heading)
     faq_row = missing_faqs_row(bayut_nodes, comp_nodes, comp_url)
     if faq_row:
         rows.append(faq_row)
 
     return dedupe_rows(rows)
+
+
+# =====================================================
+# SEO ANALYSIS (NEW TABLE)
+# =====================================================
+def url_slug(url: str) -> str:
+    try:
+        p = urlparse(url).path.strip("/")
+        return "/" + p if p else "/"
+    except Exception:
+        return "/"
+
+def extract_head_seo(html: str) -> Tuple[str, str]:
+    """
+    Returns (seo_title, meta_description)
+    Only possible if html includes <head>.
+    """
+    if not html:
+        return ("Not available", "Not available")
+    soup = BeautifulSoup(html, "html.parser")
+
+    title = ""
+    t = soup.find("title")
+    if t:
+        title = clean(t.get_text(" "))
+
+    desc = ""
+    md = soup.find("meta", attrs={"name": re.compile("^description$", re.I)})
+    if md and md.get("content"):
+        desc = clean(md.get("content"))
+
+    return (title or "Not available", desc or "Not available")
+
+def extract_media_used(html: str) -> str:
+    if not html:
+        return "Not available"
+    soup = BeautifulSoup(html, "html.parser")
+    for t in soup.find_all(list(IGNORE_TAGS)):
+        t.decompose()
+    root = soup.find("article") or soup
+
+    imgs = len(root.find_all("img"))
+    videos = len(root.find_all("video"))
+    iframes = len(root.find_all("iframe"))
+    audios = len(root.find_all("audio"))
+    tables = len(root.find_all("table"))
+
+    parts = []
+    if imgs: parts.append(f"Images: {imgs}")
+    if videos: parts.append(f"Videos: {videos}")
+    if iframes: parts.append(f"Iframes: {iframes}")
+    if audios: parts.append(f"Audio: {audios}")
+    if tables: parts.append(f"Tables: {tables}")
+
+    return " | ".join(parts) if parts else "None detected"
+
+def count_headers(nodes: List[dict]) -> Dict[str, int]:
+    counts = {"H1": 0, "H2": 0, "H3": 0, "H4": 0}
+    for x in flatten(nodes):
+        lvl = x.get("level", 0)
+        if lvl == 1: counts["H1"] += 1
+        if lvl == 2: counts["H2"] += 1
+        if lvl == 3: counts["H3"] += 1
+        if lvl == 4: counts["H4"] += 1
+    return counts
+
+def tokenize(text: str) -> List[str]:
+    text = (text or "").lower()
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    toks = [t for t in text.split() if t and len(t) >= 3]
+    return toks
+
+def phrase_candidates(text: str, n_min=2, n_max=6) -> Dict[str, int]:
+    toks = tokenize(text)
+    freq: Dict[str, int] = {}
+    for n in range(n_min, n_max + 1):
+        for i in range(0, max(len(toks) - n + 1, 0)):
+            chunk = toks[i:i+n]
+            if not chunk:
+                continue
+            if chunk[0] in STOP or chunk[-1] in STOP:
+                continue
+            if all(w in STOP or w in GENERIC_STOP for w in chunk):
+                continue
+            phrase = " ".join(chunk)
+            if len(phrase) < 8:
+                continue
+            freq[phrase] = freq.get(phrase, 0) + 1
+    return freq
+
+def pick_fkw_skw_longtails(seo_title: str, h1: str, headings_blob: str, body_text: str) -> Tuple[str, str, str]:
+    """
+    Returns (FKW, SKWs, Long-tail kws)
+    - FKW: best scoring phrase (2-4 words) boosted if present in title/H1
+    - SKWs: 3-6 phrases (2-4 words)
+    - Long-tail: 3 examples (4-6 words)
+    """
+    base = " ".join([seo_title or "", h1 or "", headings_blob or "", body_text or ""])
+    freq = phrase_candidates(base, n_min=2, n_max=6)
+    if not freq:
+        return ("Not available", "Not available", "Not available")
+
+    title_low = (seo_title or "").lower()
+    h1_low = (h1 or "").lower()
+
+    scored = []
+    for ph, c in freq.items():
+        n = len(ph.split())
+        boost = 1.0
+        if ph in title_low:
+            boost += 0.9
+        if ph in h1_low:
+            boost += 0.6
+        # prefer 2-4 word for fkw/skw
+        length_bonus = 1.15 if 2 <= n <= 4 else (0.85 if n >= 5 else 0.8)
+        score = (c * boost) * length_bonus
+        scored.append((score, ph, c, n))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+
+    # FKW: top 2-4 word phrase
+    fkw = None
+    for _, ph, _, n in scored[:200]:
+        if 2 <= n <= 4:
+            fkw = ph
+            break
+    if not fkw:
+        fkw = scored[0][1]
+
+    # SKWs: next strong 2-4 word phrases not too close to fkw
+    fkw_set = set(fkw.split())
+    skws = []
+    for _, ph, _, n in scored:
+        if ph == fkw:
+            continue
+        if not (2 <= n <= 4):
+            continue
+        ph_set = set(ph.split())
+        overlap = len(ph_set & fkw_set) / max(len(ph_set | fkw_set), 1)
+        if overlap >= 0.75:
+            continue
+        skws.append(ph)
+        if len(skws) >= 5:
+            break
+
+    # Long-tails: 4-6 word phrases
+    longtails = []
+    for _, ph, _, n in scored:
+        if 4 <= n <= 6:
+            longtails.append(ph)
+            if len(longtails) >= 3:
+                break
+
+    return (
+        fkw,
+        ", ".join(skws) if skws else "Not available",
+        ", ".join(longtails) if longtails else "Not available"
+    )
+
+def get_first_h1(nodes: List[dict]) -> str:
+    for x in flatten(nodes):
+        if x.get("level") == 1:
+            h = clean(x.get("header",""))
+            if h:
+                return h
+    return ""
+
+def headings_blob(nodes: List[dict]) -> str:
+    hs = []
+    for x in flatten(nodes):
+        if x.get("level") in (1,2,3,4):
+            h = clean(x.get("header",""))
+            if h and not is_noise_header(h):
+                hs.append(h)
+    return " ".join(hs[:80])
+
+def compute_kw_repetition(text: str, phrase: str) -> str:
+    if not text or not phrase or phrase == "Not available":
+        return "Not available"
+    t = " " + re.sub(r"\s+", " ", (text or "").lower()) + " "
+    p = " " + re.sub(r"\s+", " ", (phrase or "").lower()) + " "
+    return str(t.count(p))
+
+def seo_row_for_page(label: str, url: str, fr: FetchResult, nodes: List[dict]) -> dict:
+    # SEO title/meta only from HTML head if available
+    seo_title, meta_desc = extract_head_seo(fr.html or "")
+
+    # Fallback for SEO title if head not available: use H1
+    h1 = get_first_h1(nodes)
+    if seo_title == "Not available" and h1:
+        seo_title = h1
+
+    # Media used requires HTML
+    media = extract_media_used(fr.html or "")
+
+    # Slug
+    slug = url_slug(url)
+
+    # Headings count
+    hc = count_headers(nodes)
+    headers_summary = f"H1:{hc['H1']} | H2:{hc['H2']} | H3:{hc['H3']} | H4:{hc['H4']}"
+
+    # KW extraction source text
+    blob = headings_blob(nodes)
+    body_text = fr.text or ""
+
+    fkw, skws, longtails = pick_fkw_skw_longtails(seo_title, h1, blob, body_text)
+
+    # repetition count (FKW)
+    fkw_count = compute_kw_repetition(body_text, fkw)
+
+    return {
+        "Page": label,
+        "SEO title": seo_title,
+        "Meta description": meta_desc,
+        "Slug": slug,
+        "Media used": media,
+        "Headers count": headers_summary,
+        "FKW": fkw,
+        "FKW repeats (body)": fkw_count,
+        "SKWs": skws,
+        "Long-tail kws (examples)": longtails,
+    }
+
+def build_seo_analysis_update(bayut_url: str, bayut_fr: FetchResult, bayut_nodes: List[dict],
+                             competitors: List[str], comp_fr_map: Dict[str, FetchResult], comp_tree_map: Dict[str, dict]) -> pd.DataFrame:
+    rows = []
+    rows.append(seo_row_for_page("Bayut", bayut_url, bayut_fr, bayut_nodes))
+    for u in competitors:
+        fr = comp_fr_map[u]
+        nodes = comp_tree_map[u]["nodes"]
+        rows.append(seo_row_for_page(site_name(u), u, fr, nodes))
+    return pd.DataFrame(rows)
+
+def build_seo_analysis_newpost(new_title: str, competitors: List[str], comp_fr_map: Dict[str, FetchResult], comp_tree_map: Dict[str, dict]) -> pd.DataFrame:
+    rows = []
+    # Competitors
+    for u in competitors:
+        fr = comp_fr_map[u]
+        nodes = comp_tree_map[u]["nodes"]
+        rows.append(seo_row_for_page(site_name(u), u, fr, nodes))
+
+    # Target row (New post)
+    # Suggests FKW/SKW/Long-tail from the title only
+    fake_nodes = [{"level": 1, "header": new_title, "content": "", "children": []}]
+    fake_fr = FetchResult(True, "synthetic", 200, "", new_title, None)
+    row = seo_row_for_page("Target (New Post)", "Not applicable", fake_fr, fake_nodes)
+    # make target fields cleaner
+    row["Slug"] = "Suggested: /" + re.sub(r"[^a-z0-9]+", "-", new_title.lower()).strip("-") + "/"
+    row["Meta description"] = "Suggested: write a 140–160 char meta based on the intro angle."
+    row["Media used"] = "Suggested: 1 hero image + 1 map/graphic (optional)"
+    row["FKW repeats (body)"] = "Not applicable"
+    rows.insert(0, row)
+
+    return pd.DataFrame(rows)
+
+def ai_summary_from_seo_df(df: pd.DataFrame) -> str:
+    """
+    Short, useful summary of SEO differences.
+    No external AI calls — deterministic output.
+    """
+    if df is None or df.empty:
+        return "No SEO data to summarize."
+
+    # Prefer Bayut row if exists
+    bayut_row = None
+    for _, r in df.iterrows():
+        if str(r.get("Page","")).lower() == "bayut":
+            bayut_row = r
+            break
+
+    lines = []
+
+    def parse_hcounts(s: str) -> Tuple[int,int,int,int]:
+        m = re.findall(r"H1:(\d+)\s*\|\s*H2:(\d+)\s*\|\s*H3:(\d+)\s*\|\s*H4:(\d+)", str(s))
+        if not m:
+            return (0,0,0,0)
+        a,b,c,d = m[0]
+        return (int(a),int(b),int(c),int(d))
+
+    # Compare competitors to Bayut when possible
+    if bayut_row is not None:
+        b_h = parse_hcounts(bayut_row.get("Headers count",""))
+        b_title = str(bayut_row.get("SEO title",""))
+        b_meta = str(bayut_row.get("Meta description",""))
+
+        for _, r in df.iterrows():
+            page = str(r.get("Page",""))
+            if page.lower() == "bayut":
+                continue
+
+            c_h = parse_hcounts(r.get("Headers count",""))
+            if c_h[1] > b_h[1]:
+                lines.append(f"• {page} has more H2 sections than Bayut (structure depth).")
+            if len(str(r.get("SEO title",""))) > len(b_title) + 15:
+                lines.append(f"• {page} uses a longer SEO title (may target more modifiers/year/intent).")
+            if str(r.get("Meta description","")) != "Not available" and b_meta == "Not available":
+                lines.append(f"• {page} exposes a meta description, Bayut scrape didn’t (head not available).")
+
+            # keyword angle
+            fkw = str(r.get("FKW",""))
+            if fkw and fkw != "Not available":
+                lines.append(f"• {page} likely targets FKW: “{fkw}” (check if Bayut matches this intent).")
+
+        if not lines:
+            return "SEO summary: No clear structural/metadata differences detected from the available scrape."
+        return "SEO summary:\n" + "\n".join(lines[:8])
+
+    # No Bayut row (New Post Mode)
+    for _, r in df.iterrows():
+        page = str(r.get("Page",""))
+        if page.lower().startswith("target"):
+            continue
+        fkw = str(r.get("FKW",""))
+        if fkw and fkw != "Not available":
+            lines.append(f"• {page} targets FKW: “{fkw}”.")
+        if str(r.get("Meta description","")) != "Not available":
+            lines.append(f"• {page} has a meta description available in page HTML.")
+    return "SEO summary:\n" + ("\n".join(lines[:8]) if lines else "Not enough SEO data to summarize.")
 
 
 # =====================================================
@@ -1124,6 +1475,10 @@ def detect_main_angle(comp_nodes: List[dict]) -> str:
     blob = " ".join(h2s)
     if ("pros" in blob and "cons" in blob) or ("advantages" in blob and "disadvantages" in blob):
         return "pros-and-cons decision guide"
+    if "payment plan" in blob:
+        return "buyer decision / payment-plan-led guide"
+    if "amenities" in blob and "location" in blob:
+        return "community overview for buyers"
     return "decision-led overview"
 
 def new_post_coverage_rows(comp_nodes: List[dict], comp_url: str) -> List[dict]:
@@ -1173,7 +1528,7 @@ def new_post_coverage_rows(comp_nodes: List[dict], comp_url: str) -> List[dict]:
 
 
 # =====================================================
-# TABLE RENDER
+# HTML TABLE RENDER (with hyperlinks)
 # =====================================================
 def render_table(df: pd.DataFrame):
     if df.empty:
@@ -1181,59 +1536,6 @@ def render_table(df: pd.DataFrame):
         return
     html = df.to_html(index=False, escape=False)
     st.markdown(html, unsafe_allow_html=True)
-
-
-# =====================================================
-# AI SUMMARY BUTTON (OPTIONAL OPENAI)
-# =====================================================
-def strip_html(s: str) -> str:
-    return re.sub(r"<[^>]+>", "", s or "").strip()
-
-def build_actions_text(df: pd.DataFrame, max_rows: int = 30) -> str:
-    lines = []
-    for _, r in df.head(max_rows).iterrows():
-        h = str(r.get("Headers", "")).strip()
-        d = strip_html(str(r.get("Description", "")))
-        if h and d:
-            lines.append(f"- {h}: {d}")
-    return "\n".join(lines)
-
-def ai_summary_of_table(df: pd.DataFrame) -> str:
-    text = build_actions_text(df, max_rows=30)
-    if not text:
-        return "No rows to summarize."
-
-    api_key = None
-    try:
-        api_key = st.secrets.get("OPENAI_API_KEY")
-    except Exception:
-        api_key = os.getenv("OPENAI_API_KEY")
-
-    if api_key:
-        try:
-            from openai import OpenAI
-            client = OpenAI(api_key=api_key)
-
-            prompt = (
-                "Summarize the competitor vs Bayut gaps below into 6–10 concise bullets. "
-                "Be neutral: describe what the competitor covers that Bayut doesn't. "
-                "Group similar items where possible. Do NOT give an order or steps.\n\n"
-                f"{text}"
-            )
-
-            resp = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,
-            )
-            return resp.choices[0].message.content.strip()
-        except Exception as e:
-            # fallback summary
-            head = "\n".join(text.splitlines()[:10])
-            return f"(AI summary unavailable: {e})\n\nSummary:\n{head}"
-
-    # No key fallback
-    return "\n".join(text.splitlines()[:10])
 
 
 # =====================================================
@@ -1272,13 +1574,15 @@ if "update_df" not in st.session_state:
     st.session_state.update_df = pd.DataFrame()
 if "update_fetch" not in st.session_state:
     st.session_state.update_fetch = []
-if "ai_summary_text" not in st.session_state:
-    st.session_state.ai_summary_text = ""
+if "seo_update_df" not in st.session_state:
+    st.session_state.seo_update_df = pd.DataFrame()
 
 if "new_df" not in st.session_state:
     st.session_state.new_df = pd.DataFrame()
 if "new_fetch" not in st.session_state:
     st.session_state.new_fetch = []
+if "seo_new_df" not in st.session_state:
+    st.session_state.seo_new_df = pd.DataFrame()
 
 
 # =====================================================
@@ -1298,7 +1602,6 @@ if st.session_state.mode == "update":
     run = st.button("Run analysis", type="primary")
 
     if run:
-        st.session_state.ai_summary_text = ""  # reset
         if not bayut_url.strip():
             st.error("Bayut article URL is required.")
             st.stop()
@@ -1310,6 +1613,7 @@ if st.session_state.mode == "update":
         with st.spinner("Fetching Bayut (no exceptions)…"):
             bayut_fr_map = resolve_all_or_require_manual(agent, [bayut_url.strip()], st_key_prefix="bayut")
             bayut_tree_map = ensure_headings_or_require_repaste([bayut_url.strip()], bayut_fr_map, st_key_prefix="bayut_tree")
+        bayut_fr = bayut_fr_map[bayut_url.strip()]
         bayut_nodes = bayut_tree_map[bayut_url.strip()]["nodes"]
 
         # 2) HARD: ALL competitors must be available (or paste)
@@ -1317,7 +1621,7 @@ if st.session_state.mode == "update":
             comp_fr_map = resolve_all_or_require_manual(agent, competitors, st_key_prefix="comp_update")
             comp_tree_map = ensure_headings_or_require_repaste(competitors, comp_fr_map, st_key_prefix="comp_update_tree")
 
-        # 3) Build rows
+        # 3) Build content-gap rows
         all_rows = []
         internal_fetch = []
 
@@ -1341,6 +1645,16 @@ if st.session_state.mode == "update":
             else pd.DataFrame(columns=["Headers", "Description", "Source"])
         )
 
+        # 4) Build SEO Analysis table
+        st.session_state.seo_update_df = build_seo_analysis_update(
+            bayut_url=bayut_url.strip(),
+            bayut_fr=bayut_fr,
+            bayut_nodes=bayut_nodes,
+            competitors=competitors,
+            comp_fr_map=comp_fr_map,
+            comp_tree_map=comp_tree_map
+        )
+
     if show_internal_fetch and st.session_state.update_fetch:
         st.sidebar.markdown("### Internal fetch log (Update Mode)")
         st.sidebar.write(f"Playwright enabled: {PLAYWRIGHT_OK}")
@@ -1354,15 +1668,24 @@ if st.session_state.mode == "update":
     else:
         render_table(st.session_state.update_df)
 
-        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-        c1, c2 = st.columns([1, 3])
-        with c1:
-            if st.button("AI Summary", use_container_width=True):
-                st.session_state.ai_summary_text = ai_summary_of_table(st.session_state.update_df)
+    # SEO Analysis table
+    st.markdown("<div class='section-pill'>SEO Analysis</div>", unsafe_allow_html=True)
 
-        if st.session_state.ai_summary_text:
-            with st.expander("AI Summary (what competitor covers that Bayut doesn't)"):
-                st.write(st.session_state.ai_summary_text)
+    if st.session_state.seo_update_df is None or st.session_state.seo_update_df.empty:
+        st.info("Run analysis to see SEO comparison.")
+    else:
+        render_table(st.session_state.seo_update_df)
+
+        col_a, col_b = st.columns([1, 3])
+        with col_a:
+            if st.button("AI Summary (SEO)", type="secondary", key="seo_summary_update"):
+                st.session_state["seo_update_summary_text"] = ai_summary_from_seo_df(st.session_state.seo_update_df)
+
+        if st.session_state.get("seo_update_summary_text"):
+            st.markdown(
+                f"<div class='ai-summary'><b>SEO Summary</b><div class='muted'>Quick comparison for writers (structure + keywords + metadata).</div><pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state['seo_update_summary_text']}</pre></div>",
+                unsafe_allow_html=True
+            )
 
 
 # =====================================================
@@ -1371,7 +1694,7 @@ if st.session_state.mode == "update":
 else:
     st.markdown("<div class='section-pill'>New Post Mode</div>", unsafe_allow_html=True)
 
-    new_title = st.text_input("New post title", placeholder="Arabian Ranches vs Mudon")
+    new_title = st.text_input("New post title", placeholder="Pros & Cons of Living in Business Bay (2026)")
     competitors_text = st.text_area(
         "Competitor URLs (one per line)",
         height=120,
@@ -1409,6 +1732,14 @@ else:
             else pd.DataFrame(columns=["Headers covered", "Content covered", "Source"])
         )
 
+        # SEO Analysis (New Post Mode)
+        st.session_state.seo_new_df = build_seo_analysis_newpost(
+            new_title=new_title.strip(),
+            competitors=competitors,
+            comp_fr_map=comp_fr_map,
+            comp_tree_map=comp_tree_map
+        )
+
     if show_internal_fetch and st.session_state.new_fetch:
         st.sidebar.markdown("### Internal fetch log (New Post Mode)")
         st.sidebar.write(f"Playwright enabled: {PLAYWRIGHT_OK}")
@@ -1421,3 +1752,22 @@ else:
         st.info("Generate competitor coverage to see results.")
     else:
         render_table(st.session_state.new_df)
+
+    # SEO Analysis table
+    st.markdown("<div class='section-pill'>SEO Analysis</div>", unsafe_allow_html=True)
+
+    if st.session_state.seo_new_df is None or st.session_state.seo_new_df.empty:
+        st.info("Generate competitor coverage to see SEO comparison.")
+    else:
+        render_table(st.session_state.seo_new_df)
+
+        col_a, col_b = st.columns([1, 3])
+        with col_a:
+            if st.button("AI Summary (SEO)", type="secondary", key="seo_summary_new"):
+                st.session_state["seo_new_summary_text"] = ai_summary_from_seo_df(st.session_state.seo_new_df)
+
+        if st.session_state.get("seo_new_summary_text"):
+            st.markdown(
+                f"<div class='ai-summary'><b>SEO Summary</b><div class='muted'>Quick competitor SEO signals + suggested targets.</div><pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state['seo_new_summary_text']}</pre></div>",
+                unsafe_allow_html=True
+            )
