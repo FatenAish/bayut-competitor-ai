@@ -1514,6 +1514,54 @@ st.session_state.setdefault("cq_new_df", pd.DataFrame())
 st.session_state.setdefault("new_fetch", [])
 st.session_state.setdefault("last_sig_new", "")
 
+def make_gaps_table(bayut_fr: FetchResult, bayut_nodes: List[dict], comp_fr_map: Dict[str, FetchResult], comp_tree_map: Dict[str, dict]) -> pd.DataFrame:
+    rows = []
+
+    bayut_secs = section_nodes(bayut_nodes, levels=(2,3))
+    bayut_headers_norm = {norm_header(s["header"]) for s in bayut_secs}
+
+    for comp_url, fr in comp_fr_map.items():
+        comp_nodes = comp_tree_map[comp_url]["nodes"]
+        comp_name = site_name(comp_url)
+
+        comp_secs = section_nodes(comp_nodes, levels=(2,3))
+
+        # --- Missing headers (competitor has, Bayut doesn't)
+        for cs in comp_secs:
+            h = cs["header"]
+            if norm_header(h) not in bayut_headers_norm:
+                rows.append({
+                    "Headers": h,
+                    "What to add": clean(cs.get("content",""))[:500] or "Add this section based on competitor coverage.",
+                    "Source": source_link(comp_url),
+                })
+            else:
+                # --- Missing parts (same header exists but Bayut content is weaker)
+                match = find_best_bayut_match(h, bayut_secs, min_score=0.78)
+                if match:
+                    bayut_text = match["bayut_section"].get("content","") or ""
+                    comp_text  = cs.get("content","") or ""
+
+                    # quick “depth” check: if competitor has much more text
+                    if len(comp_text) >= 220 and len(comp_text) > (len(bayut_text) * 1.6):
+                        rows.append({
+                            "Headers": f"{h} (missing parts)",
+                            "What to add": clean(comp_text)[:500],
+                            "Source": source_link(comp_url),
+                        })
+
+        # --- FAQ row ONLY if competitor has real FAQ and Bayut doesn't
+        comp_has_faq = page_has_real_faq(fr, comp_nodes)
+        bayut_has_faq = page_has_real_faq(bayut_fr, bayut_nodes)
+        if comp_has_faq and not bayut_has_faq:
+            rows.append({
+                "Headers": "FAQs",
+                "What to add": f"Add a real FAQ section (competitor includes a real FAQ block).",
+                "Source": source_link(comp_url),
+            })
+
+    rows = dedupe_rows(rows)
+    return pd.DataFrame(rows, columns=["Headers", "What to add", "Source"])
 
 # =====================================================
 # UPDATE MODE UI
@@ -1563,7 +1611,13 @@ if st.session_state.mode == "update":
         # --- GAPS table (keep your existing engine if you want; here we keep minimal placeholder)
         # If you want, paste your update_mode_rows_header_first here (unchanged).
         # For now: keep whatever you had earlier for gaps computation.
-        st.session_state.update_df = st.session_state.update_df  # keep (you already have your gaps engine earlier)
+        st.session_state.update_df = make_gaps_table(
+    bayut_fr=bayut_fr,
+    bayut_nodes=bayut_nodes,
+    comp_fr_map=comp_fr_map,
+    comp_tree_map=comp_tree_map
+)
+  # keep (you already have your gaps engine earlier)
 
         # --- SEO table
         rows = []
