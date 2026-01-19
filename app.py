@@ -1619,7 +1619,7 @@ else:
     if st.session_state.last_sig_new and st.session_state.last_sig_new != sig_now:
         st.session_state.new_df = pd.DataFrame()
         st.session_state.seo_new_df = pd.DataFrame()
-        st.session למד.state.cq_new_df = pd.DataFrame()
+        st.session_state.cq_new_df = pd.DataFrame()
         st.session_state.new_fetch = []
     st.session_state.last_sig_new = sig_now
 
