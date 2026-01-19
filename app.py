@@ -149,18 +149,11 @@ st.markdown(
         border: 1px solid #E5E7EB;
         border-radius: 14px;
         padding: 14px 14px;
-        margin: 6px 0 10px 0; /* shows right above table area */
+        margin: 6px 0 10px 0;
       }}
       .muted {{
         color:#6B7280;
         font-size: 13px;
-      }}
-      .section-row {{
-        display:flex;
-        align-items:center;
-        justify-content:space-between;
-        gap: 12px;
-        margin-top: 2px;
       }}
     </style>
     """,
@@ -171,7 +164,7 @@ st.markdown(
     f"""
     <div class="hero">
       <h1><span class="bayut">Bayut</span> Competitor Gap Analysis</h1>
-      <p><b>Header-first</b> gap logic — Missing headers first, then <b>(missing parts)</b> under matching headers. FAQs are <b>one row</b> (topics only).</p>
+      <p><b>Header-first</b> gap logic — Missing headers first, then <b>(missing parts)</b> under matching headers. FAQs are <b>one row</b> (only if competitor has a REAL FAQ section).</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -679,7 +672,7 @@ def strip_label(h: str) -> str:
 
 
 # =====================================================
-# STRICT FAQ DETECTION (only when competitor truly has FAQs)
+# STRICT FAQ DETECTION (REAL FAQ ONLY)
 # =====================================================
 FAQ_TITLES = {
     "faq",
@@ -705,81 +698,112 @@ def _looks_like_question(s: str) -> bool:
         return True
     return False
 
-def find_faq_nodes(nodes: List[dict], fr: Optional[FetchResult] = None) -> List[dict]:
-    """
-    Returns FAQ nodes only if the page has REAL FAQ evidence.
-    """
-    if fr is None:
-        # if caller didn't pass fr, be strict: only allow node with >=3 question headings
-        out = []
-        for x in flatten(nodes):
-            if x.get("level") not in (2, 3):
-                continue
-            if not header_is_faq(x.get("header", "")):
-                continue
-            if len(_faq_question_headings_under(x)) >= 3:
-                out.append(x)
-        return out
-
-    if not page_has_real_faq(fr, nodes):
-        return []
-
-    faq = []
-    for x in flatten(nodes):
-        if x.get("level") not in (2, 3):
-            continue
-        if not header_is_faq(x.get("header", "")):
-            continue
-
-        # Prefer counting question HEADINGS (strict)
-        qh = _faq_question_headings_under(x)
-        if len(qh) >= 3:
-            faq.append(x)
-
-    return faq
-    faq = []
-    for x in flatten(nodes):
-        if x.get("level") not in (2, 3):
-            continue
-        if not header_is_faq(x.get("header", "")):
-            continue
-        qs = extract_questions_from_node(x)
-        if len(qs) >= 3:
-            faq.append(x)
-    return faq
-
 def normalize_question(q: str) -> str:
     q = clean(q or "")
     q = re.sub(r"^\s*\d+[\.\)]\s*", "", q)
     q = re.sub(r"^\s*[-•]\s*", "", q)
     return q.strip()
 
+def _has_faq_schema(html: str) -> bool:
+    if not html:
+        return False
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        scripts = soup.find_all("script", attrs={"type": re.compile(r"ld\+json", re.I)})
+        for s in scripts:
+            raw = (s.string or s.get_text(" ") or "").strip()
+            if not raw:
+                continue
+            try:
+                j = json.loads(raw)
+            except Exception:
+                continue
+
+            def walk(x):
+                if isinstance(x, dict):
+                    t = x.get("@type") or x.get("type")
+                    if isinstance(t, str) and t.lower() == "faqpage":
+                        return True
+                    if isinstance(t, list) and any(str(z).lower() == "faqpage" for z in t):
+                        return True
+                    for v in x.values():
+                        if walk(v):
+                            return True
+                elif isinstance(x, list):
+                    for v in x:
+                        if walk(v):
+                            return True
+                return False
+
+            if walk(j):
+                return True
+    except Exception:
+        return False
+    return False
+
+def _faq_heading_nodes(nodes: List[dict]) -> List[dict]:
+    out = []
+    for x in flatten(nodes):
+        if x.get("level") in (2, 3) and header_is_faq(x.get("header", "")):
+            out.append(x)
+    return out
+
+def _question_heading_children(node: dict) -> List[str]:
+    qs = []
+    for c in node.get("children", []) or []:
+        hdr = clean(c.get("header", ""))
+        if hdr and _looks_like_question(hdr):
+            qs.append(normalize_question(hdr))
+    return qs
+
+def page_has_real_faq(fr: FetchResult, nodes: List[dict]) -> bool:
+    """
+    FINAL RULE:
+    - Must have an explicit FAQ heading (FAQ/FAQs/Frequently Asked Questions)
+    AND
+      - If HTML exists: either FAQPage schema OR >=3 question-style child headings under FAQ section
+      - If no HTML: require >=3 question-style child headings under FAQ section
+    """
+    faq_nodes = _faq_heading_nodes(nodes)
+    if not faq_nodes:
+        return False
+
+    # If HTML exists, allow schema or question headings
+    if fr and fr.html:
+        if _has_faq_schema(fr.html):
+            return True
+        for fn in faq_nodes:
+            if len(_question_heading_children(fn)) >= 3:
+                return True
+        return False
+
+    # No HTML: must be visible question headings
+    for fn in faq_nodes:
+        if len(_question_heading_children(fn)) >= 3:
+            return True
+    return False
+
 def extract_questions_from_node(node: dict) -> List[str]:
     qs: List[str] = []
+    # We prefer question HEADINGS (strict)
+    qh = _question_heading_children(node)
+    qs.extend(qh)
 
+    # fallback to text if still not enough (but still strict: keep short)
     def add_from_text_block(txt: str):
         txt = clean(txt or "")
         if not txt:
             return
         chunks = re.split(r"[\n\r]+|(?<=[\.\?\!])\s+", txt)
-        for ch in chunks[:120]:
+        for ch in chunks[:80]:
             ch = clean(ch)
             if not ch or len(ch) > 160:
                 continue
             if _looks_like_question(ch):
                 qs.append(normalize_question(ch))
 
-    add_from_text_block(node.get("content", ""))
-
-    def walk(n: dict):
-        for c in n.get("children", []):
-            hdr = clean(c.get("header", ""))
-            if hdr and not is_noise_header(hdr) and _looks_like_question(hdr):
-                qs.append(normalize_question(hdr))
-            add_from_text_block(c.get("content", ""))
-            walk(c)
-
-    walk(node)
+    if len(qs) < 3:
+        add_from_text_block(node.get("content", ""))
 
     seen = set()
     out = []
@@ -790,24 +814,6 @@ def extract_questions_from_node(node: dict) -> List[str]:
         seen.add(k)
         out.append(q)
     return out[:25]
-
-def extract_all_questions(nodes: List[dict]) -> List[str]:
-    qs = []
-    for x in flatten(nodes):
-        h = clean(x.get("header", ""))
-        if not h or is_noise_header(h):
-            continue
-        if _looks_like_question(h):
-            qs.append(normalize_question(h))
-    seen = set()
-    out = []
-    for q in qs:
-        k = norm_header(q)
-        if k in seen:
-            continue
-        seen.add(k)
-        out.append(q)
-    return out[:30]
 
 def faq_subject(q: str) -> str:
     s = norm_header(normalize_question(q))
@@ -842,87 +848,6 @@ def faq_subjects_from_questions(questions: List[str], limit: int = 10) -> List[s
         if len(out) >= limit:
             break
     return out
-def _has_faq_schema(html: str) -> bool:
-    if not html:
-        return False
-    try:
-        soup = BeautifulSoup(html, "html.parser")
-        for s in soup.find_all("script", attrs={"type": re.compile("ld\\+json", re.I)}):
-            raw = s.string or s.get_text(" ") or ""
-            raw = raw.strip()
-            if not raw:
-                continue
-            try:
-                j = json.loads(raw)
-            except Exception:
-                continue
-
-            def walk(x):
-                if isinstance(x, dict):
-                    t = x.get("@type") or x.get("type")
-                    if isinstance(t, str) and t.lower() == "faqpage":
-                        return True
-                    if isinstance(t, list) and any(str(z).lower() == "faqpage" for z in t):
-                        return True
-                    for v in x.values():
-                        if walk(v):
-                            return True
-                elif isinstance(x, list):
-                    for v in x:
-                        if walk(v):
-                            return True
-                return False
-
-            if walk(j):
-                return True
-    except Exception:
-        return False
-    return False
-
-def _has_visible_faq_heading_in_html(html: str) -> bool:
-    if not html:
-        return False
-    try:
-        soup = BeautifulSoup(html, "html.parser")
-        for t in soup.find_all(list(IGNORE_TAGS)):
-            t.decompose()
-        root = soup.find("article") or soup
-        for tag in root.find_all(["h1","h2","h3","h4"]):
-            txt = clean(tag.get_text(" "))
-            if txt and header_is_faq(txt):
-                return True
-    except Exception:
-        return False
-    return False
-
-def _faq_question_headings_under(node: dict) -> List[str]:
-    """
-    Only count question-like HEADINGS (not random sentences).
-    """
-    qs = []
-    for c in node.get("children", []) or []:
-        hdr = clean(c.get("header", ""))
-        if hdr and _looks_like_question(hdr):
-            qs.append(normalize_question(hdr))
-    return qs
-
-def page_has_real_faq(fr: FetchResult, nodes: List[dict]) -> bool:
-    """
-    Strict rule:
-    - If HTML exists: require FAQ schema OR an actual FAQ heading in HTML.
-    - If HTML doesn't exist (reader/text): require an FAQ heading in extracted nodes
-      AND at least 3 question-like child headings under it.
-    """
-    if fr and fr.html:
-        return _has_faq_schema(fr.html) or _has_visible_faq_heading_in_html(fr.html)
-
-    # No HTML → be extra strict
-    for x in flatten(nodes):
-        if x.get("level") in (2,3) and header_is_faq(x.get("header","")):
-            qh = _faq_question_headings_under(x)
-            if len(qh) >= 3:
-                return True
-    return False
 
 def missing_faqs_row(
     bayut_nodes: List[dict],
@@ -931,32 +856,23 @@ def missing_faqs_row(
     comp_fr: FetchResult,
     comp_url: str
 ) -> Optional[dict]:
-    # Competitor must have REAL FAQ evidence
-    comp_faq_nodes = find_faq_nodes(comp_nodes, fr=comp_fr)
-    if not comp_faq_nodes:
+    # Competitor must have REAL FAQ (no false positives)
+    if not page_has_real_faq(comp_fr, comp_nodes):
         return None
 
+    comp_faq_nodes = _faq_heading_nodes(comp_nodes)
     comp_qs = []
     for fn in comp_faq_nodes:
-        # use headings first (strict), then fallback to text if needed
-        qh = _faq_question_headings_under(fn)
-        if qh:
-            comp_qs.extend(qh)
-        else:
-            comp_qs.extend(extract_questions_from_node(fn))
-
+        comp_qs.extend(extract_questions_from_node(fn))
     comp_qs = [q for q in comp_qs if q and len(q) > 5]
     if len(comp_qs) < 3:
         return None
 
-    # Bayut: detect real FAQ evidence
-    bayut_faq_nodes = find_faq_nodes(bayut_nodes, fr=bayut_fr)
+    # Bayut must be detected correctly (no false negatives)
+    bayut_has = page_has_real_faq(bayut_fr, bayut_nodes)
     bayut_qs = []
-    for fn in bayut_faq_nodes:
-        qh = _faq_question_headings_under(fn)
-        if qh:
-            bayut_qs.extend(qh)
-        else:
+    if bayut_has:
+        for fn in _faq_heading_nodes(bayut_nodes):
             bayut_qs.extend(extract_questions_from_node(fn))
     bayut_qs = [q for q in bayut_qs if q and len(q) > 5]
 
@@ -968,58 +884,11 @@ def missing_faqs_row(
 
     bayut_set = {q_key(q) for q in bayut_qs if q}
 
-    # If Bayut has no FAQ at all
     if not bayut_qs:
         topics = faq_subjects_from_questions(comp_qs, limit=10)
         return {
             "Headers": "FAQs",
-            "Description": "Competitor has an FAQ section covering topics such as: " + ", ".join(topics) + ".",
-            "Source": source_link(comp_url),
-        }
-
-    missing_qs = [q for q in comp_qs if q_key(q) not in bayut_set]
-    if not missing_qs:
-        return None
-
-    topics = faq_subjects_from_questions(missing_qs, limit=10)
-    return {
-        "Headers": "FAQs",
-        "Description": "Missing FAQ topics: " + ", ".join(topics) + ".",
-        "Source": source_link(comp_url),
-    }
-    comp_faq_nodes = find_faq_nodes(comp_nodes)
-    if not comp_faq_nodes:
-        return None
-
-    comp_qs = []
-    for fn in comp_faq_nodes:
-        comp_qs.extend(extract_questions_from_node(fn))
-    if not comp_qs:
-        comp_qs = extract_all_questions(comp_nodes)
-
-    comp_qs = [q for q in comp_qs if q and len(q) > 5]
-    if len(comp_qs) < 3:
-        return None
-
-    bayut_faq_nodes = find_faq_nodes(bayut_nodes)
-    bayut_qs = []
-    for fn in bayut_faq_nodes:
-        bayut_qs.extend(extract_questions_from_node(fn))
-    bayut_qs = [q for q in bayut_qs if q and len(q) > 5]
-
-    def q_key(q: str) -> str:
-        q2 = normalize_question(q)
-        q2 = re.sub(r"[^a-z0-9\s]", "", q2.lower())
-        q2 = re.sub(r"\s+", " ", q2).strip()
-        return q2
-
-    bayut_set = {q_key(q) for q in bayut_qs if q}
-
-    if not bayut_qs:
-        topics = faq_subjects_from_questions(comp_qs, limit=10)
-        return {
-            "Headers": "FAQs",
-            "Description": "Competitor has an FAQ section covering topics such as: " + ", ".join(topics) + ".",
+            "Description": "Competitor has a real FAQ section covering topics such as: " + ", ".join(topics) + ".",
             "Source": source_link(comp_url),
         }
 
@@ -1303,8 +1172,8 @@ def update_mode_rows_header_first(
 
     rows.extend(missing_parts_rows)
 
-    # 4) FAQs — ONE row only (only when competitor truly has FAQ heading)
-faq_row = missing_faqs_row(bayut_nodes, bayut_fr, comp_nodes, comp_fr, comp_url)
+    # 4) FAQs — ONE row only (ONLY if competitor has REAL FAQ)
+    faq_row = missing_faqs_row(bayut_nodes, bayut_fr, comp_nodes, comp_fr, comp_url)
     if faq_row:
         rows.append(faq_row)
 
@@ -1312,9 +1181,7 @@ faq_row = missing_faqs_row(bayut_nodes, bayut_fr, comp_nodes, comp_fr, comp_url)
 
 
 # =====================================================
-# SEO ANALYSIS (NO LONG-TAIL COLUMN + TRUE HEADER COUNT)
-# + GOOGLE UAE RANKING (Desktop + Mobile) via SerpApi
-# + AI VISIBILITY TABLE (AI Overview presence + citation when available)
+# SEO ANALYSIS (SKWs REMOVED) + GOOGLE UAE RANKING + AI VISIBILITY
 # =====================================================
 def _secrets_get(key: str, default=None):
     try:
@@ -1376,10 +1243,6 @@ def extract_media_used(html: str) -> str:
     return " | ".join(parts) if parts else "None detected"
 
 def count_headers_true_from_html(html: str) -> Dict[str, int]:
-    """
-    100% true count when HTML exists:
-    - count real h1..h4 inside article/root (no noise filtering)
-    """
     counts = {"H1": 0, "H2": 0, "H3": 0, "H4": 0}
     if not html:
         return counts
@@ -1429,10 +1292,6 @@ def phrase_candidates(text: str, n_min=2, n_max=4) -> Dict[str, int]:
     return freq
 
 def pick_fkw_only(seo_title: str, h1: str, headings_blob_text: str, body_text: str, manual_fkw: str = "") -> str:
-    """
-    Returns FKW only (SKWs removed by request).
-    - manual_fkw (if provided) overrides extracted FKW.
-    """
     manual_fkw = clean(manual_fkw)
     if manual_fkw:
         return manual_fkw.lower()
@@ -1452,60 +1311,9 @@ def pick_fkw_only(seo_title: str, h1: str, headings_blob_text: str, body_text: s
             boost += 0.9
         if ph in h1_low:
             boost += 0.6
-        score = (c * boost)
-        scored.append((score, ph))
-
+        scored.append((c * boost, ph))
     scored.sort(key=lambda x: x[0], reverse=True)
     return scored[0][1] if scored else "Not available"
-    """
-    Returns (FKW, SKWs)
-    - manual_fkw (if provided) overrides extracted FKW.
-    - Long-tail column removed by request.
-    """
-    manual_fkw = clean(manual_fkw)
-    base = " ".join([seo_title or "", h1 or "", headings_blob_text or "", body_text or ""])
-    freq = phrase_candidates(base, n_min=2, n_max=4)
-    if not freq:
-        fkw = manual_fkw if manual_fkw else "Not available"
-        return (fkw, "Not available")
-
-    title_low = (seo_title or "").lower()
-    h1_low = (h1 or "").lower()
-
-    scored = []
-    for ph, c in freq.items():
-        boost = 1.0
-        if ph in title_low:
-            boost += 0.9
-        if ph in h1_low:
-            boost += 0.6
-        score = (c * boost)
-        scored.append((score, ph, c))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-
-    if manual_fkw:
-        fkw = manual_fkw.lower()
-    else:
-        fkw = scored[0][1]
-
-    fkw_set = set(fkw.split())
-    skws = []
-    for _, ph, _ in scored:
-        if ph == fkw:
-            continue
-        ph_set = set(ph.split())
-        overlap = len(ph_set & fkw_set) / max(len(ph_set | fkw_set), 1)
-        if overlap >= 0.75:
-            continue
-        skws.append(ph)
-        if len(skws) >= 5:
-            break
-
-    return (
-        fkw,
-        ", ".join(skws) if skws else "Not available",
-    )
 
 def get_first_h1(nodes: List[dict]) -> str:
     for x in flatten(nodes):
@@ -1542,10 +1350,6 @@ def normalize_url_for_match(u: str) -> str:
 
 @st.cache_data(show_spinner=False, ttl=1800)
 def serpapi_serp_cached(query: str, device: str) -> dict:
-    """
-    device: "desktop" or "mobile"
-    Uses google.ae + gl=ae.
-    """
     if not SERPAPI_API_KEY:
         return {"_error": "missing_serpapi_key"}
 
@@ -1557,7 +1361,7 @@ def serpapi_serp_cached(query: str, device: str) -> dict:
         "hl": "en",
         "api_key": SERPAPI_API_KEY,
         "num": 20,
-        "device": device,  # SerpApi supports device in many setups
+        "device": device,
     }
     try:
         r = requests.get("https://serpapi.com/search.json", params=params, timeout=35)
@@ -1568,9 +1372,6 @@ def serpapi_serp_cached(query: str, device: str) -> dict:
         return {"_error": str(e)}
 
 def serp_rank_for_url(query: str, page_url: str, device: str) -> Tuple[Optional[int], str]:
-    """
-    Returns (rank, note)
-    """
     data = serpapi_serp_cached(query, device)
     if not data or data.get("_error"):
         return (None, f"Not available ({data.get('_error')})" if isinstance(data, dict) else "Not available")
@@ -1592,10 +1393,6 @@ def serp_rank_for_url(query: str, page_url: str, device: str) -> Tuple[Optional[
     return (None, "Not in top results")
 
 def serp_ai_visibility(query: str, page_url: str, device: str) -> Dict[str, str]:
-    """
-    Best-effort parse of AI overview presence + whether page is cited (when SerpApi exposes fields).
-    Output strings for a table.
-    """
     data = serpapi_serp_cached(query, device)
     if not data or data.get("_error"):
         return {
@@ -1663,9 +1460,8 @@ def seo_row_for_page(label: str, url: str, fr: FetchResult, nodes: List[dict], m
     blob = headings_blob(nodes)
     body_text = fr.text or ""
 
-    fkw, skws = pick_fkw_skw(seo_title, h1, blob, body_text, manual_fkw=manual_fkw)
-fkw_count = compute_kw_repetition(body_text, fkw)
-
+    fkw = pick_fkw_only(seo_title, h1, blob, body_text, manual_fkw=manual_fkw)
+    fkw_count = compute_kw_repetition(body_text, fkw)
 
     return {
         "Page": label,
@@ -1679,39 +1475,6 @@ fkw_count = compute_kw_repetition(body_text, fkw)
         "Google rank UAE (Desktop)": "Not run",
         "Google rank UAE (Mobile)": "Not run",
     }
-def word_count_from_text(text: str) -> int:
-    t = clean(text or "")
-    if not t:
-        return 0
-    return len(re.findall(r"\b\w+\b", t))
-
-def extract_last_modified_from_html(html: str) -> str:
-    """
-    Best-effort: uses meta/article times if present.
-    """
-    if not html:
-        return "Not available"
-    try:
-        soup = BeautifulSoup(html, "html.parser")
-        # common meta fields
-        keys = [
-            ("meta", {"property": "article:modified_time"}),
-            ("meta", {"property": "article:published_time"}),
-            ("meta", {"name": "lastmod"}),
-            ("meta", {"name": "date"}),
-            ("time", {}),
-        ]
-        # article:modified_time
-        m = soup.find("meta", attrs={"property": re.compile(r"article:modified_time", re.I)})
-        if m and m.get("content"):
-            return clean(m.get("content"))
-
-        # try any time tag
-        t = soup.find("time")
-        if t:
-            dt = t.get("datetime")
-            if dt:
-                return clean
 
 def enrich_seo_df_with_rank_and_ai(df: pd.DataFrame, manual_query: str = "") -> Tuple[pd.DataFrame, pd.DataFrame]:
     if df is None or df.empty:
@@ -1825,71 +1588,9 @@ def build_seo_analysis_newpost(
 
     return pd.DataFrame(rows)
 
-def openai_summarize_block(title: str, payload_text: str) -> str:
-    payload_text = clean(payload_text)
-    if not OPENAI_API_KEY:
-        return payload_text
-
-    try:
-        headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json",
-        }
-        body = {
-            "model": OPENAI_MODEL,
-            "messages": [
-                {"role": "system", "content": "You are a senior SEO/editorial analyst. Be concise, specific, and actionable."},
-                {"role": "user", "content": f"{title}\n\nData:\n{payload_text}\n\nWrite 6-10 bullet points max. No fluff."}
-            ],
-            "temperature": 0.2,
-        }
-        r = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, data=json.dumps(body), timeout=35)
-        if r.status_code != 200:
-            return payload_text
-        j = r.json()
-        out = j["choices"][0]["message"]["content"]
-        return clean(out)
-    except Exception:
-        return payload_text
-
-def deterministic_gaps_summary(df: pd.DataFrame) -> str:
-    if df is None or df.empty:
-        return "No gaps found."
-    headers = [str(x) for x in df.get("Headers", []).tolist()]
-    top = headers[:10]
-    lines = ["Key gaps (top signals):"]
-    for h in top:
-        lines.append(f"• {h}")
-    if len(headers) > 10:
-        lines.append(f"• +{len(headers)-10} more")
-    return "\n".join(lines)
-
-def deterministic_seo_summary(df: pd.DataFrame) -> str:
-    if df is None or df.empty:
-        return "No SEO data."
-    lines = ["Key SEO signals:"]
-    for _, r in df.iterrows():
-        page = str(r.get("Page",""))
-        if page.lower().startswith("target"):
-            continue
-        lines.append(f"• {page}: FKW='{r.get('FKW','')}', H-count={r.get('Headers count','')}, Rank UAE desktop={r.get('Google rank UAE (Desktop)','')}")
-    return "\n".join(lines[:10])
-
-def ai_summary_from_df(kind: str, df: pd.DataFrame) -> str:
-    if df is None or df.empty:
-        return "No data to summarize."
-    sample = df.head(20).to_string(index=False)
-    if kind == "gaps":
-        base = deterministic_gaps_summary(df)
-        return openai_summarize_block("Summarize content gaps into actionable bullets.", base + "\n\nTop rows:\n" + sample)
-    if kind == "seo":
-        base = deterministic_seo_summary(df)
-        return openai_summarize_block("Summarize SEO signals & ranking insights into actionable bullets.", base + "\n\nTop rows:\n" + sample)
-    return "No summary."
-
 
 # =====================================================
-# CONTENT QUALITY TABLE (NEW)
+# CONTENT QUALITY TABLE (FAQs fixed + your rows)
 # =====================================================
 def domain_of(url: str) -> str:
     try:
@@ -1946,7 +1647,7 @@ def word_count_from_text(text: str) -> int:
     t = clean(text or "")
     if not t:
         return 0
-    return len(t.split())
+    return len(re.findall(r"\b\w+\b", t))
 
 def _kw_stuffing_label(word_count: int, repeats: str) -> str:
     try:
@@ -1964,24 +1665,21 @@ def _kw_stuffing_label(word_count: int, repeats: str) -> str:
 
 def _latest_year_mentioned(text: str) -> int:
     years = re.findall(r"\b(19\d{2}|20\d{2})\b", (text or ""))
-    years_i = []
+    ys = []
     for y in years:
         try:
-            years_i.append(int(y))
+            ys.append(int(y))
         except Exception:
             pass
-    return max(years_i) if years_i else 0
+    return max(ys) if ys else 0
 
 def _has_brief_summary(nodes: List[dict], text: str) -> str:
     blob = (headings_blob(nodes) or "").lower()
     t = (text or "").lower()
     cues = ["tl;dr", "tldr", "key takeaways", "in summary", "summary", "quick summary", "at a glance"]
-    if any(c in blob for c in cues) or any(c in t[:1200] for c in cues):
+    if any(c in blob for c in cues) or any(c in t[:1400] for c in cues):
         return "Yes"
     return "No"
-
-def _has_faq(nodes: List[dict]) -> str:
-    return "Yes" if find_faq_nodes(nodes) else "No"
 
 def _count_tables_videos(html: str) -> Tuple[int, int]:
     if not html:
@@ -2003,18 +1701,17 @@ def _styling_layout_label(html: str, nodes: List[dict], text: str) -> str:
     wc = word_count_from_text(text)
     h2_count = sum(1 for x in flatten(nodes) if x.get("level") == 2)
     has_toc = "table of contents" in (text or "").lower()
-    has_lists = ("•" in (text or "")) or ("-" in (text or "")[:2000])
     tables, videos = _count_tables_videos(html or "")
+
     score = 0
     if wc >= 1200: score += 1
     if h2_count >= 6: score += 1
     if has_toc: score += 1
-    if has_lists: score += 1
     if tables > 0: score += 1
     if videos > 0: score += 1
 
-    if score >= 5: return "Strong"
-    if score >= 3: return "OK"
+    if score >= 4: return "Strong"
+    if score >= 2: return "OK"
     return "Weak"
 
 def _latest_information_label(last_modified: str, text: str) -> str:
@@ -2040,11 +1737,9 @@ def _outdated_label(last_modified: str, text: str) -> str:
 def _topic_cannibalization_label(query: str, page_url: str) -> str:
     if not SERPAPI_API_KEY:
         return "Not available (no SERPAPI_API_KEY)"
-
     dom = domain_of(page_url)
     if not dom or not query or query == "Not available":
         return "Not available"
-
     site_q = f"site:{dom} {query}"
     data = serpapi_serp_cached(site_q, device="desktop")
     if not data or data.get("_error"):
@@ -2063,10 +1758,10 @@ def _topic_cannibalization_label(query: str, page_url: str) -> str:
 
     cnt = len(set(others))
     if cnt >= 3:
-        return f"High risk (≈{cnt} other pages on same domain for this topic)"
+        return f"High risk (≈{cnt} other pages on same domain)"
     if cnt >= 1:
-        return f"Medium risk (≈{cnt} other page(s) on same domain for this topic)"
-    return "Low risk (no other strong overlaps detected)"
+        return f"Medium risk (≈{cnt} other page(s) on same domain)"
+    return "Low risk"
 
 def build_content_quality_table_from_seo(
     seo_df: pd.DataFrame,
@@ -2098,7 +1793,7 @@ def build_content_quality_table_from_seo(
         page_url = str(row.get("__url", "")).strip()
 
         if page.lower().startswith("target"):
-            col = [
+            out[page] = [
                 "Not applicable",
                 "Not applicable",
                 "Not applicable",
@@ -2111,7 +1806,6 @@ def build_content_quality_table_from_seo(
                 "Suggested: add 1 short video (optional)",
                 "Suggested: TOC + clean spacing + visuals",
             ]
-            out[page] = col
             continue
 
         fr = fr_map_by_url.get(page_url)
@@ -2128,7 +1822,10 @@ def build_content_quality_table_from_seo(
 
         tables, videos = _count_tables_videos(html)
 
-        col = [
+        # ✅ FIX: FAQ must use the STRICT real-FAQ detector (no false negatives)
+        faq_value = "Yes" if (fr and page_has_real_faq(fr, nodes)) else "No"
+
+        out[page] = [
             _topic_cannibalization_label(fkw, page_url),
             str(wc) if wc else "Not available",
             lm,
@@ -2136,15 +1833,87 @@ def build_content_quality_table_from_seo(
             _latest_information_label(lm, text),
             _outdated_label(lm, text),
             _has_brief_summary(nodes, text),
-            _has_faq(nodes),
+            faq_value,
             str(tables),
             str(videos),
             _styling_layout_label(html, nodes, text),
         ]
 
-        out[page] = col
-
     return pd.DataFrame(out)
+
+
+# =====================================================
+# AI SUMMARY (REAL SUMMARY: 6–8 bullets, NOT table dump)
+# =====================================================
+def openai_summarize_block(title: str, payload_text: str) -> str:
+    payload_text = clean(payload_text)
+    if not OPENAI_API_KEY:
+        return payload_text
+
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        body = {
+            "model": OPENAI_MODEL,
+            "messages": [
+                {"role": "system", "content": "You are a senior SEO/editorial analyst. Output ONLY 6-8 bullets. Each bullet must be actionable. No table dumps."},
+                {"role": "user", "content": f"{title}\n\n{payload_text}\n\nReturn 6-8 bullets max."}
+            ],
+            "temperature": 0.2,
+        }
+        r = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, data=json.dumps(body), timeout=35)
+        if r.status_code != 200:
+            return payload_text
+        j = r.json()
+        out = j["choices"][0]["message"]["content"]
+        return clean(out)
+    except Exception:
+        return payload_text
+
+def concise_gaps_summary(df: pd.DataFrame, max_bullets: int = 8) -> str:
+    if df is None or df.empty:
+        return "No gaps found."
+    # take unique headers only (avoid repeating noise)
+    headers = []
+    seen = set()
+    for h in df.get("Headers", []).tolist():
+        h = str(h).strip()
+        k = norm_header(h)
+        if not h or not k or k in seen:
+            continue
+        seen.add(k)
+        headers.append(h)
+        if len(headers) >= max_bullets:
+            break
+    bullets = [f"• Add/expand: {h}" for h in headers]
+    return "\n".join(bullets) if bullets else "No gaps found."
+
+def concise_seo_summary(df: pd.DataFrame, max_bullets: int = 8) -> str:
+    if df is None or df.empty:
+        return "No SEO data."
+    bullets = []
+    for _, r in df.iterrows():
+        page = str(r.get("Page",""))
+        if page.lower().startswith("target"):
+            continue
+        fkw = str(r.get("FKW",""))
+        hcount = str(r.get("Headers count",""))
+        rd = str(r.get("Google rank UAE (Desktop)",""))
+        bullets.append(f"• {page}: FKW='{fkw}' | Headers={hcount} | UAE desktop rank={rd}")
+        if len(bullets) >= max_bullets:
+            break
+    return "\n".join(bullets) if bullets else "No SEO data."
+
+def ai_summary_from_df(kind: str, df: pd.DataFrame) -> str:
+    if kind == "gaps":
+        base = concise_gaps_summary(df, max_bullets=8)
+        return openai_summarize_block("Summarize the gaps into writer actions.", base)
+    if kind == "seo":
+        base = concise_seo_summary(df, max_bullets=8)
+        return openai_summarize_block("Summarize SEO signals into writer actions.", base)
+    return "No summary."
 
 
 # =====================================================
@@ -2173,14 +1942,11 @@ def new_post_coverage_rows(comp_nodes: List[dict], comp_url: str) -> List[dict]:
     h2s = [strip_label(h) for h in list_headers(comp_nodes, 2)]
     h2_main = [h for h in h2s if h and not header_is_faq(h)]
     h2_main = h2_main[:6]
-    has_faq = any(header_is_faq(h) for h in h2s)
 
     if h2_main:
         h2_text = "Major sections include: " + " → ".join(h2_main) + "."
     else:
         h2_text = "Major sections introduce the topic, break down key points, and end with wrap-up context."
-    if has_faq:
-        h2_text += " It also includes a separate FAQ section."
 
     h3s = [strip_label(h) for h in list_headers(comp_nodes, 3)]
     themes = []
@@ -2200,8 +1966,6 @@ def new_post_coverage_rows(comp_nodes: List[dict], comp_url: str) -> List[dict]:
         h3_text = "Subsections break sections into practical themes such as: " + ", ".join(themes) + "."
     else:
         h3_text = "Subsections add practical depth inside each major section."
-    if has_faq:
-        h3_text += " FAQs appear as question-style items."
 
     return [
         {"Headers covered": "H1 (main angle)", "Content covered": h1_text, "Source": site_name(comp_url)},
@@ -2271,7 +2035,6 @@ if "seo_update_df" not in st.session_state:
     st.session_state.seo_update_df = pd.DataFrame()
 if "ai_update_df" not in st.session_state:
     st.session_state.ai_update_df = pd.DataFrame()
-# NEW: Content Quality state (Update)
 if "cq_update_df" not in st.session_state:
     st.session_state.cq_update_df = pd.DataFrame()
 
@@ -2283,7 +2046,6 @@ if "seo_new_df" not in st.session_state:
     st.session_state.seo_new_df = pd.DataFrame()
 if "ai_new_df" not in st.session_state:
     st.session_state.ai_new_df = pd.DataFrame()
-# NEW: Content Quality state (New)
 if "cq_new_df" not in st.session_state:
     st.session_state.cq_new_df = pd.DataFrame()
 
@@ -2332,13 +2094,12 @@ if st.session_state.mode == "update":
             internal_fetch.append((comp_url, f"ok ({src})"))
             comp_nodes = comp_tree_map[comp_url]["nodes"]
 
-all_rows.extend(update_mode_rows_header_first(
-    bayut_nodes=bayut_nodes,
-    bayut_fr=bayut_fr,
-    comp_nodes=comp_nodes,
-    comp_fr=comp_fr_map[comp_url],
-    comp_url=comp_url,
-
+            all_rows.extend(update_mode_rows_header_first(
+                bayut_nodes=bayut_nodes,
+                bayut_fr=bayut_fr,
+                comp_nodes=comp_nodes,
+                comp_fr=comp_fr_map[comp_url],
+                comp_url=comp_url,
                 max_missing_headers=7,
                 max_missing_parts=5,
             ))
@@ -2368,16 +2129,13 @@ all_rows.extend(update_mode_rows_header_first(
             st.session_state.seo_update_df = seo_enriched
             st.session_state.ai_update_df = ai_df
 
-        # ===== NEW: Content Quality Table build =====
-        with st.spinner("Building Content Quality table…"):
-            url_to_fr = {bayut_url.strip(): bayut_fr, **comp_fr_map}
-            url_to_tree = {bayut_url.strip(): {"nodes": bayut_nodes}, **{u: comp_tree_map[u] for u in competitors}}
-            st.session_state.cq_update_df = build_content_quality_table_from_seo(
-                seo_df=st.session_state.seo_update_df,
-                fr_map_by_url=url_to_fr,
-                tree_map_by_url=url_to_tree,
-                manual_query=manual_fkw_update.strip()
-            )
+        # Content Quality table (uses STRICT FAQ detector)
+        st.session_state.cq_update_df = build_content_quality_table_from_seo(
+            seo_df=st.session_state.seo_update_df,
+            fr_map_by_url={bayut_url.strip(): bayut_fr, **comp_fr_map},
+            tree_map_by_url={bayut_url.strip(): {"nodes": bayut_nodes}, **{u: comp_tree_map[u] for u in competitors}},
+            manual_query=manual_fkw_update.strip()
+        )
 
     if show_internal_fetch and st.session_state.update_fetch:
         st.sidebar.markdown("### Internal fetch log (Update Mode)")
@@ -2385,17 +2143,13 @@ all_rows.extend(update_mode_rows_header_first(
         for u, s in st.session_state.update_fetch:
             st.sidebar.write(u, "—", s)
 
-    gaps_clicked = section_header_with_ai_button(
-        "Gaps Table",
-        "Summarize by AI",
-        "btn_gaps_summary_update"
-    )
+    gaps_clicked = section_header_with_ai_button("Gaps Table", "Summarize by AI", "btn_gaps_summary_update")
     if gaps_clicked:
         st.session_state["gaps_update_summary_text"] = ai_summary_from_df("gaps", st.session_state.update_df)
 
     if st.session_state.get("gaps_update_summary_text"):
         st.markdown(
-            f"<div class='ai-summary'><b>AI Summary</b><div class='muted'>Actionable summary based on the gaps table.</div><pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state['gaps_update_summary_text']}</pre></div>",
+            f"<div class='ai-summary'><b>AI Summary</b><div class='muted'>6–8 bullets only (real summary).</div><pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state['gaps_update_summary_text']}</pre></div>",
             unsafe_allow_html=True
         )
 
@@ -2404,17 +2158,13 @@ all_rows.extend(update_mode_rows_header_first(
     else:
         render_table(st.session_state.update_df)
 
-    seo_clicked = section_header_with_ai_button(
-        "SEO Analysis",
-        "Summarize by AI",
-        "btn_seo_summary_update"
-    )
+    seo_clicked = section_header_with_ai_button("SEO Analysis", "Summarize by AI", "btn_seo_summary_update")
     if seo_clicked:
         st.session_state["seo_update_summary_text"] = ai_summary_from_df("seo", st.session_state.seo_update_df)
 
     if st.session_state.get("seo_update_summary_text"):
         st.markdown(
-            f"<div class='ai-summary'><b>AI Summary</b><div class='muted'>SEO + UAE ranking insights (desktop & mobile).</div><pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state['seo_update_summary_text']}</pre></div>",
+            f"<div class='ai-summary'><b>AI Summary</b><div class='muted'>6–8 bullets only.</div><pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state['seo_update_summary_text']}</pre></div>",
             unsafe_allow_html=True
         )
 
@@ -2423,13 +2173,12 @@ all_rows.extend(update_mode_rows_header_first(
     else:
         render_table(st.session_state.seo_update_df, drop_internal_url=True)
 
-    section_header_with_ai_button("AI Visibility (Google AI Overview)", "Summarize by AI", "noop_ai_vis_update_btn")
+    st.markdown("<div class='section-pill section-pill-tight'>AI Visibility (Google AI Overview)</div>", unsafe_allow_html=True)
     if st.session_state.ai_update_df is None or st.session_state.ai_update_df.empty:
         st.info("Run analysis to see AI visibility signals.")
     else:
         render_table(st.session_state.ai_update_df, drop_internal_url=True)
 
-    # ===== NEW: Content Quality Table (requested) =====
     st.markdown("<div class='section-pill section-pill-tight'>Content Quality</div>", unsafe_allow_html=True)
     if st.session_state.cq_update_df is None or st.session_state.cq_update_df.empty:
         st.info("Run analysis to see Content Quality signals.")
@@ -2499,15 +2248,12 @@ else:
             st.session_state.seo_new_df = seo_enriched
             st.session_state.ai_new_df = ai_df
 
-        # ===== NEW: Content Quality Table build =====
-        with st.spinner("Building Content Quality table…"):
-            url_to_tree = {u: comp_tree_map[u] for u in competitors}
-            st.session_state.cq_new_df = build_content_quality_table_from_seo(
-                seo_df=st.session_state.seo_new_df,
-                fr_map_by_url={**comp_fr_map},
-                tree_map_by_url=url_to_tree,
-                manual_query=manual_fkw_new.strip()
-            )
+        st.session_state.cq_new_df = build_content_quality_table_from_seo(
+            seo_df=st.session_state.seo_new_df,
+            fr_map_by_url={**comp_fr_map},
+            tree_map_by_url={u: comp_tree_map[u] for u in competitors},
+            manual_query=manual_fkw_new.strip()
+        )
 
     if show_internal_fetch and st.session_state.new_fetch:
         st.sidebar.markdown("### Internal fetch log (New Post Mode)")
@@ -2515,20 +2261,23 @@ else:
         for u, s in st.session_state.new_fetch:
             st.sidebar.write(u, "—", s)
 
-    cov_clicked = section_header_with_ai_button(
-        "Competitor Coverage",
-        "Summarize by AI",
-        "btn_cov_summary_new"
-    )
+    cov_clicked = section_header_with_ai_button("Competitor Coverage", "Summarize by AI", "btn_cov_summary_new")
     if cov_clicked:
-        st.session_state["cov_new_summary_text"] = openai_summarize_block(
-            "Summarize competitor coverage into actionable bullets for writers.",
-            deterministic_gaps_summary(st.session_state.new_df.rename(columns={"Headers covered": "Headers"}) if not st.session_state.new_df.empty else st.session_state.new_df)
-        )
+        # compact summary for coverage: turn rows into bullets
+        if st.session_state.new_df is None or st.session_state.new_df.empty:
+            st.session_state["cov_new_summary_text"] = "No data."
+        else:
+            bullets = []
+            for _, r in st.session_state.new_df.head(6).iterrows():
+                bullets.append(f"• {r.get('Source','')}: {r.get('Headers covered','')}")
+            st.session_state["cov_new_summary_text"] = openai_summarize_block(
+                "Summarize competitor coverage (6–8 bullets).",
+                "\n".join(bullets) if bullets else "No data."
+            )
 
     if st.session_state.get("cov_new_summary_text"):
         st.markdown(
-            f"<div class='ai-summary'><b>AI Summary</b><div class='muted'>High-level competitor structure & angle.</div><pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state['cov_new_summary_text']}</pre></div>",
+            f"<div class='ai-summary'><b>AI Summary</b><div class='muted'>6–8 bullets only.</div><pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state['cov_new_summary_text']}</pre></div>",
             unsafe_allow_html=True
         )
 
@@ -2537,17 +2286,13 @@ else:
     else:
         render_table(st.session_state.new_df)
 
-    seo_clicked = section_header_with_ai_button(
-        "SEO Analysis",
-        "Summarize by AI",
-        "btn_seo_summary_new"
-    )
+    seo_clicked = section_header_with_ai_button("SEO Analysis", "Summarize by AI", "btn_seo_summary_new")
     if seo_clicked:
         st.session_state["seo_new_summary_text"] = ai_summary_from_df("seo", st.session_state.seo_new_df)
 
     if st.session_state.get("seo_new_summary_text"):
         st.markdown(
-            f"<div class='ai-summary'><b>AI Summary</b><div class='muted'>Competitor SEO + UAE ranking insights (desktop & mobile).</div><pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state['seo_new_summary_text']}</pre></div>",
+            f"<div class='ai-summary'><b>AI Summary</b><div class='muted'>6–8 bullets only.</div><pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state['seo_new_summary_text']}</pre></div>",
             unsafe_allow_html=True
         )
 
@@ -2556,13 +2301,12 @@ else:
     else:
         render_table(st.session_state.seo_new_df, drop_internal_url=True)
 
-    section_header_with_ai_button("AI Visibility (Google AI Overview)", "Summarize by AI", "noop_ai_vis_new_btn")
+    st.markdown("<div class='section-pill section-pill-tight'>AI Visibility (Google AI Overview)</div>", unsafe_allow_html=True)
     if st.session_state.ai_new_df is None or st.session_state.ai_new_df.empty:
         st.info("Generate competitor coverage to see AI visibility signals.")
     else:
         render_table(st.session_state.ai_new_df, drop_internal_url=True)
 
-    # ===== NEW: Content Quality Table (requested) =====
     st.markdown("<div class='section-pill section-pill-tight'>Content Quality</div>", unsafe_allow_html=True)
     if st.session_state.cq_new_df is None or st.session_state.cq_new_df.empty:
         st.info("Generate competitor coverage to see Content Quality signals.")
