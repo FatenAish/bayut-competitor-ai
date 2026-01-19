@@ -1845,8 +1845,10 @@ def build_content_quality_table_from_seo(
 # =====================================================
 # AI SUMMARY (BULLETS ONLY – ORDERED & CLEAR)
 # =====================================================
-def openai_summarize_block(title: str, payload_text: str) -> str:
+def openai_summarize_block(title: str, payload_text: str, max_bullets: int = 8) -> str:
     payload_text = clean(payload_text)
+
+    # If no OpenAI key, return the already-bulleted payload
     if not OPENAI_API_KEY:
         return payload_text
 
@@ -1860,18 +1862,19 @@ def openai_summarize_block(title: str, payload_text: str) -> str:
             "You are a senior SEO/editorial analyst.\n"
             "Output ONLY bullet points.\n"
             "Rules:\n"
-            "- Use '• ' at the start of each bullet\n"
-            "- 6–8 bullets maximum\n"
+            f"- Use '• ' at the start of each bullet\n"
+            f"- {max_bullets-2}–{max_bullets} bullets maximum\n"
             "- One clear action per bullet\n"
             "- Short, direct, no explanations\n"
-            "- No paragraphs, no numbering, no grouping text"
+            "- No paragraphs, no numbering, no grouping text\n"
+            "- Never merge multiple actions into one bullet"
         )
 
         body = {
             "model": OPENAI_MODEL,
             "messages": [
                 {"role": "system", "content": system},
-                {"role": "user", "content": f"{title}\n\n{payload_text}"}
+                {"role": "user", "content": f"{title}\n\n{payload_text}\n\nReturn bullets only."}
             ],
             "temperature": 0.2,
         }
@@ -1894,9 +1897,18 @@ def openai_summarize_block(title: str, payload_text: str) -> str:
 
         if not bullets:
             chunks = re.split(r"(?<=[.!?])\s+", out)
-            bullets = [f"• {c.strip()}" for c in chunks if c.strip()]
+            chunks = [c.strip() for c in chunks if c.strip()]
+            bullets = [f"• {c}" for c in chunks]
 
-        return "\n".join(bullets[:8])
+        # Ensure each bullet is ONE line (no multi-actions with • inside)
+        cleaned = []
+        for b in bullets:
+            b = b.replace("•", "").strip()
+            if not b:
+                continue
+            cleaned.append("• " + b)
+
+        return "\n".join(cleaned[:max_bullets])
 
     except Exception:
         return payload_text
@@ -1909,7 +1921,14 @@ def _ignore_summary_header(h: str) -> bool:
     }
 
 
-def concise_gaps_summary(df: pd.DataFrame, max_bullets: int = 8) -> str:
+def concise_gaps_summary(df: pd.DataFrame, min_bullets: int = 4, max_bullets: int = 8) -> str:
+    """
+    Guarantees 4–8 bullets:
+    - Add missing sections
+    - Expand missing parts
+    - Optional FAQ
+    - If still too few, add safe editorial fallbacks
+    """
     if df is None or df.empty:
         return "• No content gaps detected."
 
@@ -1958,27 +1977,38 @@ def concise_gaps_summary(df: pd.DataFrame, max_bullets: int = 8) -> str:
     for h in add_sections:
         bullets.append(f"• Add section: {h}")
         if len(bullets) >= max_bullets:
-            return "\n".join(bullets)
+            return "\n".join(bullets[:max_bullets])
 
     # 2) Expand existing sections
     for h in expand_sections:
         bullets.append(f"• Expand section: {h}")
         if len(bullets) >= max_bullets:
-            return "\n".join(bullets)
+            return "\n".join(bullets[:max_bullets])
 
     # 3) FAQs
     if faq_needed and len(bullets) < max_bullets:
         bullets.append("• Add or expand FAQs based on competitor coverage")
 
+    # 4) Force minimum (SAFE editorial fallbacks)
+    fallbacks = [
+        "• Strengthen decision framing (why/when this area fits different lifestyles)",
+        "• Add a short pros/cons recap with clear takeaways for readers",
+        "• Add freshness signals (updated year, latest prices/transport changes if applicable)",
+        "• Improve scannability (shorter paragraphs, more subheadings, 1 table where relevant)",
+    ]
+    for fb in fallbacks:
+        if len(bullets) >= min_bullets:
+            break
+        bullets.append(fb)
+
     return "\n".join(bullets[:max_bullets]) if bullets else "• No meaningful gaps detected."
 
 
-def concise_seo_summary(df: pd.DataFrame, max_bullets: int = 8) -> str:
+def concise_seo_summary(df: pd.DataFrame, min_bullets: int = 4, max_bullets: int = 8) -> str:
     if df is None or df.empty:
         return "• No SEO data available."
 
     bullets = []
-
     for _, r in df.iterrows():
         page = str(r.get("Page", "")).strip()
         if page.lower().startswith("target"):
@@ -1988,24 +2018,39 @@ def concise_seo_summary(df: pd.DataFrame, max_bullets: int = 8) -> str:
         rd = str(r.get("Google rank UAE (Desktop)", "")).strip()
         rm = str(r.get("Google rank UAE (Mobile)", "")).strip()
 
-        bullets.append(f"• {page}: focus on '{fkw}' (UAE rank D/M: {rd}/{rm})")
+        if not fkw or fkw == "Not available":
+            bullets.append(f"• {page}: define a clear Focus Keyword (FKW) before optimizing rankings")
+        else:
+            bullets.append(f"• {page}: focus on '{fkw}' (UAE rank D/M: {rd}/{rm})")
 
         if len(bullets) >= max_bullets:
             break
 
-    return "\n".join(bullets)
+    # Force minimum (SEO-safe fallbacks)
+    seo_fallbacks = [
+        "• Ensure title + H1 contain the exact Focus Keyword naturally",
+        "• Reduce keyword repetition if it looks stuffed; prioritize readability",
+        "• Add internal links to related Bayut guides to improve relevance",
+    ]
+    for fb in seo_fallbacks:
+        if len(bullets) >= min_bullets:
+            break
+        bullets.append(fb)
+
+    return "\n".join(bullets[:max_bullets])
 
 
 def ai_summary_from_df(kind: str, df: pd.DataFrame) -> str:
     if kind == "gaps":
-        base = concise_gaps_summary(df)
-        return openai_summarize_block("Turn this into a clear writer checklist.", base)
+        base = concise_gaps_summary(df, min_bullets=4, max_bullets=8)
+        return openai_summarize_block("Turn this into a clear writer checklist.", base, max_bullets=8)
 
     if kind == "seo":
-        base = concise_seo_summary(df)
-        return openai_summarize_block("Turn this into a clear SEO checklist.", base)
+        base = concise_seo_summary(df, min_bullets=4, max_bullets=8)
+        return openai_summarize_block("Turn this into a clear SEO checklist.", base, max_bullets=8)
 
     return "• No summary available."
+
 
 # =====================================================
 # NEW POST MODE (kept simple)
