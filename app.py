@@ -1,276 +1,629 @@
-# =========================
-# FULL APP.PY UPDATE — HALF 1/2
-# Paste this HALF to REPLACE your current "CONTENT GAP ENGINE (ONE BLOCK)" section
-# AND also paste the 2 compute functions below it.
-# (Keep the rest of your file as-is.)
-# =========================
+import re
+import time
+import json
+import hashlib
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional
+from urllib.parse import urlparse
 
-# ------------------------------------------------------------
-# CONTENT GAP ENGINE (OLD LOGIC — HEADER FIRST + (MISSING PARTS) + STRICT FAQ)
-# ------------------------------------------------------------
+import pandas as pd
+import requests
+import streamlit as st
+from bs4 import BeautifulSoup
 
-def _subheaders_for_comp_parent_h2(comp_secs: List[dict], parent_h2: str, limit: int = 5) -> List[str]:
-    if not parent_h2:
+# Optional (recommended) JS rendering
+try:
+    from playwright.sync_api import sync_playwright
+    PLAYWRIGHT_OK = True
+except Exception:
+    PLAYWRIGHT_OK = False
+
+
+# =========================
+# CONFIG
+# =========================
+st.set_page_config(page_title="Bayut Competitor Gap Analysis", layout="wide")
+
+BAYUT_GREEN = "#0E8A6D"
+DUBIZZLE_RED = "#D92C27"
+
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+IGNORE_TAGS = {"nav", "footer", "header", "aside", "form", "noscript", "script", "style"}
+FAQ_HINTS = ("faq", "frequently asked", "people also ask", "common questions")
+
+STOP = {
+    "the","and","for","with","that","this","from","you","your","are","was","were","will","have","has","had",
+    "but","not","can","may","more","most","into","than","then","they","them","their","our","out","about",
+    "also","over","under","between","within","near","where","when","what","why","how","who","which",
+    "a","an","to","of","in","on","at","as","is","it","be","or","by"
+}
+
+
+# =========================
+# DATAFORSEO (NO SERPAPI)
+# =========================
+def _get_dataforseo_creds() -> Tuple[Optional[str], Optional[str]]:
+    login = st.secrets.get("DATAFORSEO_LOGIN") if hasattr(st, "secrets") else None
+    password = st.secrets.get("DATAFORSEO_PASSWORD") if hasattr(st, "secrets") else None
+    return login, password
+
+
+def dataforseo_post(path: str, payload: list) -> dict:
+    """
+    DataForSEO uses Basic Auth (login/password).
+    """
+    login, password = _get_dataforseo_creds()
+    if not login or not password:
+        return {"_error": "missing_dataforseo_credentials"}
+
+    url = f"https://api.dataforseo.com{path}"
+    try:
+        r = requests.post(
+            url,
+            auth=(login, password),
+            headers={"Content-Type": "application/json"},
+            data=json.dumps(payload),
+            timeout=60
+        )
+        return r.json()
+    except Exception as e:
+        return {"_error": f"dataforseo_request_failed: {e}"}
+
+
+@st.cache_data(ttl=7 * 24 * 3600)
+def dataforseo_get_google_locations() -> List[dict]:
+    """
+    Fetch all Google locations once, cache it.
+    """
+    login, password = _get_dataforseo_creds()
+    if not login or not password:
         return []
-    out = []
-    for s in comp_secs:
-        if s.get("level") == 3 and clean(s.get("parent_h2","")) == parent_h2:
-            h = clean(s.get("header",""))
-            if h and h not in out:
-                out.append(h)
-        if len(out) >= limit:
+
+    # Locations endpoint
+    url = "https://api.dataforseo.com/v3/serp/google/locations"
+    try:
+        r = requests.get(url, auth=(login, password), timeout=60)
+        j = r.json()
+        tasks = j.get("tasks", [])
+        if not tasks:
+            return []
+        res = tasks[0].get("result", [])
+        return res if isinstance(res, list) else []
+    except Exception:
+        return []
+
+
+def guess_uae_location_code(prefer: str = "Dubai") -> Optional[int]:
+    locs = dataforseo_get_google_locations()
+    if not locs:
+        return None
+
+    prefer = (prefer or "").strip().lower()
+    # Try Dubai first, else UAE
+    best = None
+    for row in locs:
+        name = (row.get("location_name") or "").lower()
+        if "united arab emirates" in name and prefer in name:
+            return row.get("location_code")
+        if "united arab emirates" in name and best is None:
+            best = row.get("location_code")
+    return best
+
+
+def dataforseo_google_rank_for_url(keyword: str, target_url: str, location_code: int, device: str) -> Dict[str, Optional[str]]:
+    """
+    Returns rank + AI visibility signals (best-effort) for a URL.
+    """
+    if not keyword or not target_url or not location_code:
+        return {"rank": None, "ai_visibility": None}
+
+    payload = [{
+        "keyword": keyword,
+        "language_code": "en",
+        "location_code": int(location_code),
+        "device": device,            # "desktop" or "mobile"
+        "os": "windows" if device == "desktop" else "android",
+        "depth": 50,
+        "load_async_ai_overview": True
+    }]
+
+    j = dataforseo_post("/v3/serp/google/organic/live/advanced", payload)
+    if j.get("_error"):
+        return {"rank": None, "ai_visibility": None}
+
+    tasks = j.get("tasks", [])
+    if not tasks or not tasks[0].get("result"):
+        return {"rank": None, "ai_visibility": None}
+
+    result0 = tasks[0]["result"][0]
+    items = result0.get("items", []) or []
+
+    def norm(u: str) -> str:
+        u = (u or "").strip().lower()
+        u = u.replace("http://", "https://")
+        if u.endswith("/"):
+            u = u[:-1]
+        return u
+
+    tnorm = norm(target_url)
+
+    rank = None
+    ai_visibility = "Not detected"
+
+    # AI overview detection (best effort)
+    # Some responses include AI elements inside items list.
+    for it in items:
+        t = (it.get("type") or "").lower()
+        if "ai" in t and ("overview" in t or "answer" in t):
+            ai_visibility = "AI element present"
             break
+
+    # Rank detection
+    for it in items:
+        if (it.get("type") or "").lower() != "organic":
+            continue
+        u = it.get("url") or it.get("domain") or ""
+        if norm(u) == tnorm:
+            rank = str(it.get("rank_absolute") or it.get("rank_group") or "")
+            break
+
+    return {"rank": rank, "ai_visibility": ai_visibility}
+
+
+# =========================
+# FETCH (FORCE RE-READ)
+# =========================
+@dataclass
+class FetchResult:
+    url: str
+    ok: bool
+    status: str
+    html: str
+    text: str
+    used: str  # requests/playwright
+
+
+def _requests_fetch(url: str) -> FetchResult:
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=40, allow_redirects=True)
+        html = r.text if r.text else ""
+        soup = BeautifulSoup(html, "html.parser")
+        for t in soup.find_all(list(IGNORE_TAGS)):
+            t.decompose()
+        text = re.sub(r"\s+", " ", soup.get_text(" ", strip=True))
+        return FetchResult(url=url, ok=(r.status_code < 400 and len(text) > 200), status=str(r.status_code), html=html, text=text, used="requests")
+    except Exception as e:
+        return FetchResult(url=url, ok=False, status=f"requests_error:{e}", html="", text="", used="requests")
+
+
+def _playwright_fetch(url: str) -> FetchResult:
+    if not PLAYWRIGHT_OK:
+        return FetchResult(url=url, ok=False, status="playwright_not_installed", html="", text="", used="playwright")
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.set_extra_http_headers(HEADERS)
+            page.goto(url, wait_until="networkidle", timeout=60000)
+            time.sleep(1.2)
+            html = page.content()
+            browser.close()
+
+        soup = BeautifulSoup(html, "html.parser")
+        for t in soup.find_all(list(IGNORE_TAGS)):
+            t.decompose()
+        text = re.sub(r"\s+", " ", soup.get_text(" ", strip=True))
+        return FetchResult(url=url, ok=(len(text) > 200), status="200", html=html, text=text, used="playwright")
+    except Exception as e:
+        return FetchResult(url=url, ok=False, status=f"playwright_error:{e}", html="", text="", used="playwright")
+
+
+def fetch_force(url: str) -> FetchResult:
+    """
+    Force an actual re-read:
+    - try requests
+    - if weak/blocked -> playwright
+    """
+    fr = _requests_fetch(url)
+    if fr.ok and len(fr.html) > 1000:
+        return fr
+    pw = _playwright_fetch(url)
+    if pw.ok:
+        return pw
+    return fr  # fallback (even if blocked)
+
+
+# =========================
+# PARSERS (TITLE/META/FAQ/VIDEO/TABLE)
+# =========================
+def extract_seo_fields(html: str, url: str) -> Dict[str, str]:
+    out = {"slug": "", "seo_title": "", "meta_description": ""}
+    out["slug"] = urlparse(url).path.strip("/") or "/"
+
+    if not html:
+        return out
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Title
+    t = soup.find("title")
+    out["seo_title"] = (t.get_text(strip=True) if t else "")
+
+    # Meta description
+    md = soup.find("meta", attrs={"name": re.compile("^description$", re.I)})
+    out["meta_description"] = (md.get("content", "").strip() if md else "")
+
     return out
 
-def _content_diff_missing_parts(comp_text: str, bayut_text: str, max_parts: int = 3) -> List[str]:
-    comp_text = clean(comp_text or "")
-    bayut_text = clean(bayut_text or "")
-    if not comp_text:
-        return []
 
-    comp_flags = theme_flags(comp_text)
-    bayut_flags = theme_flags(bayut_text)
-    missing = list(comp_flags - bayut_flags)
-
-    human_map = {
-        "transport":"commute & connectivity",
-        "traffic_parking":"traffic/parking realities",
-        "cost":"cost considerations",
-        "lifestyle":"lifestyle & vibe",
-        "daily_life":"day-to-day convenience",
-        "safety":"safety angle",
-        "decision_frame":"decision framing",
-        "comparison":"comparison context",
-    }
-    return [human_map.get(x, x) for x in missing][:max_parts]
-
-def update_mode_rows_header_first(
-    bayut_nodes: List[dict],
-    bayut_fr: FetchResult,
-    comp_nodes: List[dict],
-    comp_fr: FetchResult,
-    comp_url: str,
-    max_missing_headers: int = 7,
-    max_missing_parts: int = 5,
-) -> List[dict]:
+def detect_real_faq(html: str, text: str) -> bool:
     """
-    OLD logic:
-    - Missing headers first (competitor header not in Bayut)
-    - Then (missing parts) rows when headers match but competitor goes deeper
-    - FAQs row only if competitor has REAL FAQ
+    REAL FAQ only if:
+    - FAQPage schema exists, OR
+    - >= 3 question-like patterns in the page
     """
-    rows: List[dict] = []
+    if not (html or text):
+        return False
 
-    bayut_secs = section_nodes(bayut_nodes, levels=(2,3))
-    comp_secs  = section_nodes(comp_nodes,  levels=(2,3))
+    # Schema check
+    if html:
+        if re.search(r'"@type"\s*:\s*"FAQPage"', html, flags=re.I):
+            return True
 
-    bayut_h2 = [s for s in bayut_secs if s.get("level") == 2]
-    comp_h2  = [s for s in comp_secs  if s.get("level") == 2]
+    # Question pattern check
+    t = (text or "").lower()
+    if not t:
+        return False
 
-    # 1) Missing headers (competitor H2 not found in Bayut)
-    missing_headers = []
-    for c in comp_h2:
-        hit = find_best_bayut_match(c["header"], bayut_h2, min_score=0.73)
-        if not hit:
-            missing_headers.append(c)
+    # If it contains FAQ hints and multiple question marks / Q patterns
+    hint = any(h in t for h in FAQ_HINTS)
+    qs = len(re.findall(r"\?\s", text)) + len(re.findall(r"\bq[:\-]\s", t))
+    # Also detect “What is…”, “How to…”
+    wh = len(re.findall(r"\b(what|how|why|where|when|who)\b", t))
 
-    for c in missing_headers[:max_missing_headers]:
-        subhs = _subheaders_for_comp_parent_h2(comp_secs, c["header"], limit=5)
-        desc = summarize_missing_section_action(c["header"], subhs, c.get("content",""))
+    return (hint and (qs >= 2 or wh >= 12)) or (qs >= 4)
+
+
+def count_tables(html: str) -> int:
+    if not html:
+        return 0
+    soup = BeautifulSoup(html, "html.parser")
+    return len(soup.find_all("table"))
+
+
+def count_videos(html: str) -> int:
+    if not html:
+        return 0
+    soup = BeautifulSoup(html, "html.parser")
+    # youtube/vimeo iframes + html5 video tag
+    vids = len(soup.find_all("video"))
+    for iframe in soup.find_all("iframe"):
+        src = (iframe.get("src") or "").lower()
+        if "youtube" in src or "youtu.be" in src or "vimeo" in src:
+            vids += 1
+    return vids
+
+
+def word_count(text: str) -> int:
+    if not text:
+        return 0
+    return len(re.findall(r"\b\w+\b", text))
+
+
+def keyword_usage_quality(text: str, keyword: str) -> Tuple[int, str]:
+    """
+    Not 'repeats' — quality-based:
+    - Count mentions
+    - Evaluate density + suspicious consecutive repetition
+    """
+    if not text or not keyword:
+        return 0, "Not provided"
+
+    t = text.lower()
+    k = keyword.strip().lower()
+    mentions = len(re.findall(re.escape(k), t))
+
+    wc = max(1, word_count(text))
+    density = mentions / wc
+
+    # suspicious: same keyword appears 2+ times within 15 words window (crude)
+    tokens = re.findall(r"\b\w+\b", t)
+    k_tokens = re.findall(r"\b\w+\b", k)
+    suspicious = False
+    if k_tokens:
+        joined = " ".join(tokens)
+        suspicious = len(re.findall(rf"({re.escape(k)})\s+\S+\s+\S+\s+\S+\s+({re.escape(k)})", joined)) > 0
+
+    if density > 0.03 or suspicious:
+        return mentions, "Stuffing risk"
+    if mentions == 0:
+        return 0, "Missing"
+    return mentions, "Natural"
+# =========================
+# HEADER-FIRST GAP LOGIC
+# =========================
+def extract_headings(html: str, text: str) -> List[str]:
+    """
+    Prefer HTML headings; fallback to text heuristics if needed.
+    """
+    headings: List[str] = []
+
+    if html:
+        soup = BeautifulSoup(html, "html.parser")
+        for t in soup.find_all(list(IGNORE_TAGS)):
+            t.decompose()
+
+        for h in soup.find_all(["h1", "h2", "h3"]):
+            s = re.sub(r"\s+", " ", h.get_text(" ", strip=True)).strip()
+            if s and len(s) >= 3:
+                headings.append(s)
+
+    # Fallback if blocked html
+    if not headings and text:
+        # crude: lines that look like titles
+        # (text fallback usually weak, but better than empty)
+        candidates = re.findall(r"\b[A-Z][A-Za-z0-9 ,\-’'&]{8,80}\b", text)
+        headings = list(dict.fromkeys(candidates[:20]))
+
+    # Dedup preserve order
+    seen = set()
+    out = []
+    for x in headings:
+        nx = x.strip().lower()
+        if nx not in seen:
+            seen.add(nx)
+            out.append(x)
+    return out
+
+
+def heading_match(a: str, b: str) -> float:
+    a = (a or "").lower().strip()
+    b = (b or "").lower().strip()
+    if not a or not b:
+        return 0.0
+    # quick similarity
+    from difflib import SequenceMatcher
+    return SequenceMatcher(None, a, b).ratio()
+
+
+def header_first_gaps(bayut_headings: List[str], comp_headings: List[str]) -> Tuple[List[str], List[Tuple[str, str]]]:
+    """
+    Returns:
+    - missing_headers: competitor headers not covered by Bayut
+    - undercovered: list of (matched_header, competitor_header) where Bayut has header but competitor's angle suggests extra parts
+    """
+    missing = []
+    under = []
+
+    for ch in comp_headings:
+        best = ("", 0.0)
+        for bh in bayut_headings:
+            sc = heading_match(bh, ch)
+            if sc > best[1]:
+                best = (bh, sc)
+
+        if best[1] >= 0.78:
+            # same section, but competitor header may imply nuance -> mark under-covered
+            if best[0].lower().strip() != ch.lower().strip():
+                under.append((best[0], ch))
+        else:
+            missing.append(ch)
+
+    return missing, under
+
+
+def build_content_gaps_table(bayut: FetchResult, competitors: Dict[str, FetchResult]) -> pd.DataFrame:
+    bayut_headings = extract_headings(bayut.html, bayut.text)
+    rows = []
+
+    for name, fr in competitors.items():
+        comp_headings = extract_headings(fr.html, fr.text)
+        missing_headers, undercovered = header_first_gaps(bayut_headings, comp_headings)
+
+        # 1) Missing headers FIRST
+        for mh in missing_headers:
+            rows.append({
+                "Header (Gap)": mh,
+                "What to add": "Competitor covers this as a distinct section; Bayut is missing it.",
+                "Source": name
+            })
+
+        # 2) Under-covered parts under matching header
+        for (bh, ch) in undercovered:
+            rows.append({
+                "Header (Gap)": bh,
+                "What to add": f"Under-covered: competitor frames this section as “{ch}” — expand Bayut with the missing angle/details.",
+                "Source": name
+            })
+
+        # 3) FAQs (ONE row only if real FAQ exists on competitor but not on Bayut)
+        bayut_has_faq = detect_real_faq(bayut.html, bayut.text)
+        comp_has_faq = detect_real_faq(fr.html, fr.text)
+        if comp_has_faq and not bayut_has_faq:
+            rows.append({
+                "Header (Gap)": "FAQs",
+                "What to add": "Competitor includes a real FAQ section. Add a real FAQ block (not fake Qs) covering the core user questions.",
+                "Source": name
+            })
+
+    if not rows:
+        return pd.DataFrame(columns=["Header (Gap)", "What to add", "Source"])
+    return pd.DataFrame(rows, columns=["Header (Gap)", "What to add", "Source"])
+
+
+# =========================
+# TABLES (SEO + CONTENT QUALITY)
+# =========================
+def build_seo_table(pages: Dict[str, FetchResult], focus_kw: str, location_code: Optional[int]) -> pd.DataFrame:
+    rows = []
+
+    for name, fr in pages.items():
+        seo = extract_seo_fields(fr.html, fr.url)
+        mentions, quality = keyword_usage_quality(fr.text, focus_kw)
+
+        # UAE ranking (desktop + mobile)
+        rank_desktop = None
+        rank_mobile = None
+        ai_desktop = None
+        ai_mobile = None
+
+        if focus_kw and location_code:
+            d = dataforseo_google_rank_for_url(focus_kw, fr.url, location_code, device="desktop")
+            m = dataforseo_google_rank_for_url(focus_kw, fr.url, location_code, device="mobile")
+            rank_desktop, ai_desktop = d["rank"], d["ai_visibility"]
+            rank_mobile, ai_mobile = m["rank"], m["ai_visibility"]
+
         rows.append({
-            "Headers": c["header"],
-            "Description": desc,
-            "Source": source_link(comp_url),
+            "Page": name,
+            "Slug": seo["slug"],
+            "SEO Title": seo["seo_title"],
+            "Meta Description": seo["meta_description"],
+            "FKW": focus_kw or "",
+            "FKW usage (quality)": quality,
+            "FKW mentions": mentions if focus_kw else "",
+            "Google rank (UAE desktop)": rank_desktop or "Not found",
+            "Google rank (UAE mobile)": rank_mobile or "Not found",
+            "AI Visibility (desktop)": ai_desktop or "Not available",
+            "AI Visibility (mobile)": ai_mobile or "Not available",
         })
 
-    # 2) Missing parts under matching headers (competitor deeper)
-    # Only compare H2 level (same as old behavior)
-    parts_rows = 0
-    for c in comp_h2:
-        hit = find_best_bayut_match(c["header"], bayut_h2, min_score=0.73)
-        if not hit:
-            continue
+    return pd.DataFrame(rows)
 
-        b = hit["bayut_section"]
-        comp_text = c.get("content","")
-        bayut_text = b.get("content","")
 
-        # If competitor has useful themes not present in Bayut, add "(missing parts)"
-        parts = _content_diff_missing_parts(comp_text, bayut_text, max_parts=3)
-        if not parts:
-            continue
+def build_content_quality_table(pages: Dict[str, FetchResult]) -> pd.DataFrame:
+    rows = []
+    for name, fr in pages.items():
+        wc = word_count(fr.text)
 
-        desc = summarize_content_gap_action(c["header"], comp_text, bayut_text)
-        # Strengthen description with explicit missing themes (old-style)
-        desc = desc if desc else ("Competitor goes deeper on: " + ", ".join(parts) + ".")
+        if not fr.html:
+            # Don’t lie with "No" if we couldn't read HTML
+            faq = "Not available (no HTML captured)"
+            tables = "Not available (no HTML captured)"
+            video = "Not available (no HTML captured)"
+        else:
+            faq = "Yes" if detect_real_faq(fr.html, fr.text) else "No"
+            tables = count_tables(fr.html)
+            video = count_videos(fr.html)
 
         rows.append({
-            "Headers": f"{c['header']} (missing parts)",
-            "Description": desc,
-            "Source": source_link(comp_url),
+            "Content Quality": "Word Count", name: wc
         })
-        parts_rows += 1
-        if parts_rows >= max_missing_parts:
-            break
+        rows.append({
+            "Content Quality": "FAQs", name: faq
+        })
+        rows.append({
+            "Content Quality": "Tables", name: tables
+        })
+        rows.append({
+            "Content Quality": "Video", name: video
+        })
 
-    # 3) FAQs — ONE ROW only if competitor has REAL FAQ
-    faq_row = missing_faqs_row(bayut_nodes, bayut_fr, comp_nodes, comp_fr, comp_url)
-    if faq_row:
-        rows.append(faq_row)
+    # Convert rows to wide format (Content Quality as first col, sites as columns)
+    df = pd.DataFrame(rows)
+    df = df.groupby("Content Quality", as_index=False).first()
+    # Ensure all page columns exist
+    for site in pages.keys():
+        if site not in df.columns:
+            df[site] = ""
+    return df[["Content Quality"] + list(pages.keys())]
 
-    return rows
 
-def compute_gaps_header_first(
-    bayut_url: str,
-    bayut_fr: FetchResult,
-    bayut_nodes: List[dict],
-    competitors: List[str],
-    comp_fr_map: Dict[str, FetchResult],
-    comp_tree_map: Dict[str, dict],
-) -> pd.DataFrame:
-    """
-    Returns ONE table with columns:
-    Headers | Description | Source
-    Deduped by header+source (same as old).
-    """
-    all_rows: List[dict] = []
-
-    for cu in competitors:
-        comp_nodes = (comp_tree_map.get(cu) or {}).get("nodes", []) or []
-        comp_fr = comp_fr_map.get(cu)
-
-        rows = update_mode_rows_header_first(
-            bayut_nodes=bayut_nodes,
-            bayut_fr=bayut_fr,
-            comp_nodes=comp_nodes,
-            comp_fr=comp_fr,
-            comp_url=cu,
-            max_missing_headers=7,
-            max_missing_parts=5,
-        )
-        all_rows.extend(rows)
-
-    all_rows = dedupe_rows(all_rows)
-    df = pd.DataFrame(all_rows, columns=["Headers", "Description", "Source"])
-    return df
 # =========================
-# FULL APP.PY UPDATE — HALF 2/2
-# Paste this HALF to FIX New Post Mode to use the SAME OLD LOGIC as Update Mode.
-# Replace your current `else:` block (New Post Mode UI) بالكامل بهذا.
+# UI
 # =========================
+st.title("Bayut Competitor Gap Analysis")
+st.caption("Analyzes competitor articles to surface missing and under-covered sections.")
 
+with st.form("inputs", clear_on_submit=False):
+    bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
+    comp_urls_raw = st.text_area("Competitor URLs (one per line, max 5)", height=90)
+
+    focus_kw = st.text_input("Optional: Focus Keyword", placeholder="e.g., living in Dubai Marina")
+
+    colA, colB = st.columns([1, 1])
+    with colA:
+        run = st.form_submit_button("Run analysis")
+    with colB:
+        st.write("")  # spacing
+
+# ---- input signature (to kill stale session outputs)
+sig = hashlib.sha1(
+    (bayut_url.strip() + "\n" + comp_urls_raw.strip() + "\n" + (focus_kw or "").strip()).encode("utf-8")
+).hexdigest()
+
+if "last_sig" not in st.session_state:
+    st.session_state.last_sig = None
+
+if st.session_state.last_sig != sig:
+    # clear stale outputs automatically when user changes URLs/keyword
+    for k in ["gaps_df", "seo_df", "cq_df", "pages_cache", "comp_cache", "bayut_cache"]:
+        if k in st.session_state:
+            del st.session_state[k]
+    st.session_state.last_sig = sig
+
+
+# =========================
+# RUN
+# =========================
+if run:
+    bayut_url = bayut_url.strip()
+    comp_urls = [u.strip() for u in comp_urls_raw.splitlines() if u.strip()]
+    comp_urls = comp_urls[:5]
+
+    if not bayut_url or not comp_urls:
+        st.error("Please add a Bayut URL and at least 1 competitor URL.")
+        st.stop()
+
+    # Fetch (force re-read)
+    bayut_fr = fetch_force(bayut_url)
+    comps: Dict[str, FetchResult] = {}
+    for i, u in enumerate(comp_urls, start=1):
+        host = urlparse(u).netloc.replace("www.", "")
+        name = host.split(".")[0].title() or f"Competitor {i}"
+        comps[name] = fetch_force(u)
+
+    st.session_state.bayut_cache = bayut_fr
+    st.session_state.comp_cache = comps
+
+    # Build gaps
+    st.session_state.gaps_df = build_content_gaps_table(bayut_fr, comps)
+
+    # Build pages dict for SEO + quality
+    pages = {"Bayut": bayut_fr}
+    pages.update(comps)
+
+    # UAE location_code
+    loc_code = guess_uae_location_code("Dubai")  # best-effort
+    st.session_state.seo_df = build_seo_table(pages, focus_kw.strip(), loc_code)
+    st.session_state.cq_df = build_content_quality_table(pages)
+
+
+# =========================
+# OUTPUTS
+# =========================
+st.subheader("Content Gaps Table")
+gaps_df = st.session_state.get("gaps_df")
+if isinstance(gaps_df, pd.DataFrame):
+    st.dataframe(gaps_df, use_container_width=True, hide_index=True)
 else:
-    st.markdown("<div class='section-pill section-pill-tight'>New Post Mode (Header coverage)</div>", unsafe_allow_html=True)
+    st.info("Run analysis to see results.")
 
-    topic_title = st.text_input("Topic / Post title", placeholder="e.g., Pros & Cons of Living in Business Bay")
-    competitors_text = st.text_area("Competitor URLs (one per line, max 5)", height=120)
-    competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()][:5]
-    manual_fkw_new = st.text_input("Optional: Focus Keyword (FKW) for analysis + UAE ranking", placeholder="e.g., living in Business Bay")
+st.subheader("Content Quality")
+cq_df = st.session_state.get("cq_df")
+if isinstance(cq_df, pd.DataFrame):
+    st.dataframe(cq_df, use_container_width=True, hide_index=True)
+else:
+    st.info("Run analysis to see results.")
 
-    current_sig = signature("new", topic_title, competitors_text, manual_fkw_new)
-    if st.session_state.last_sig_new and st.session_state.last_sig_new != current_sig:
-        clear_new_results()
-        st.session_state.new_fetch = []
-
-    run = st.button("Run analysis", type="primary")
-
-    if run:
-        if not competitors:
-            st.error("Add at least one competitor URL.")
-            st.stop()
-
-        clear_new_results()
-        st.session_state.new_fetch = []
-        st.session_state.last_sig_new = current_sig
-
-        # Fetch all competitors (force HTML for quality tables/FAQ)
-        with st.spinner("Fetching ALL competitors (no exceptions)…"):
-            comp_fr_map = resolve_all_or_require_manual(agent, competitors, st_key_prefix="comp_new")
-            comp_fr_map = ensure_html_for_quality(competitors, comp_fr_map, st_key_prefix="comp_new_html")
-            comp_tree_map = ensure_headings_or_require_repaste(competitors, comp_fr_map, st_key_prefix="comp_new_tree")
-
-        st.session_state.new_fetch = [(u, f"ok ({comp_fr_map[u].source})") for u in competitors]
-
-        # Build a "coverage" table using the SAME engine:
-        # We simulate Bayut as "empty" by using the FIRST competitor as baseline bayut_nodes with blank content
-        # BUT to keep the OLD behavior (missing headers first), we instead:
-        # - pick the competitor with MOST headings as "master outline"
-        # - compare all other competitors against it and list missing headers/parts + FAQ topics.
-        # This gives a clean "what to include" outline for the new post.
-
-        # Pick master competitor = most H2 sections
-        best_u = None
-        best_count = -1
-        for u in competitors:
-            nodes = (comp_tree_map.get(u) or {}).get("nodes", []) or []
-            cnt = len([s for s in section_nodes(nodes, levels=(2,3)) if s.get("level") == 2])
-            if cnt > best_count:
-                best_count = cnt
-                best_u = u
-
-        master_url = best_u or competitors[0]
-        master_fr = comp_fr_map[master_url]
-        master_nodes = comp_tree_map[master_url]["nodes"]
-
-        # Compare other competitors vs master using SAME OLD logic
-        other_urls = [u for u in competitors if u != master_url]
-
-        st.session_state.new_df = compute_gaps_header_first(
-            bayut_url=master_url,
-            bayut_fr=master_fr,
-            bayut_nodes=master_nodes,
-            competitors=other_urls,
-            comp_fr_map=comp_fr_map,
-            comp_tree_map=comp_tree_map,
-        )
-
-        # SEO table for New Mode (master + others)
-        rows = []
-        rm = seo_row_for_page(site_name(master_url), master_url, master_fr, master_nodes, manual_fkw=manual_fkw_new.strip())
-        rm["__url"] = master_url
-        rows.append(rm)
-        for u in other_urls:
-            rr = seo_row_for_page(site_name(u), u, comp_fr_map[u], comp_tree_map[u]["nodes"], manual_fkw=manual_fkw_new.strip())
-            rr["__url"] = u
-            rows.append(rr)
-
-        st.session_state.seo_new_df = pd.DataFrame(rows)
-
-        with st.spinner("Fetching Google UAE ranking (desktop + mobile) + AI visibility via DataForSEO…"):
-            seo_enriched, ai_df = enrich_seo_df_with_rank_and_ai(
-                st.session_state.seo_new_df,
-                manual_query=manual_fkw_new.strip(),
-                location_name=DEFAULT_LOCATION_NAME
-            )
-            st.session_state.seo_new_df = seo_enriched
-            st.session_state.ai_new_df = ai_df
-
-        st.session_state.cq_new_df = build_content_quality_table_from_seo(
-            seo_df=st.session_state.seo_new_df,
-            fr_map_by_url={**comp_fr_map},
-            tree_map_by_url={u: comp_tree_map[u] for u in competitors},
-            manual_query=manual_fkw_new.strip(),
-            location_name=DEFAULT_LOCATION_NAME
-        )
-
-    if show_internal_fetch and st.session_state.new_fetch:
-        st.sidebar.markdown("### Internal fetch log (New Post Mode)")
-        st.sidebar.write(f"Playwright enabled: {PLAYWRIGHT_OK}")
-        for u, s in st.session_state.new_fetch:
-            st.sidebar.write(u, "—", s)
-
-    # Render results
-    if st.session_state.new_df is None or st.session_state.new_df.empty:
-        st.info("Run analysis to see results.")
-    else:
-        st.markdown("<div class='section-pill section-pill-tight'>Content Outline Gaps (vs master competitor)</div>", unsafe_allow_html=True)
-        render_table(st.session_state.new_df)
-
-    st.markdown("<div class='section-pill section-pill-tight'>SEO Analysis</div>", unsafe_allow_html=True)
-    render_table(st.session_state.seo_new_df, drop_internal_url=True)
-
-    st.markdown("<div class='section-pill section-pill-tight'>AI Visibility (Google AI Overview)</div>", unsafe_allow_html=True)
-    render_table(st.session_state.ai_new_df, drop_internal_url=True)
-
-    st.markdown("<div class='section-pill section-pill-tight'>Content Quality</div>", unsafe_allow_html=True)
-    render_table(st.session_state.cq_new_df, drop_internal_url=True)
+st.subheader("SEO Analysis")
+seo_df = st.session_state.get("seo_df")
+if isinstance(seo_df, pd.DataFrame):
+    st.dataframe(seo_df, use_container_width=True, hide_index=True)
+else:
+    st.info("Run analysis to see results.")
