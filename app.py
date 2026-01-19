@@ -832,6 +832,246 @@ def page_has_real_faq(fr: FetchResult, nodes: List[dict]) -> bool:
 # =====================================================
 # SECTION EXTRACTION (HEADER-FIRST COMPARISON)
 # =====================================================
+# =====================================================
+# GAPS ENGINE (Update Mode) — Header-first + Missing parts
+# =====================================================
+
+def _safe_snip(text: str, max_len: int = 260) -> str:
+    t = clean(text or "")
+    if not t:
+        return ""
+    # first sentence-ish
+    parts = re.split(r"(?<=[.!?])\s+", t)
+    s = parts[0] if parts else t
+    s = clean(s)
+    if len(s) > max_len:
+        s = s[:max_len].rstrip() + "…"
+    return s
+
+def _top_terms(text: str, n: int = 8) -> List[str]:
+    toks = tokenize(text)
+    out = []
+    freq = {}
+    for w in toks:
+        if w in STOP or w in GENERIC_STOP:
+            continue
+        if len(w) < 3:
+            continue
+        freq[w] = freq.get(w, 0) + 1
+    # pick by freq
+    for w, _ in sorted(freq.items(), key=lambda x: x[1], reverse=True):
+        out.append(w)
+        if len(out) >= n:
+            break
+    return out
+
+def _ngram_terms(text: str) -> Dict[str, int]:
+    # unigrams + bigrams (lightweight themes)
+    toks = [t for t in tokenize(text) if t not in STOP and t not in GENERIC_STOP]
+    freq: Dict[str, int] = {}
+    for t in toks:
+        freq[t] = freq.get(t, 0) + 1
+    for i in range(len(toks) - 1):
+        a, b = toks[i], toks[i+1]
+        if a in STOP or b in STOP:
+            continue
+        bg = f"{a} {b}"
+        if len(bg) >= 8:
+            freq[bg] = freq.get(bg, 0) + 1
+    return freq
+
+def _missing_topics(comp_text: str, bayut_text: str, max_topics: int = 8) -> List[str]:
+    comp_f = _ngram_terms(comp_text or "")
+    bay_f  = _ngram_terms(bayut_text or "")
+
+    # normalize set for bayut presence check
+    bay_set = set(bay_f.keys())
+
+    # keep comp terms not found in bayut
+    cand = [(c, term) for term, c in comp_f.items() if term not in bay_set]
+    cand.sort(key=lambda x: x[0], reverse=True)
+
+    out = []
+    for _, term in cand:
+        # avoid too-generic single words
+        if " " not in term and len(term) <= 3:
+            continue
+        out.append(term)
+        if len(out) >= max_topics:
+            break
+    return out
+
+def extract_faq_questions(fr: FetchResult, nodes: List[dict]) -> List[str]:
+    """
+    FAQ questions extraction:
+    - If FAQPage schema exists: parse JSON-LD mainEntity[].name (best)
+    - Else: from FAQ heading children that look like questions
+    """
+    qs: List[str] = []
+
+    # 1) schema-based (strongest)
+    if fr and fr.html:
+        try:
+            soup = BeautifulSoup(fr.html, "html.parser")
+            scripts = soup.find_all("script", attrs={"type": re.compile(r"ld\+json", re.I)})
+            for s in scripts:
+                raw = (s.string or s.get_text(" ") or "").strip()
+                if not raw:
+                    continue
+                try:
+                    j = json.loads(raw)
+                except Exception:
+                    continue
+
+                def walk_collect(x):
+                    if isinstance(x, dict):
+                        t = x.get("@type") or x.get("type")
+                        # handle graph nodes too
+                        if isinstance(t, str) and t.lower() == "faqpage":
+                            me = x.get("mainEntity") or []
+                            if isinstance(me, dict):
+                                me = [me]
+                            for ent in me:
+                                if isinstance(ent, dict):
+                                    name = ent.get("name") or ent.get("headline") or ""
+                                    name = normalize_question(str(name))
+                                    if _looks_like_question(name):
+                                        qs.append(name)
+                        for v in x.values():
+                            walk_collect(v)
+                    elif isinstance(x, list):
+                        for v in x:
+                            walk_collect(v)
+
+                walk_collect(j)
+        except Exception:
+            pass
+
+    # 2) heading-based fallback
+    if not qs:
+        for fn in _faq_heading_nodes(nodes):
+            qs.extend(_question_heading_children(fn))
+
+    # normalize + dedupe
+    out = []
+    seen = set()
+    for q in qs:
+        qn = normalize_question(q)
+        kn = norm_header(qn)
+        if not qn or kn in seen:
+            continue
+        seen.add(kn)
+        out.append(qn)
+    return out
+
+def compute_update_mode_gaps_header_first(
+    bayut_url: str,
+    bayut_fr: FetchResult,
+    bayut_nodes: List[dict],
+    competitors: List[str],
+    comp_fr_map: Dict[str, FetchResult],
+    comp_tree_map: Dict[str, dict],
+) -> pd.DataFrame:
+    """
+    Output strictly: Headers | Description | Source
+    Rules:
+    - Missing headers first
+    - Then missing parts under matched headers
+    - Strict FAQ: one row only, ONLY if competitor has real FAQ
+    """
+    rows: List[dict] = []
+
+    # Build Bayut sections (H2/H3)
+    bayut_secs = section_nodes(bayut_nodes, levels=(2,3))
+
+    # Bayut FAQ baseline
+    bayut_has_faq = page_has_real_faq(bayut_fr, bayut_nodes)
+    bayut_faq_qs = extract_faq_questions(bayut_fr, bayut_nodes) if bayut_has_faq else []
+
+    # Collect missing headers first (keep order)
+    missing_headers_rows: List[dict] = []
+    missing_parts_rows: List[dict] = []
+    faq_rows: List[dict] = []
+
+    for cu in competitors:
+        c_fr = comp_fr_map[cu]
+        c_nodes = (comp_tree_map[cu] or {}).get("nodes", [])
+
+        comp_secs = section_nodes(c_nodes, levels=(2,3))
+
+        # ---- Strict FAQ (one row only, only if REAL FAQ)
+        comp_has_faq = page_has_real_faq(c_fr, c_nodes)
+        if comp_has_faq:
+            comp_faq_qs = extract_faq_questions(c_fr, c_nodes)
+
+            # only add FAQ row if competitor has topics/questions not covered in Bayut FAQ
+            missing_qs = []
+            if comp_faq_qs:
+                bay_set = set(norm_header(x) for x in bayut_faq_qs)
+                for q in comp_faq_qs:
+                    if norm_header(q) not in bay_set:
+                        missing_qs.append(q)
+
+            # If Bayut has no real FAQ at all, treat competitor FAQ topics as missing
+            if (not bayut_has_faq) and comp_faq_qs:
+                missing_qs = comp_faq_qs[:]
+
+            if missing_qs:
+                # One FAQ row per competitor source
+                # (still deduped by header+source later)
+                faq_rows.append({
+                    "Headers": "FAQs",
+                    "Description": "Missing FAQ topics/questions vs Bayut: " + "; ".join(missing_qs[:8]),
+                    "Source": source_link(cu),
+                })
+
+        # ---- Compare competitor sections to Bayut (H2/H3)
+        for csec in comp_secs:
+            ch = csec["header"]
+            cc = csec.get("content", "")
+
+            match = find_best_bayut_match(ch, bayut_secs, min_score=0.73)
+
+            if not match:
+                # Missing header (competitor has it, Bayut doesn't)
+                snip = _safe_snip(cc)
+                terms = _top_terms(cc, n=7)
+                desc_parts = []
+                if snip:
+                    desc_parts.append(snip)
+                if terms:
+                    desc_parts.append("Key themes: " + ", ".join(terms))
+                desc = " ".join(desc_parts).strip() or "Competitor covers this section; Bayut missing it."
+                missing_headers_rows.append({
+                    "Headers": ch,
+                    "Description": desc,
+                    "Source": source_link(cu),
+                })
+            else:
+                # Matched header — check missing parts
+                bsec = match["bayut_section"]
+                bh = bsec["header"]
+                bc = bsec.get("content", "")
+
+                missing = _missing_topics(cc, bc, max_topics=8)
+
+                # Only create a "missing parts" row if there is meaningful delta
+                # (at least 2 themes OR competitor content much longer)
+                if len(missing) >= 2 or (len(clean(cc)) > (len(clean(bc)) + 260)):
+                    desc = "Missing parts/themes vs competitor: " + ", ".join(missing[:8]) if missing else "Competitor covers more depth under this header (Bayut content is thinner)."
+                    missing_parts_rows.append({
+                        "Headers": f"{bh} (missing parts)",
+                        "Description": desc,
+                        "Source": source_link(cu),
+                    })
+
+    # Order: missing headers first, then missing parts, then FAQ (FAQ can go anywhere; you asked FAQ one row only)
+    rows = missing_headers_rows + missing_parts_rows + faq_rows
+
+    rows = dedupe_rows(rows)
+    df = pd.DataFrame(rows, columns=["Headers", "Description", "Source"])
+    return df
+
 def section_nodes(nodes: List[dict], levels=(2,3)) -> List[dict]:
     secs = []
     current_h2 = None
@@ -1560,11 +1800,15 @@ if st.session_state.mode == "update":
         internal_fetch = [(u, f"ok ({comp_fr_map[u].source})") for u in competitors]
         st.session_state.update_fetch = internal_fetch
 
-        # --- GAPS table (keep your existing engine if you want; here we keep minimal placeholder)
-        # If you want, paste your update_mode_rows_header_first here (unchanged).
-        # For now: keep whatever you had earlier for gaps computation.
-        st.session_state.update_df = st.session_state.update_df  # keep (you already have your gaps engine earlier)
-
+        # --- GAPS table (Header-first + Missing parts + strict FAQ)
+st.session_state.update_df = compute_update_mode_gaps_header_first(
+    bayut_url=bayut_url.strip(),
+    bayut_fr=bayut_fr,
+    bayut_nodes=bayut_nodes,
+    competitors=competitors,
+    comp_fr_map=comp_fr_map,
+    comp_tree_map=comp_tree_map,
+)
         # --- SEO table
         rows = []
         rb = seo_row_for_page("Bayut", bayut_url.strip(), bayut_fr, bayut_nodes, manual_fkw=manual_fkw_update.strip())
