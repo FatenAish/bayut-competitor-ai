@@ -896,120 +896,410 @@ def dedupe_rows(rows: List[dict]) -> List[dict]:
     return out
 
 
-# =====================================================
-# ✅ CONTENT GAPS ENGINE (FIXED + NO DEPENDENCY ON SEO FUNCTIONS)
-# =====================================================
-def _simple_tokens(text: str) -> List[str]:
-    t = (text or "").lower()
-    t = re.sub(r"[^a-z0-9\s]", " ", t)
-    toks = [x for x in t.split() if x and len(x) >= 3 and x not in STOP]
-    return toks
+# ============================
+# CONTENT GAP ENGINE (ONE BLOCK)
+# ============================
+import re, json
+from difflib import SequenceMatcher
+from bs4 import BeautifulSoup
+from urllib.parse import urlparse
+from typing import List, Optional
 
-def _ngram_phrases(text: str, n_min: int = 2, n_max: int = 4, top_k: int = 18) -> List[str]:
-    toks = _simple_tokens(text)
-    freq: Dict[str, int] = {}
-    for n in range(n_min, n_max + 1):
-        for i in range(0, max(len(toks) - n + 1, 0)):
-            chunk = toks[i:i+n]
-            # drop super-generic chunks
-            if all(w in GENERIC_STOP for w in chunk):
-                continue
-            phrase = " ".join(chunk)
-            if len(phrase) < 8:
-                continue
-            freq[phrase] = freq.get(phrase, 0) + 1
+# --- reuse your existing helpers if you already have them ---
+IGNORE_TAGS = {"nav", "footer", "header", "aside", "script", "style", "noscript"}
 
-    if not freq:
-        return []
-    items = sorted(freq.items(), key=lambda x: x[1], reverse=True)
+NOISE_PATTERNS = [
+    r"\blooking to rent\b", r"\blooking to buy\b", r"\bexplore all available\b", r"\bview all\b",
+    r"\bfind (a|an) (home|property|apartment|villa)\b", r"\bbrowse\b", r"\bsearch\b",
+    r"\bproperties for (rent|sale)\b", r"\bavailable (rental|properties)\b", r"\bget in touch\b",
+    r"\bcontact (us|agent)\b", r"\bcall (us|now)\b", r"\bwhatsapp\b", r"\benquire\b",
+    r"\binquire\b", r"\bbook a viewing\b",
+    r"\bshare\b", r"\bfollow us\b", r"\blike\b", r"\bsubscribe\b",
+    r"\bnewsletter\b", r"\bsign up\b", r"\blogin\b", r"\bregister\b",
+    r"\brelated (posts|articles)\b", r"\byou may also like\b", r"\brecommended\b",
+    r"\bpopular posts\b", r"\bmore articles\b", r"\blatest (blogs|blog|podcasts|podcast|insights)\b",
+    r"\btable of contents\b", r"\bcontents\b", r"\bback to top\b", r"\bread more\b",
+    r"\bnext\b", r"\bprevious\b", r"\bcomments\b",
+    r"\bplease stand by\b", r"\bloading\b", r"\bjust a moment\b",
+]
+GENERIC_SECTION_HEADERS = {"introduction", "overview"}
+
+FAQ_TITLES = {"faq", "faqs", "frequently asked questions", "frequently asked question"}
+
+def clean(text: str) -> str:
+    return re.sub(r"\s+", " ", (text or "")).strip()
+
+def norm_header(h: str) -> str:
+    h = clean(h).lower()
+    h = re.sub(r"[^a-z0-9\s]", "", h)
+    h = re.sub(r"\s+", " ", h).strip()
+    return h
+
+def strip_label(h: str) -> str:
+    return clean(re.sub(r"\s*:\s*$", "", (h or "").strip()))
+
+def is_noise_header(h: str) -> bool:
+    s = clean(h)
+    if not s:
+        return True
+    hn = norm_header(s)
+    if hn in GENERIC_SECTION_HEADERS:
+        return True
+    if len(hn) < 4:
+        return True
+    if len(s) > 95:
+        return True
+    if sum(1 for c in s if c.isalnum()) / max(len(s), 1) < 0.6:
+        return True
+    for pat in NOISE_PATTERNS:
+        if re.search(pat, hn):
+            return True
+    return False
+
+def header_is_faq(header: str) -> bool:
+    return norm_header(header) in FAQ_TITLES
+
+def site_name(url: str) -> str:
+    try:
+        host = urlparse(url).netloc.lower().replace("www.", "")
+        base = host.split(":")[0]
+        name = base.split(".")[0]
+        return name[:1].upper() + name[1:]
+    except Exception:
+        return "Source"
+
+def source_link(url: str) -> str:
+    n = site_name(url)
+    return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{n}</a>'
+
+def flatten(nodes: List[dict]) -> List[dict]:
     out = []
-    for ph, _ in items:
-        if ph not in out:
-            out.append(ph)
-        if len(out) >= top_k:
+    def walk(n: dict, parent=None):
+        out.append({
+            "level": n.get("level"),
+            "header": n.get("header",""),
+            "content": n.get("content",""),
+            "parent": parent,
+            "children": n.get("children", []) or []
+        })
+        for c in (n.get("children", []) or []):
+            walk(c, n)
+    for n in (nodes or []):
+        walk(n, None)
+    return out
+
+# --------------------------
+# STRICT FAQ (same old logic)
+# --------------------------
+def _looks_like_question(s: str) -> bool:
+    s = clean(s)
+    if not s or len(s) < 6:
+        return False
+    s_low = s.lower()
+    if "?" in s:
+        return True
+    if re.match(r"^(what|where|when|why|how|who|which|can|is|are|do|does|did|should)\b", s_low):
+        return True
+    return False
+
+def normalize_question(q: str) -> str:
+    q = clean(q or "")
+    q = re.sub(r"^\s*\d+[\.\)]\s*", "", q)
+    q = re.sub(r"^\s*[-•]\s*", "", q)
+    return q.strip()
+
+def _has_faq_schema(html: str) -> bool:
+    if not html:
+        return False
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        scripts = soup.find_all("script", attrs={"type": re.compile(r"ld\+json", re.I)})
+        for s in scripts:
+            raw = (s.string or s.get_text(" ") or "").strip()
+            if not raw:
+                continue
+            try:
+                j = json.loads(raw)
+            except Exception:
+                continue
+
+            def walk(x):
+                if isinstance(x, dict):
+                    t = x.get("@type") or x.get("type")
+                    if isinstance(t, str) and t.lower() == "faqpage":
+                        return True
+                    if isinstance(t, list) and any(str(z).lower() == "faqpage" for z in t):
+                        return True
+                    for v in x.values():
+                        if walk(v):
+                            return True
+                elif isinstance(x, list):
+                    for v in x:
+                        if walk(v):
+                            return True
+                return False
+
+            if walk(j):
+                return True
+    except Exception:
+        return False
+    return False
+
+def _faq_heading_nodes(nodes: List[dict]) -> List[dict]:
+    out = []
+    for x in flatten(nodes):
+        if x.get("level") in (2,3) and norm_header(x.get("header","")) in FAQ_TITLES:
+            out.append(x)
+    return out
+
+def _question_heading_children(node: dict) -> List[str]:
+    qs = []
+    for c in (node.get("children", []) or []):
+        hdr = clean(c.get("header", ""))
+        if hdr and _looks_like_question(hdr):
+            qs.append(normalize_question(hdr))
+    return qs
+
+def page_has_real_faq(fr, nodes: List[dict]) -> bool:
+    faq_nodes = _faq_heading_nodes(nodes)
+    if not faq_nodes:
+        return False
+
+    html = getattr(fr, "html", "") if fr is not None else ""
+    if html:
+        if _has_faq_schema(html):
+            return True
+        for fn in faq_nodes:
+            if len(_question_heading_children(fn)) >= 3:
+                return True
+        return False
+
+    for fn in faq_nodes:
+        if len(_question_heading_children(fn)) >= 3:
+            return True
+    return False
+
+def extract_questions_from_node(node: dict) -> List[str]:
+    qs = []
+    qs.extend(_question_heading_children(node))
+
+    if len(qs) < 3:
+        txt = clean(node.get("content",""))
+        chunks = re.split(r"[\n\r]+|(?<=[\.\?\!])\s+", txt)
+        for ch in chunks[:80]:
+            ch = clean(ch)
+            if not ch or len(ch) > 160:
+                continue
+            if _looks_like_question(ch):
+                qs.append(normalize_question(ch))
+
+    seen=set(); out=[]
+    for q in qs:
+        k = norm_header(q)
+        if not k or k in seen:
+            continue
+        seen.add(k); out.append(q)
+    return out[:25]
+
+def faq_subject(q: str) -> str:
+    s = norm_header(normalize_question(q))
+    if any(k in s for k in ["price","pricing","cost","fees","budget"]): return "Pricing / cost"
+    if any(k in s for k in ["where","located","location","near","distance","map"]): return "Location / nearby"
+    if any(k in s for k in ["pros","cons","advantages","disadvantages","worth it"]): return "Decision help (pros/cons)"
+    if any(k in s for k in ["safe","safety","secure"]): return "Safety"
+    if any(k in s for k in ["school","kids","family","education"]): return "Family / education"
+    if any(k in s for k in ["metro","transport","commute","traffic","parking"]): return "Transport / traffic / parking"
+    if any(k in s for k in ["restaurants","cafes","nightlife","things to do","attractions"]): return "Lifestyle / things to do"
+    return "Other FAQ topics"
+
+def faq_subjects_from_questions(questions: List[str], limit: int = 10) -> List[str]:
+    out=[]; seen=set()
+    for q in questions:
+        subj = faq_subject(q)
+        k = norm_header(subj)
+        if k in seen:
+            continue
+        seen.add(k); out.append(subj)
+        if len(out) >= limit:
             break
     return out
 
-def _missing_parts_snippet(comp_content: str, bayut_content: str, max_phrases: int = 7) -> str:
-    c = clean(comp_content or "").lower()
-    b = clean(bayut_content or "").lower()
-    if len(c) < 80:
-        return ""
+def missing_faqs_row(bayut_nodes, bayut_fr, comp_nodes, comp_fr, comp_url: str) -> Optional[dict]:
+    if not page_has_real_faq(comp_fr, comp_nodes):
+        return None
 
-    cand = _ngram_phrases(c, n_min=2, n_max=4, top_k=18)
-    missing = []
-    for ph in cand:
-        if ph.lower() not in b:
-            missing.append(ph)
-        if len(missing) >= max_phrases:
-            break
+    comp_qs=[]
+    for fn in _faq_heading_nodes(comp_nodes):
+        comp_qs.extend(extract_questions_from_node(fn))
+    comp_qs=[q for q in comp_qs if q and len(q)>5]
+    if len(comp_qs) < 3:
+        return None
 
-    if not missing:
-        return ""
-    return "Add details about: " + ", ".join(missing) + "."
+    bayut_has = page_has_real_faq(bayut_fr, bayut_nodes)
+    bayut_qs=[]
+    if bayut_has:
+        for fn in _faq_heading_nodes(bayut_nodes):
+            bayut_qs.extend(extract_questions_from_node(fn))
+    bayut_qs=[q for q in bayut_qs if q and len(q)>5]
 
-def compute_gaps_header_first(
-    bayut_url: str,
-    bayut_fr: FetchResult,
-    bayut_nodes: List[dict],
-    competitors: List[str],
-    comp_fr_map: Dict[str, FetchResult],
-    comp_tree_map: Dict[str, dict],
-) -> pd.DataFrame:
-    bayut_secs = section_nodes(bayut_nodes, levels=(2, 3))
-    bayut_has_faq = page_has_real_faq(bayut_fr, bayut_nodes)
+    def q_key(q: str) -> str:
+        q2 = normalize_question(q)
+        q2 = re.sub(r"[^a-z0-9\s]", "", q2.lower())
+        q2 = re.sub(r"\s+", " ", q2).strip()
+        return q2
 
-    rows: List[dict] = []
+    bayut_set = {q_key(q) for q in bayut_qs if q}
 
-    for cu in competitors:
-        tr = comp_tree_map.get(cu) or {}
-        comp_nodes = tr.get("nodes", [])
-        comp_fr = comp_fr_map.get(cu)
+    if not bayut_qs:
+        topics = faq_subjects_from_questions(comp_qs, limit=10)
+        return {
+            "Headers": "FAQs",
+            "Description": "Competitor has a real FAQ section covering topics such as: " + ", ".join(topics) + ".",
+            "Source": source_link(comp_url),
+        }
 
-        if not comp_nodes:
+    missing_qs = [q for q in comp_qs if q_key(q) not in bayut_set]
+    if not missing_qs:
+        return None
+
+    topics = faq_subjects_from_questions(missing_qs, limit=10)
+    return {
+        "Headers": "FAQs",
+        "Description": "Missing FAQ topics: " + ", ".join(topics) + ".",
+        "Source": source_link(comp_url),
+    }
+
+
+# --------------------------
+# SECTION + MATCHING (old logic)
+# --------------------------
+def section_nodes(nodes: List[dict], levels=(2,3)) -> List[dict]:
+    secs=[]
+    current_h2=None
+    for x in flatten(nodes):
+        lvl = x.get("level")
+        h = strip_label(x.get("header",""))
+        if not h or is_noise_header(h) or header_is_faq(h):
             continue
+        if lvl == 2:
+            current_h2 = h
+        if lvl in levels:
+            c = clean(x.get("content",""))
+            secs.append({"level": lvl, "header": h, "content": c, "parent_h2": current_h2})
 
-        comp_secs = section_nodes(comp_nodes, levels=(2, 3))
+    seen=set(); out=[]
+    for s in secs:
+        k = norm_header(s["header"])
+        if k in seen:
+            continue
+        seen.add(k); out.append(s)
+    return out
 
-        # 1) Missing headers + 2) Missing parts
-        for cs in comp_secs:
-            comp_h = cs.get("header", "")
-            comp_content = cs.get("content", "")
-            if not comp_h:
-                continue
+def header_similarity(a: str, b: str) -> float:
+    a_n = norm_header(a); b_n = norm_header(b)
+    if not a_n or not b_n:
+        return 0.0
+    a_set=set(a_n.split()); b_set=set(b_n.split())
+    jacc = len(a_set & b_set)/max(len(a_set|b_set),1) if a_set and b_set else 0.0
+    seq = SequenceMatcher(None, a_n, b_n).ratio()
+    return (0.55*seq)+(0.45*jacc)
 
-            match = find_best_bayut_match(comp_h, bayut_secs, min_score=0.73)
+def find_best_bayut_match(comp_header: str, bayut_sections: List[dict], min_score: float=0.73) -> Optional[dict]:
+    best=None; best_score=0.0
+    for b in bayut_sections:
+        sc = header_similarity(comp_header, b["header"])
+        if sc > best_score:
+            best_score=sc; best=b
+    if best and best_score >= min_score:
+        return {"bayut_section": best, "score": best_score}
+    return None
 
-            if not match:
-                rows.append({
-                    "Headers": comp_h,
-                    "What to add": f"Competitor covers this section but Bayut doesn’t. Add a dedicated section titled '{comp_h}' and cover the key points discussed there.",
-                    "Source": source_link(cu),
-                })
-            else:
-                bsec = match["bayut_section"]
-                bayut_content = bsec.get("content", "")
-                snippet = _missing_parts_snippet(comp_content, bayut_content, max_phrases=7)
-                if snippet:
-                    rows.append({
-                        "Headers": f"{comp_h} (missing parts)",
-                        "What to add": snippet,
-                        "Source": source_link(cu),
-                    })
+def dedupe_rows(rows: List[dict]) -> List[dict]:
+    out=[]; seen=set()
+    for r in rows:
+        hk = norm_header(r.get("Headers",""))
+        sk = norm_header(re.sub(r"<[^>]+>", "", r.get("Source","")))
+        k = hk + "||" + sk
+        if k in seen:
+            continue
+        seen.add(k); out.append(r)
+    return out
 
-        # 3) FAQ one row ONLY if REAL FAQ exists
-        comp_has_faq = page_has_real_faq(comp_fr, comp_nodes) if comp_fr else False
-        if comp_has_faq and not bayut_has_faq:
-            rows.append({
-                "Headers": "FAQs",
-                "What to add": "Competitor has a REAL FAQ section. Add an FAQ block (4–6 questions) matching the competitor intent.",
-                "Source": source_link(cu),
-            })
+# --------------------------
+# THEMES (old neutral description)
+# --------------------------
+def theme_flags(text: str) -> set:
+    t=(text or "").lower()
+    flags=set()
 
-    rows = dedupe_rows(rows)
-    df = pd.DataFrame(rows, columns=["Headers", "What to add", "Source"])
-    return df
+    def has_any(words):
+        return any(w in t for w in words)
 
+    if has_any(["metro","public transport","commute","connectivity","access","highway","roads","bus","train"]):
+        flags.add("transport")
+    if has_any(["parking","traffic","congestion","rush hour","gridlock"]):
+        flags.add("traffic_parking")
+    if has_any(["cost","price","pricing","expensive","afford","budget","rent","fees","charges"]):
+        flags.add("cost")
+    if has_any(["restaurants","cafes","nightlife","vibe","atmosphere","social","entertainment"]):
+        flags.add("lifestyle")
+    if has_any(["schools","nursery","kids","family","clinic","hospital","supermarket","groceries","pharmacy"]):
+        flags.add("daily_life")
+    if has_any(["safe","safety","security","crime"]):
+        flags.add("safety")
+    if has_any(["pros","cons","advantages","disadvantages","weigh","consider","should you","worth it"]):
+        flags.add("decision_frame")
+    if has_any(["compare","comparison","vs ","versus","alternative","similar to"]):
+        flags.add("comparison")
+    return flags
+
+def summarize_missing_section_action(header: str, subheaders: Optional[List[str]], comp_content: str) -> str:
+    hn = norm_header(header)
+
+    if ("importance" in hn and "pros" in hn and "cons" in hn) or ("consider" in hn and "pros" in hn and "cons" in hn):
+        return "Competitor includes decision framing on how to weigh pros vs cons before concluding."
+
+    if "comparison" in hn or "compare" in hn or "vs" in hn or "versus" in hn:
+        if subheaders:
+            hint=", ".join(subheaders[:3])
+            return f"Competitor includes a comparison section and breaks it into alternatives such as: {hint}."
+        return "Competitor includes a comparison section explaining alternatives and how they differ."
+
+    themes=list(theme_flags(comp_content))
+    human_map={
+        "transport":"commute & connectivity",
+        "traffic_parking":"traffic/parking realities",
+        "cost":"cost considerations",
+        "lifestyle":"lifestyle & vibe",
+        "daily_life":"day-to-day convenience",
+        "safety":"safety angle",
+        "decision_frame":"decision framing",
+        "comparison":"comparison context",
+    }
+    picks=[human_map.get(x,x) for x in themes][:3]
+    if picks:
+        return f"Competitor covers this as a dedicated section with practical details (e.g., {', '.join(picks)})."
+    return "Competitor covers this as a dedicated section with extra context and practical specifics."
+
+def summarize_content_gap_action(header: str, comp_content: str, bayut_content: str) -> str:
+    comp_flags=theme_flags(comp_content)
+    bayut_flags=theme_flags(bayut_content)
+    missing=list(comp_flags - bayut_flags)
+
+    human_map={
+        "transport":"commute & connectivity",
+        "traffic_parking":"traffic/parking realities",
+        "cost":"cost considerations",
+        "lifestyle":"lifestyle & vibe",
+        "daily_life":"day-to-day convenience",
+        "safety":"safety angle",
+        "decision_frame":"decision framing",
+        "comparison":"comparison context",
+    }
+    missing_human=[human_map.get(x,x) for x in missing][:3]
+    if missing_human:
+        return "Competitor goes deeper on: " + ", ".join(missing_human) + "."
+    return "Competitor provides more depth and practical specifics than Bayut under the same header."
 
 # =====================================================
 # GAPS SUMMARY (bullets)
