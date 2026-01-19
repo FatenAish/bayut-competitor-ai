@@ -1843,9 +1843,15 @@ def build_content_quality_table_from_seo(
 
 
 # =====================================================
-# AI SUMMARY (REAL SUMMARY: 6–8 bullets, NOT table dump)
+# AI SUMMARY (ORDERED: 6–8 bullets, NOT table dump)
 # =====================================================
 def openai_summarize_block(title: str, payload_text: str) -> str:
+    """
+    Output rules:
+    - 6–8 bullets max
+    - each bullet is ONE line
+    - grouped + ordered (Add sections -> Expand parts -> FAQs -> Notes)
+    """
     payload_text = clean(payload_text)
     if not OPENAI_API_KEY:
         return payload_text
@@ -1855,64 +1861,167 @@ def openai_summarize_block(title: str, payload_text: str) -> str:
             "Authorization": f"Bearer {OPENAI_API_KEY}",
             "Content-Type": "application/json",
         }
+
+        system = (
+            "You are a senior SEO/editorial analyst.\n"
+            "Return ONLY 6–8 bullets.\n"
+            "Each bullet must be ONE line and start with '• '.\n"
+            "Do NOT join multiple actions in one bullet.\n"
+            "Keep bullets short and specific.\n"
+            "No tables, no paragraphs, no headings."
+        )
+
         body = {
             "model": OPENAI_MODEL,
             "messages": [
-                {"role": "system", "content": "You are a senior SEO/editorial analyst. Output ONLY 6-8 bullets. Each bullet must be actionable. No table dumps."},
-                {"role": "user", "content": f"{title}\n\n{payload_text}\n\nReturn 6-8 bullets max."}
+                {"role": "system", "content": system},
+                {"role": "user", "content": f"{title}\n\n{payload_text}\n\nReturn 6–8 bullets max."}
             ],
             "temperature": 0.2,
         }
-        r = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, data=json.dumps(body), timeout=35)
+        r = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            data=json.dumps(body),
+            timeout=35
+        )
         if r.status_code != 200:
             return payload_text
+
         j = r.json()
         out = j["choices"][0]["message"]["content"]
-        return clean(out)
+        out = clean(out)
+
+        # Safety: if model returns a paragraph, force bullet formatting
+        lines = [l.strip() for l in out.splitlines() if l.strip()]
+        bullets = [l for l in lines if l.startswith("•")]
+        if not bullets:
+            # fallback: split into up to 8 sentences
+            chunks = re.split(r"(?<=[.!?])\s+", out)
+            chunks = [c.strip() for c in chunks if c.strip()][:8]
+            bullets = [f"• {c}" for c in chunks]
+
+        return "\n".join(bullets[:8])
+
     except Exception:
         return payload_text
 
+
+def _is_bad_summary_header(h: str) -> bool:
+    hn = norm_header(h)
+    return hn in {
+        "conclusion", "summary", "final thoughts", "wrap up", "closing thoughts",
+        "key takeaways", "takeaways"
+    }
+
+
 def concise_gaps_summary(df: pd.DataFrame, max_bullets: int = 8) -> str:
+    """
+    Ordered + clear:
+    1) Add missing sections
+    2) Expand missing parts
+    3) FAQs
+    """
     if df is None or df.empty:
         return "No gaps found."
-    # take unique headers only (avoid repeating noise)
-    headers = []
-    seen = set()
-    for h in df.get("Headers", []).tolist():
-        h = str(h).strip()
-        k = norm_header(h)
-        if not h or not k or k in seen:
+
+    rows = []
+    for _, r in df.iterrows():
+        h = str(r.get("Headers", "")).strip()
+        d = str(r.get("Description", "")).strip()
+        if not h:
             continue
-        seen.add(k)
-        headers.append(h)
-        if len(headers) >= max_bullets:
+        rows.append((h, d))
+
+    add_sections = []
+    expand_parts = []
+    faq_item = None
+
+    seen_add = set()
+    seen_expand = set()
+
+    for h, d in rows:
+        if _is_bad_summary_header(h):
+            continue
+
+        # FAQ special handling
+        if norm_header(h) == "faqs":
+            faq_item = d or "Add an FAQ section only if competitor has a real FAQ block."
+            continue
+
+        # ignore question-headers (not good summary bullets)
+        if _looks_like_question(h):
+            continue
+
+        # missing parts bucket
+        if "(missing parts)" in h.lower():
+            base_h = clean(re.sub(r"\(missing parts\)", "", h, flags=re.I)).strip()
+            k = norm_header(base_h)
+            if k and k not in seen_expand:
+                seen_expand.add(k)
+                expand_parts.append((base_h, d))
+            continue
+
+        # normal add sections bucket
+        k = norm_header(h)
+        if k and k not in seen_add:
+            seen_add.add(k)
+            add_sections.append((h, d))
+
+    # build bullet draft (not exceeding max)
+    bullets = []
+
+    # Prioritize: add sections first
+    for h, d in add_sections:
+        bullets.append(f"• Add section: {h}")
+        if len(bullets) >= max_bullets:
             break
-    bullets = [f"• Add/expand: {h}" for h in headers]
-    return "\n".join(bullets) if bullets else "No gaps found."
+
+    # Then expand parts
+    if len(bullets) < max_bullets:
+        for h, d in expand_parts:
+            bullets.append(f"• Expand section: {h} (missing parts)")
+            if len(bullets) >= max_bullets:
+                break
+
+    # Then FAQs (1 line only)
+    if faq_item and len(bullets) < max_bullets:
+        bullets.append("• FAQs: Add/expand FAQ topics only if competitor has a real FAQ section (FAQ heading or FAQPage schema).")
+
+    return "\n".join(bullets[:max_bullets]) if bullets else "No gaps found."
+
 
 def concise_seo_summary(df: pd.DataFrame, max_bullets: int = 8) -> str:
     if df is None or df.empty:
         return "No SEO data."
+
     bullets = []
     for _, r in df.iterrows():
-        page = str(r.get("Page",""))
+        page = str(r.get("Page","")).strip()
         if page.lower().startswith("target"):
             continue
-        fkw = str(r.get("FKW",""))
-        hcount = str(r.get("Headers count",""))
-        rd = str(r.get("Google rank UAE (Desktop)",""))
-        bullets.append(f"• {page}: FKW='{fkw}' | Headers={hcount} | UAE desktop rank={rd}")
+
+        fkw = str(r.get("FKW","")).strip()
+        hcount = str(r.get("Headers count","")).strip()
+        rd = str(r.get("Google rank UAE (Desktop)","")).strip()
+        rm = str(r.get("Google rank UAE (Mobile)","")).strip()
+
+        bullets.append(f"• {page}: FKW='{fkw}' | Headers={hcount} | UAE rank (D/M)={rd}/{rm}")
         if len(bullets) >= max_bullets:
             break
-    return "\n".join(bullets) if bullets else "No SEO data."
+
+    return "\n".join(bullets[:max_bullets]) if bullets else "No SEO data."
+
 
 def ai_summary_from_df(kind: str, df: pd.DataFrame) -> str:
     if kind == "gaps":
         base = concise_gaps_summary(df, max_bullets=8)
-        return openai_summarize_block("Summarize the gaps into writer actions.", base)
+        return openai_summarize_block("Convert this into a clean writer checklist.", base)
+
     if kind == "seo":
         base = concise_seo_summary(df, max_bullets=8)
-        return openai_summarize_block("Summarize SEO signals into writer actions.", base)
+        return openai_summarize_block("Convert this into a clean SEO checklist.", base)
+
     return "No summary."
 
 
