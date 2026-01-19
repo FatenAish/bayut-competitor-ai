@@ -705,7 +705,38 @@ def _looks_like_question(s: str) -> bool:
         return True
     return False
 
-def find_faq_nodes(nodes: List[dict]) -> List[dict]:
+def find_faq_nodes(nodes: List[dict], fr: Optional[FetchResult] = None) -> List[dict]:
+    """
+    Returns FAQ nodes only if the page has REAL FAQ evidence.
+    """
+    if fr is None:
+        # if caller didn't pass fr, be strict: only allow node with >=3 question headings
+        out = []
+        for x in flatten(nodes):
+            if x.get("level") not in (2, 3):
+                continue
+            if not header_is_faq(x.get("header", "")):
+                continue
+            if len(_faq_question_headings_under(x)) >= 3:
+                out.append(x)
+        return out
+
+    if not page_has_real_faq(fr, nodes):
+        return []
+
+    faq = []
+    for x in flatten(nodes):
+        if x.get("level") not in (2, 3):
+            continue
+        if not header_is_faq(x.get("header", "")):
+            continue
+
+        # Prefer counting question HEADINGS (strict)
+        qh = _faq_question_headings_under(x)
+        if len(qh) >= 3:
+            faq.append(x)
+
+    return faq
     faq = []
     for x in flatten(nodes):
         if x.get("level") not in (2, 3):
@@ -811,8 +842,151 @@ def faq_subjects_from_questions(questions: List[str], limit: int = 10) -> List[s
         if len(out) >= limit:
             break
     return out
+def _has_faq_schema(html: str) -> bool:
+    if not html:
+        return False
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        for s in soup.find_all("script", attrs={"type": re.compile("ld\\+json", re.I)}):
+            raw = s.string or s.get_text(" ") or ""
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                j = json.loads(raw)
+            except Exception:
+                continue
 
-def missing_faqs_row(bayut_nodes: List[dict], comp_nodes: List[dict], comp_url: str) -> Optional[dict]:
+            def walk(x):
+                if isinstance(x, dict):
+                    t = x.get("@type") or x.get("type")
+                    if isinstance(t, str) and t.lower() == "faqpage":
+                        return True
+                    if isinstance(t, list) and any(str(z).lower() == "faqpage" for z in t):
+                        return True
+                    for v in x.values():
+                        if walk(v):
+                            return True
+                elif isinstance(x, list):
+                    for v in x:
+                        if walk(v):
+                            return True
+                return False
+
+            if walk(j):
+                return True
+    except Exception:
+        return False
+    return False
+
+def _has_visible_faq_heading_in_html(html: str) -> bool:
+    if not html:
+        return False
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        for t in soup.find_all(list(IGNORE_TAGS)):
+            t.decompose()
+        root = soup.find("article") or soup
+        for tag in root.find_all(["h1","h2","h3","h4"]):
+            txt = clean(tag.get_text(" "))
+            if txt and header_is_faq(txt):
+                return True
+    except Exception:
+        return False
+    return False
+
+def _faq_question_headings_under(node: dict) -> List[str]:
+    """
+    Only count question-like HEADINGS (not random sentences).
+    """
+    qs = []
+    for c in node.get("children", []) or []:
+        hdr = clean(c.get("header", ""))
+        if hdr and _looks_like_question(hdr):
+            qs.append(normalize_question(hdr))
+    return qs
+
+def page_has_real_faq(fr: FetchResult, nodes: List[dict]) -> bool:
+    """
+    Strict rule:
+    - If HTML exists: require FAQ schema OR an actual FAQ heading in HTML.
+    - If HTML doesn't exist (reader/text): require an FAQ heading in extracted nodes
+      AND at least 3 question-like child headings under it.
+    """
+    if fr and fr.html:
+        return _has_faq_schema(fr.html) or _has_visible_faq_heading_in_html(fr.html)
+
+    # No HTML → be extra strict
+    for x in flatten(nodes):
+        if x.get("level") in (2,3) and header_is_faq(x.get("header","")):
+            qh = _faq_question_headings_under(x)
+            if len(qh) >= 3:
+                return True
+    return False
+
+def missing_faqs_row(
+    bayut_nodes: List[dict],
+    bayut_fr: FetchResult,
+    comp_nodes: List[dict],
+    comp_fr: FetchResult,
+    comp_url: str
+) -> Optional[dict]:
+    # Competitor must have REAL FAQ evidence
+    comp_faq_nodes = find_faq_nodes(comp_nodes, fr=comp_fr)
+    if not comp_faq_nodes:
+        return None
+
+    comp_qs = []
+    for fn in comp_faq_nodes:
+        # use headings first (strict), then fallback to text if needed
+        qh = _faq_question_headings_under(fn)
+        if qh:
+            comp_qs.extend(qh)
+        else:
+            comp_qs.extend(extract_questions_from_node(fn))
+
+    comp_qs = [q for q in comp_qs if q and len(q) > 5]
+    if len(comp_qs) < 3:
+        return None
+
+    # Bayut: detect real FAQ evidence
+    bayut_faq_nodes = find_faq_nodes(bayut_nodes, fr=bayut_fr)
+    bayut_qs = []
+    for fn in bayut_faq_nodes:
+        qh = _faq_question_headings_under(fn)
+        if qh:
+            bayut_qs.extend(qh)
+        else:
+            bayut_qs.extend(extract_questions_from_node(fn))
+    bayut_qs = [q for q in bayut_qs if q and len(q) > 5]
+
+    def q_key(q: str) -> str:
+        q2 = normalize_question(q)
+        q2 = re.sub(r"[^a-z0-9\s]", "", q2.lower())
+        q2 = re.sub(r"\s+", " ", q2).strip()
+        return q2
+
+    bayut_set = {q_key(q) for q in bayut_qs if q}
+
+    # If Bayut has no FAQ at all
+    if not bayut_qs:
+        topics = faq_subjects_from_questions(comp_qs, limit=10)
+        return {
+            "Headers": "FAQs",
+            "Description": "Competitor has an FAQ section covering topics such as: " + ", ".join(topics) + ".",
+            "Source": source_link(comp_url),
+        }
+
+    missing_qs = [q for q in comp_qs if q_key(q) not in bayut_set]
+    if not missing_qs:
+        return None
+
+    topics = faq_subjects_from_questions(missing_qs, limit=10)
+    return {
+        "Headers": "FAQs",
+        "Description": "Missing FAQ topics: " + ", ".join(topics) + ".",
+        "Source": source_link(comp_url),
+    }
     comp_faq_nodes = find_faq_nodes(comp_nodes)
     if not comp_faq_nodes:
         return None
@@ -1009,7 +1183,9 @@ def summarize_content_gap_action(header: str, comp_content: str, bayut_content: 
 # =====================================================
 def update_mode_rows_header_first(
     bayut_nodes: List[dict],
+    bayut_fr: FetchResult,
     comp_nodes: List[dict],
+    comp_fr: FetchResult,
     comp_url: str,
     max_missing_headers: int = 7,
     max_missing_parts: int = 5
@@ -1128,7 +1304,7 @@ def update_mode_rows_header_first(
     rows.extend(missing_parts_rows)
 
     # 4) FAQs — ONE row only (only when competitor truly has FAQ heading)
-    faq_row = missing_faqs_row(bayut_nodes, comp_nodes, comp_url)
+faq_row = missing_faqs_row(bayut_nodes, bayut_fr, comp_nodes, comp_fr, comp_url)
     if faq_row:
         rows.append(faq_row)
 
@@ -1252,7 +1428,35 @@ def phrase_candidates(text: str, n_min=2, n_max=4) -> Dict[str, int]:
             freq[phrase] = freq.get(phrase, 0) + 1
     return freq
 
-def pick_fkw_skw(seo_title: str, h1: str, headings_blob_text: str, body_text: str, manual_fkw: str = "") -> Tuple[str, str]:
+def pick_fkw_only(seo_title: str, h1: str, headings_blob_text: str, body_text: str, manual_fkw: str = "") -> str:
+    """
+    Returns FKW only (SKWs removed by request).
+    - manual_fkw (if provided) overrides extracted FKW.
+    """
+    manual_fkw = clean(manual_fkw)
+    if manual_fkw:
+        return manual_fkw.lower()
+
+    base = " ".join([seo_title or "", h1 or "", headings_blob_text or "", body_text or ""])
+    freq = phrase_candidates(base, n_min=2, n_max=4)
+    if not freq:
+        return "Not available"
+
+    title_low = (seo_title or "").lower()
+    h1_low = (h1 or "").lower()
+
+    scored = []
+    for ph, c in freq.items():
+        boost = 1.0
+        if ph in title_low:
+            boost += 0.9
+        if ph in h1_low:
+            boost += 0.6
+        score = (c * boost)
+        scored.append((score, ph))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return scored[0][1] if scored else "Not available"
     """
     Returns (FKW, SKWs)
     - manual_fkw (if provided) overrides extracted FKW.
@@ -1460,7 +1664,8 @@ def seo_row_for_page(label: str, url: str, fr: FetchResult, nodes: List[dict], m
     body_text = fr.text or ""
 
     fkw, skws = pick_fkw_skw(seo_title, h1, blob, body_text, manual_fkw=manual_fkw)
-    fkw_count = compute_kw_repetition(body_text, fkw)
+fkw_count = compute_kw_repetition(body_text, fkw)
+
 
     return {
         "Page": label,
@@ -1471,10 +1676,42 @@ def seo_row_for_page(label: str, url: str, fr: FetchResult, nodes: List[dict], m
         "Headers count": headers_summary,
         "FKW": fkw,
         "FKW repeats (body)": fkw_count,
-        "SKWs": skws,
         "Google rank UAE (Desktop)": "Not run",
         "Google rank UAE (Mobile)": "Not run",
     }
+def word_count_from_text(text: str) -> int:
+    t = clean(text or "")
+    if not t:
+        return 0
+    return len(re.findall(r"\b\w+\b", t))
+
+def extract_last_modified_from_html(html: str) -> str:
+    """
+    Best-effort: uses meta/article times if present.
+    """
+    if not html:
+        return "Not available"
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        # common meta fields
+        keys = [
+            ("meta", {"property": "article:modified_time"}),
+            ("meta", {"property": "article:published_time"}),
+            ("meta", {"name": "lastmod"}),
+            ("meta", {"name": "date"}),
+            ("time", {}),
+        ]
+        # article:modified_time
+        m = soup.find("meta", attrs={"property": re.compile(r"article:modified_time", re.I)})
+        if m and m.get("content"):
+            return clean(m.get("content"))
+
+        # try any time tag
+        t = soup.find("time")
+        if t:
+            dt = t.get("datetime")
+            if dt:
+                return clean
 
 def enrich_seo_df_with_rank_and_ai(df: pd.DataFrame, manual_query: str = "") -> Tuple[pd.DataFrame, pd.DataFrame]:
     if df is None or df.empty:
@@ -2095,10 +2332,13 @@ if st.session_state.mode == "update":
             internal_fetch.append((comp_url, f"ok ({src})"))
             comp_nodes = comp_tree_map[comp_url]["nodes"]
 
-            all_rows.extend(update_mode_rows_header_first(
-                bayut_nodes=bayut_nodes,
-                comp_nodes=comp_nodes,
-                comp_url=comp_url,
+all_rows.extend(update_mode_rows_header_first(
+    bayut_nodes=bayut_nodes,
+    bayut_fr=bayut_fr,
+    comp_nodes=comp_nodes,
+    comp_fr=comp_fr_map[comp_url],
+    comp_url=comp_url,
+
                 max_missing_headers=7,
                 max_missing_parts=5,
             ))
