@@ -389,7 +389,6 @@ def resolve_all_or_require_manual(agent: FetchAgent, urls: List[str], st_key_pre
                 height=220,
             )
             if pasted and len(pasted.strip()) > 400:
-                # Keep both html + text as pasted (we later validate for HTML-only needs)
                 results[u] = FetchResult(True, "manual", 200, pasted.strip(), pasted.strip(), None)
 
     still_failed = [u for u in failed if not results[u].ok]
@@ -422,7 +421,14 @@ def ensure_html_for_quality(urls: List[str], fr_map: Dict[str, FetchResult], st_
                 height=240,
             )
             if pasted and "<" in pasted and len(pasted.strip()) > 800:
-                fr_map[u] = FetchResult(True, "manual_html", 200, pasted.strip(), clean(BeautifulSoup(pasted, "html.parser").get_text(" ")), None)
+                fr_map[u] = FetchResult(
+                    True,
+                    "manual_html",
+                    200,
+                    pasted.strip(),
+                    clean(BeautifulSoup(pasted, "html.parser").get_text(" ")),
+                    None
+                )
 
     still = [u for u in need if not fr_map[u].html]
     if still:
@@ -720,8 +726,10 @@ def flatten(nodes: List[dict]) -> List[dict]:
 
 def strip_label(h: str) -> str:
     return clean(re.sub(r"\s*:\s*$", "", (h or "").strip()))
+
+
 # =====================================================
-# STRICT FAQ DETECTION (FIXED: "FAQs about ..." + schema-only)
+# STRICT FAQ DETECTION
 # =====================================================
 FAQ_TITLES = {
     "faq",
@@ -732,7 +740,6 @@ FAQ_TITLES = {
 
 def header_is_faq(header: str) -> bool:
     nh = norm_header(header)
-    # accept "FAQs about Dubai Marina"
     if any(nh == t for t in FAQ_TITLES):
         return True
     if nh.startswith("faq ") or nh.startswith("faqs "):
@@ -811,11 +818,6 @@ def _question_heading_children(node: dict) -> List[str]:
     return qs
 
 def page_has_real_faq(fr: FetchResult, nodes: List[dict]) -> bool:
-    """
-    FIX:
-    - If FAQPage schema exists => YES (even if heading naming differs)
-    - Otherwise require explicit FAQ heading + >=3 question headings
-    """
     if fr and fr.html and _has_faq_schema(fr.html):
         return True
 
@@ -895,8 +897,131 @@ def dedupe_rows(rows: List[dict]) -> List[dict]:
 
 
 # =====================================================
+# ✅ CONTENT GAPS ENGINE (FIXED + NO DEPENDENCY ON SEO FUNCTIONS)
+# =====================================================
+def _simple_tokens(text: str) -> List[str]:
+    t = (text or "").lower()
+    t = re.sub(r"[^a-z0-9\s]", " ", t)
+    toks = [x for x in t.split() if x and len(x) >= 3 and x not in STOP]
+    return toks
+
+def _ngram_phrases(text: str, n_min: int = 2, n_max: int = 4, top_k: int = 18) -> List[str]:
+    toks = _simple_tokens(text)
+    freq: Dict[str, int] = {}
+    for n in range(n_min, n_max + 1):
+        for i in range(0, max(len(toks) - n + 1, 0)):
+            chunk = toks[i:i+n]
+            # drop super-generic chunks
+            if all(w in GENERIC_STOP for w in chunk):
+                continue
+            phrase = " ".join(chunk)
+            if len(phrase) < 8:
+                continue
+            freq[phrase] = freq.get(phrase, 0) + 1
+
+    if not freq:
+        return []
+    items = sorted(freq.items(), key=lambda x: x[1], reverse=True)
+    out = []
+    for ph, _ in items:
+        if ph not in out:
+            out.append(ph)
+        if len(out) >= top_k:
+            break
+    return out
+
+def _missing_parts_snippet(comp_content: str, bayut_content: str, max_phrases: int = 7) -> str:
+    c = clean(comp_content or "").lower()
+    b = clean(bayut_content or "").lower()
+    if len(c) < 80:
+        return ""
+
+    cand = _ngram_phrases(c, n_min=2, n_max=4, top_k=18)
+    missing = []
+    for ph in cand:
+        if ph.lower() not in b:
+            missing.append(ph)
+        if len(missing) >= max_phrases:
+            break
+
+    if not missing:
+        return ""
+    return "Add details about: " + ", ".join(missing) + "."
+
+def compute_gaps_header_first(
+    bayut_url: str,
+    bayut_fr: FetchResult,
+    bayut_nodes: List[dict],
+    competitors: List[str],
+    comp_fr_map: Dict[str, FetchResult],
+    comp_tree_map: Dict[str, dict],
+) -> pd.DataFrame:
+    bayut_secs = section_nodes(bayut_nodes, levels=(2, 3))
+    bayut_has_faq = page_has_real_faq(bayut_fr, bayut_nodes)
+
+    rows: List[dict] = []
+
+    for cu in competitors:
+        tr = comp_tree_map.get(cu) or {}
+        comp_nodes = tr.get("nodes", [])
+        comp_fr = comp_fr_map.get(cu)
+
+        if not comp_nodes:
+            continue
+
+        comp_secs = section_nodes(comp_nodes, levels=(2, 3))
+
+        # 1) Missing headers + 2) Missing parts
+        for cs in comp_secs:
+            comp_h = cs.get("header", "")
+            comp_content = cs.get("content", "")
+            if not comp_h:
+                continue
+
+            match = find_best_bayut_match(comp_h, bayut_secs, min_score=0.73)
+
+            if not match:
+                rows.append({
+                    "Headers": comp_h,
+                    "What to add": f"Competitor covers this section but Bayut doesn’t. Add a dedicated section titled '{comp_h}' and cover the key points discussed there.",
+                    "Source": source_link(cu),
+                })
+            else:
+                bsec = match["bayut_section"]
+                bayut_content = bsec.get("content", "")
+                snippet = _missing_parts_snippet(comp_content, bayut_content, max_phrases=7)
+                if snippet:
+                    rows.append({
+                        "Headers": f"{comp_h} (missing parts)",
+                        "What to add": snippet,
+                        "Source": source_link(cu),
+                    })
+
+        # 3) FAQ one row ONLY if REAL FAQ exists
+        comp_has_faq = page_has_real_faq(comp_fr, comp_nodes) if comp_fr else False
+        if comp_has_faq and not bayut_has_faq:
+            rows.append({
+                "Headers": "FAQs",
+                "What to add": "Competitor has a REAL FAQ section. Add an FAQ block (4–6 questions) matching the competitor intent.",
+                "Source": source_link(cu),
+            })
+
+    rows = dedupe_rows(rows)
+    df = pd.DataFrame(rows, columns=["Headers", "What to add", "Source"])
+    return df
+
+
+# =====================================================
 # GAPS SUMMARY (bullets)
 # =====================================================
+def _secrets_get(key: str, default=None):
+    try:
+        if hasattr(st, "secrets") and key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+    return default
+
 def openai_summarize_block(title: str, payload_text: str, max_bullets: int = 8) -> str:
     payload_text = clean(payload_text)
 
@@ -952,7 +1077,6 @@ def openai_summarize_block(title: str, payload_text: str, max_bullets: int = 8) 
     except Exception:
         return payload_text
 
-
 def concise_gaps_summary(df: pd.DataFrame) -> str:
     if df is None or df.empty:
         return "• No content gaps detected."
@@ -996,21 +1120,13 @@ def ai_summary_from_df(kind: str, df: pd.DataFrame) -> str:
 
 
 # =====================================================
-# DATAFORSEO (REPLACES SERPAPI بالكامل)
+# DATAFORSEO
 # =====================================================
-def _secrets_get(key: str, default=None):
-    try:
-        if hasattr(st, "secrets") and key in st.secrets:
-            return st.secrets[key]
-    except Exception:
-        pass
-    return default
-
 DATAFORSEO_LOGIN = _secrets_get("DATAFORSEO_LOGIN", None)
 DATAFORSEO_PASSWORD = _secrets_get("DATAFORSEO_PASSWORD", None)
 
 DFS_BASE = "https://api.dataforseo.com"
-DFS_SERP_PATH = "/v3/serp/google/organic/live/advanced"  # :contentReference[oaicite:2]{index=2}
+DFS_SERP_PATH = "/v3/serp/google/organic/live/advanced"
 
 DEFAULT_LOCATION_NAME = "United Arab Emirates"
 DEFAULT_LANGUAGE_CODE = "en"
@@ -1038,7 +1154,7 @@ def dfs_serp_cached(keyword: str, device: str, location_name: str) -> dict:
         "os": "windows" if device == "desktop" else "android",
         "depth": 20,
         "se_domain": DEFAULT_SE_DOMAIN,
-        "load_async_ai_overview": True,  # :contentReference[oaicite:3]{index=3}
+        "load_async_ai_overview": True,
     }
 
     try:
@@ -1109,7 +1225,6 @@ def dfs_ai_visibility(query: str, page_url: str, device: str, location_name: str
         if aio_items:
             refs = []
             for block in aio_items:
-                # refs live inside ai_overview_element.references (docs) :contentReference[oaicite:4]{index=4}
                 for sub in (block.get("items") or []):
                     for ref in (sub.get("references") or []):
                         url = ref.get("url") if isinstance(ref, dict) else ""
@@ -1123,7 +1238,7 @@ def dfs_ai_visibility(query: str, page_url: str, device: str, location_name: str
                     break
 
             if cited == "Yes":
-                notes = "Page found in AI Overview references (DataForSEO ai_overview references)."
+                notes = "Page found in AI Overview references (DataForSEO)."
             else:
                 notes = "AI Overview present, but this page not found in returned references."
         else:
@@ -1132,10 +1247,8 @@ def dfs_ai_visibility(query: str, page_url: str, device: str, location_name: str
         return {"AI Overview present": present, "Cited in AI Overview": cited, "AI Notes": notes}
     except Exception:
         return {"AI Overview present": "Not available", "Cited in AI Overview": "Not available", "AI Notes": "Parse error"}
-
-
 # =====================================================
-# SEO extraction + MEDIA (FIXED: count from <main>, not only <article>)
+# SEO extraction + MEDIA
 # =====================================================
 def url_slug(url: str) -> str:
     try:
@@ -1213,51 +1326,27 @@ def headings_blob(nodes: List[dict]) -> str:
                 hs.append(h)
     return " ".join(hs[:80])
 
-def tokenize(text: str) -> List[str]:
-    text = (text or "").lower()
-    text = re.sub(r"[^a-z0-9\s]", " ", text)
-    toks = [t for t in text.split() if t and len(t) >= 3]
-    return toks
-
-def phrase_candidates(text: str, n_min=2, n_max=4) -> Dict[str, int]:
-    toks = tokenize(text)
-    freq: Dict[str, int] = {}
-    for n in range(n_min, n_max + 1):
-        for i in range(0, max(len(toks) - n + 1, 0)):
-            chunk = toks[i:i+n]
-            if chunk[0] in STOP or chunk[-1] in STOP:
-                continue
-            if all(w in STOP or w in GENERIC_STOP for w in chunk):
-                continue
-            phrase = " ".join(chunk)
-            if len(phrase) < 8:
-                continue
-            freq[phrase] = freq.get(phrase, 0) + 1
-    return freq
-
 def pick_fkw_only(seo_title: str, h1: str, headings_text: str, body_text: str, manual_fkw: str = "") -> str:
     manual_fkw = clean(manual_fkw)
     if manual_fkw:
         return manual_fkw.lower()
 
     base = " ".join([seo_title or "", h1 or "", headings_text or "", body_text or ""])
-    freq = phrase_candidates(base, n_min=2, n_max=4)
+    base = base.lower()
+    # fallback simple phrase: pick most common non-stop token bigram
+    toks = [t for t in re.sub(r"[^a-z0-9\s]", " ", base).split() if len(t) >= 3 and t not in STOP]
+    if len(toks) < 4:
+        return "Not available"
+    freq = {}
+    for i in range(len(toks)-1):
+        a, b = toks[i], toks[i+1]
+        if a in GENERIC_STOP and b in GENERIC_STOP:
+            continue
+        ph = f"{a} {b}"
+        freq[ph] = freq.get(ph, 0) + 1
     if not freq:
         return "Not available"
-
-    title_low = (seo_title or "").lower()
-    h1_low = (h1 or "").lower()
-
-    scored = []
-    for ph, c in freq.items():
-        boost = 1.0
-        if ph in title_low:
-            boost += 0.9
-        if ph in h1_low:
-            boost += 0.6
-        scored.append((c * boost, ph))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return scored[0][1] if scored else "Not available"
+    return sorted(freq.items(), key=lambda x: x[1], reverse=True)[0][0]
 
 def compute_kw_repetition(text: str, phrase: str) -> str:
     if not text or not phrase or phrase == "Not available":
@@ -1308,11 +1397,6 @@ def enrich_seo_df_with_rank_and_ai(df: pd.DataFrame, manual_query: str = "", loc
         page = str(r.get("Page", ""))
         page_url = str(r.get("__url", ""))
 
-        if page.lower().startswith("target"):
-            df2.at[i, "Google rank UAE (Desktop)"] = "Not applicable"
-            df2.at[i, "Google rank UAE (Mobile)"] = "Not applicable"
-            continue
-
         query = clean(manual_query) if clean(manual_query) else str(r.get("FKW", ""))
         if not query or query == "Not available":
             df2.at[i, "Google rank UAE (Desktop)"] = "Not available"
@@ -1345,7 +1429,7 @@ def enrich_seo_df_with_rank_and_ai(df: pd.DataFrame, manual_query: str = "", loc
 
 
 # =====================================================
-# CONTENT QUALITY (FIX: FAQs/videos/tables correct)
+# CONTENT QUALITY
 # =====================================================
 def domain_of(url: str) -> str:
     try:
@@ -1516,7 +1600,7 @@ st.session_state.setdefault("last_sig_new", "")
 
 
 # =====================================================
-# UPDATE MODE UI
+# ✅ UPDATE MODE UI (CONTENT GAPS FIXED)
 # =====================================================
 if st.session_state.mode == "update":
     st.markdown("<div class='section-pill section-pill-tight'>Update Mode (Header-first gaps)</div>", unsafe_allow_html=True)
@@ -1524,12 +1608,8 @@ if st.session_state.mode == "update":
     bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
     competitors_text = st.text_area("Competitor URLs (one per line)", height=120)
     competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
-    manual_fkw_update = st.text_input(
-        "Optional: Focus Keyword (FKW) for analysis + UAE ranking",
-        placeholder="e.g., living in Dubai Marina"
-    )
+    manual_fkw_update = st.text_input("Optional: Focus Keyword (FKW) for analysis + UAE ranking", placeholder="e.g., living in Dubai Marina")
 
-    # ✅ CLEAR stale results immediately when inputs change
     current_sig = signature("update", bayut_url, competitors_text, manual_fkw_update)
     if st.session_state.last_sig_update and st.session_state.last_sig_update != current_sig:
         clear_update_results()
@@ -1545,7 +1625,7 @@ if st.session_state.mode == "update":
             st.error("Add at least one competitor URL.")
             st.stop()
 
-        clear_update_results()  # ✅ ensure nothing old remains
+        clear_update_results()
         st.session_state.update_fetch = []
         st.session_state.last_sig_update = current_sig
 
@@ -1564,7 +1644,7 @@ if st.session_state.mode == "update":
 
         st.session_state.update_fetch = [(u, f"ok ({comp_fr_map[u].source})") for u in competitors]
 
-        # ✅ --- GAPS table (FIXED: compute it, don't keep placeholder)
+        # ✅ CONTENT GAPS TABLE (ACTUAL COMPUTE)
         st.session_state.update_df = compute_gaps_header_first(
             bayut_url=bayut_url.strip(),
             bayut_fr=bayut_fr,
@@ -1579,15 +1659,8 @@ if st.session_state.mode == "update":
         rb = seo_row_for_page("Bayut", bayut_url.strip(), bayut_fr, bayut_nodes, manual_fkw=manual_fkw_update.strip())
         rb["__url"] = bayut_url.strip()
         rows.append(rb)
-
         for u in competitors:
-            rr = seo_row_for_page(
-                site_name(u),
-                u,
-                comp_fr_map[u],
-                comp_tree_map[u]["nodes"],
-                manual_fkw=manual_fkw_update.strip()
-            )
+            rr = seo_row_for_page(site_name(u), u, comp_fr_map[u], comp_tree_map[u]["nodes"], manual_fkw=manual_fkw_update.strip())
             rr["__url"] = u
             rows.append(rr)
 
@@ -1618,7 +1691,6 @@ if st.session_state.mode == "update":
 
     gaps_clicked = section_header_with_ai_button("Gaps Table", "Summarize by AI", "btn_gaps_summary_update")
     if gaps_clicked:
-        # ✅ prevent summarizing stale / empty data
         if st.session_state.update_df is None or st.session_state.update_df.empty:
             st.error("Run analysis first (current URLs).")
         else:
