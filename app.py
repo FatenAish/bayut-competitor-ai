@@ -1400,11 +1400,8 @@ def serp_ai_visibility(query: str, page_url: str, device: str) -> Dict[str, str]
             "AI Notes": f"{data.get('_error')}" if isinstance(data, dict) else "Not available"
         }
 
-    # SerpApi sometimes exposes AI overview under keys like "ai_overview" or "answer_box" etc.
-    # We'll try common keys safely.
     aio = data.get("ai_overview") or data.get("ai_overview_results") or None
     if not aio:
-        # Some setups put it under "answer_box" with type markers.
         ab = data.get("answer_box") or {}
         if isinstance(ab, dict) and ("ai" in str(ab.get("type","")).lower() or "overview" in str(ab.get("type","")).lower()):
             aio = ab
@@ -1414,7 +1411,6 @@ def serp_ai_visibility(query: str, page_url: str, device: str) -> Dict[str, str]
     notes = ""
 
     if aio:
-        # Try to find cited sources list
         sources = []
         if isinstance(aio, dict):
             for k in ["sources", "citations", "references", "links"]:
@@ -1454,7 +1450,6 @@ def seo_row_for_page(label: str, url: str, fr: FetchResult, nodes: List[dict], m
     media = extract_media_used(fr.html or "")
     slug = url_slug(url)
 
-    # True header count from HTML when possible
     if fr.html:
         hc = count_headers_true_from_html(fr.html)
     else:
@@ -1477,16 +1472,11 @@ def seo_row_for_page(label: str, url: str, fr: FetchResult, nodes: List[dict], m
         "FKW": fkw,
         "FKW repeats (body)": fkw_count,
         "SKWs": skws,
-        # NEW requested columns:
         "Google rank UAE (Desktop)": "Not run",
         "Google rank UAE (Mobile)": "Not run",
     }
 
 def enrich_seo_df_with_rank_and_ai(df: pd.DataFrame, manual_query: str = "") -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    Adds ranking columns for UAE Desktop/Mobile.
-    Returns (seo_df_updated, ai_visibility_df)
-    """
     if df is None or df.empty:
         return df, pd.DataFrame(columns=["Page", "Query", "AI Overview present", "Cited in AI Overview", "AI Notes"])
 
@@ -1495,8 +1485,6 @@ def enrich_seo_df_with_rank_and_ai(df: pd.DataFrame, manual_query: str = "") -> 
 
     for i, r in df2.iterrows():
         page = str(r.get("Page", ""))
-        url = str(r.get("Slug", ""))  # slug isn't URL; we need actual URL; store it? -> embed using hidden mapping.
-        # We'll add a hidden URL column during df build and then drop before render.
         page_url = str(r.get("__url", ""))
 
         if page.lower().startswith("target"):
@@ -1535,7 +1523,6 @@ def enrich_seo_df_with_rank_and_ai(df: pd.DataFrame, manual_query: str = "") -> 
         df2.at[i, "Google rank UAE (Desktop)"] = str(rank_d) if rank_d else note_d
         df2.at[i, "Google rank UAE (Mobile)"] = str(rank_m) if rank_m else note_m
 
-        # AI visibility (use desktop SERP fields, best-effort)
         ai = serp_ai_visibility(query, page_url, device="desktop")
         rows_ai.append({
             "Page": page,
@@ -1587,7 +1574,6 @@ def build_seo_analysis_newpost(
         rr["__url"] = u
         rows.append(rr)
 
-    # Target row (New post)
     fake_nodes = [{"level": 1, "header": new_title, "content": "", "children": []}]
     fake_fr = FetchResult(True, "synthetic", 200, "", new_title, None)
     row = seo_row_for_page("Target (New Post)", "Not applicable", fake_fr, fake_nodes, manual_fkw=manual_fkw)
@@ -1603,13 +1589,9 @@ def build_seo_analysis_newpost(
     return pd.DataFrame(rows)
 
 def openai_summarize_block(title: str, payload_text: str) -> str:
-    """
-    If OPENAI_API_KEY exists: real AI summary.
-    Else: return deterministic fallback.
-    """
     payload_text = clean(payload_text)
     if not OPENAI_API_KEY:
-        return payload_text  # already a deterministic summary passed in
+        return payload_text
 
     try:
         headers = {
@@ -1636,7 +1618,6 @@ def openai_summarize_block(title: str, payload_text: str) -> str:
 def deterministic_gaps_summary(df: pd.DataFrame) -> str:
     if df is None or df.empty:
         return "No gaps found."
-    # quick theme counts
     headers = [str(x) for x in df.get("Headers", []).tolist()]
     top = headers[:10]
     lines = ["Key gaps (top signals):"]
@@ -1668,6 +1649,265 @@ def ai_summary_from_df(kind: str, df: pd.DataFrame) -> str:
         base = deterministic_seo_summary(df)
         return openai_summarize_block("Summarize SEO signals & ranking insights into actionable bullets.", base + "\n\nTop rows:\n" + sample)
     return "No summary."
+
+
+# =====================================================
+# CONTENT QUALITY TABLE (NEW)
+# =====================================================
+def domain_of(url: str) -> str:
+    try:
+        host = urlparse(url).netloc.lower().replace("www.", "")
+        return host.split(":")[0]
+    except Exception:
+        return ""
+
+@st.cache_data(show_spinner=False, ttl=86400)
+def _head_last_modified(url: str) -> str:
+    try:
+        r = requests.head(url, headers=DEFAULT_HEADERS, allow_redirects=True, timeout=18)
+        return r.headers.get("Last-Modified", "") or ""
+    except Exception:
+        return ""
+
+def _extract_last_modified_from_html(html: str) -> str:
+    if not html:
+        return ""
+    soup = BeautifulSoup(html, "html.parser")
+
+    meta_candidates = [
+        ("meta", {"property": "article:modified_time"}, "content"),
+        ("meta", {"property": "article:published_time"}, "content"),
+        ("meta", {"name": "lastmod"}, "content"),
+        ("meta", {"name": "last-modified"}, "content"),
+        ("meta", {"name": "date"}, "content"),
+        ("meta", {"itemprop": "dateModified"}, "content"),
+        ("meta", {"itemprop": "datePublished"}, "content"),
+    ]
+    for tag, attrs, key in meta_candidates:
+        t = soup.find(tag, attrs=attrs)
+        if t and t.get(key):
+            v = clean(t.get(key))
+            if v:
+                return v
+
+    tm = soup.find("time", attrs={"datetime": True})
+    if tm and tm.get("datetime"):
+        v = clean(tm.get("datetime"))
+        if v:
+            return v
+
+    return ""
+
+def get_last_modified(url: str, html: str) -> str:
+    v = _extract_last_modified_from_html(html or "")
+    if v:
+        return v
+    h = _head_last_modified(url)
+    return h if h else "Not available"
+
+def word_count_from_text(text: str) -> int:
+    t = clean(text or "")
+    if not t:
+        return 0
+    return len(t.split())
+
+def _kw_stuffing_label(word_count: int, repeats: str) -> str:
+    try:
+        rep = int(str(repeats).strip())
+    except Exception:
+        return "Not available"
+    if word_count <= 0:
+        return "Not available"
+    per_1k = (rep / max(word_count, 1)) * 1000.0
+    if per_1k >= 18:
+        return f"High ({rep} repeats, {per_1k:.1f}/1k words)"
+    if per_1k >= 10:
+        return f"Moderate ({rep} repeats, {per_1k:.1f}/1k words)"
+    return f"Low ({rep} repeats, {per_1k:.1f}/1k words)"
+
+def _latest_year_mentioned(text: str) -> int:
+    years = re.findall(r"\b(19\d{2}|20\d{2})\b", (text or ""))
+    years_i = []
+    for y in years:
+        try:
+            years_i.append(int(y))
+        except Exception:
+            pass
+    return max(years_i) if years_i else 0
+
+def _has_brief_summary(nodes: List[dict], text: str) -> str:
+    blob = (headings_blob(nodes) or "").lower()
+    t = (text or "").lower()
+    cues = ["tl;dr", "tldr", "key takeaways", "in summary", "summary", "quick summary", "at a glance"]
+    if any(c in blob for c in cues) or any(c in t[:1200] for c in cues):
+        return "Yes"
+    return "No"
+
+def _has_faq(nodes: List[dict]) -> str:
+    return "Yes" if find_faq_nodes(nodes) else "No"
+
+def _count_tables_videos(html: str) -> Tuple[int, int]:
+    if not html:
+        return (0, 0)
+    soup = BeautifulSoup(html, "html.parser")
+    for t in soup.find_all(list(IGNORE_TAGS)):
+        t.decompose()
+    root = soup.find("article") or soup
+    tables = len(root.find_all("table"))
+    videos = len(root.find_all("video"))
+    ifr = root.find_all("iframe")
+    for x in ifr:
+        src = (x.get("src") or "").lower()
+        if any(k in src for k in ["youtube", "youtu.be", "vimeo", "dailymotion"]):
+            videos += 1
+    return (tables, videos)
+
+def _styling_layout_label(html: str, nodes: List[dict], text: str) -> str:
+    wc = word_count_from_text(text)
+    h2_count = sum(1 for x in flatten(nodes) if x.get("level") == 2)
+    has_toc = "table of contents" in (text or "").lower()
+    has_lists = ("•" in (text or "")) or ("-" in (text or "")[:2000])
+    tables, videos = _count_tables_videos(html or "")
+    score = 0
+    if wc >= 1200: score += 1
+    if h2_count >= 6: score += 1
+    if has_toc: score += 1
+    if has_lists: score += 1
+    if tables > 0: score += 1
+    if videos > 0: score += 1
+
+    if score >= 5: return "Strong"
+    if score >= 3: return "OK"
+    return "Weak"
+
+def _latest_information_label(last_modified: str, text: str) -> str:
+    lm = (last_modified or "").lower()
+    y = _latest_year_mentioned(text or "")
+    if ("2026" in lm) or ("2025" in lm) or y >= 2025:
+        return "Likely up-to-date"
+    if y >= 2024:
+        return "Somewhat recent"
+    return "Unclear/Older"
+
+def _outdated_label(last_modified: str, text: str) -> str:
+    lm = (last_modified or "").lower()
+    y = _latest_year_mentioned(text or "")
+    if ("2026" in lm) or ("2025" in lm) or y >= 2025:
+        return "No obvious outdated signal"
+    if y and y <= 2022:
+        return "Potentially outdated (mentions older years)"
+    if y and y <= 2023:
+        return "Possibly outdated"
+    return "Unclear"
+
+def _topic_cannibalization_label(query: str, page_url: str) -> str:
+    if not SERPAPI_API_KEY:
+        return "Not available (no SERPAPI_API_KEY)"
+
+    dom = domain_of(page_url)
+    if not dom or not query or query == "Not available":
+        return "Not available"
+
+    site_q = f"site:{dom} {query}"
+    data = serpapi_serp_cached(site_q, device="desktop")
+    if not data or data.get("_error"):
+        return f"Not available ({data.get('_error')})" if isinstance(data, dict) else "Not available"
+
+    organic = data.get("organic_results") or []
+    target = normalize_url_for_match(page_url)
+    others = []
+    for it in organic:
+        link = it.get("link") or ""
+        if not link:
+            continue
+        nm = normalize_url_for_match(link)
+        if dom in nm and nm != target:
+            others.append(link)
+
+    cnt = len(set(others))
+    if cnt >= 3:
+        return f"High risk (≈{cnt} other pages on same domain for this topic)"
+    if cnt >= 1:
+        return f"Medium risk (≈{cnt} other page(s) on same domain for this topic)"
+    return "Low risk (no other strong overlaps detected)"
+
+def build_content_quality_table_from_seo(
+    seo_df: pd.DataFrame,
+    fr_map_by_url: Dict[str, FetchResult],
+    tree_map_by_url: Dict[str, dict],
+    manual_query: str = ""
+) -> pd.DataFrame:
+    if seo_df is None or seo_df.empty:
+        return pd.DataFrame()
+
+    metrics = [
+        "Topic Cannibalization",
+        "Word Count",
+        "Last Modified",
+        "Keyword Stuffing",
+        "Latest Information",
+        "Outdated/Misleading Information",
+        "Provides a brief summary",
+        "FAQs",
+        "Tables",
+        "Video",
+        "Styling / Overall Layout",
+    ]
+
+    out = {"Content Quality": metrics}
+
+    for _, row in seo_df.iterrows():
+        page = str(row.get("Page", "")).strip()
+        page_url = str(row.get("__url", "")).strip()
+
+        if page.lower().startswith("target"):
+            col = [
+                "Not applicable",
+                "Not applicable",
+                "Not applicable",
+                "Not applicable",
+                "Suggested: include 2026 updates + fresh stats",
+                "Not applicable",
+                "Suggested: add TL;DR / key takeaways",
+                "Suggested: add FAQs (6–10)",
+                "Suggested: add 1–2 tables",
+                "Suggested: add 1 short video (optional)",
+                "Suggested: TOC + clean spacing + visuals",
+            ]
+            out[page] = col
+            continue
+
+        fr = fr_map_by_url.get(page_url)
+        tr = tree_map_by_url.get(page_url) or {}
+        nodes = tr.get("nodes", []) if isinstance(tr, dict) else []
+
+        html = (fr.html if fr else "") or ""
+        text = (fr.text if fr else "") or ""
+
+        wc = word_count_from_text(text)
+        lm = get_last_modified(page_url, html)
+        fkw = clean(manual_query) if clean(manual_query) else str(row.get("FKW", ""))
+        repeats = row.get("FKW repeats (body)", "Not available")
+
+        tables, videos = _count_tables_videos(html)
+
+        col = [
+            _topic_cannibalization_label(fkw, page_url),
+            str(wc) if wc else "Not available",
+            lm,
+            _kw_stuffing_label(wc, repeats),
+            _latest_information_label(lm, text),
+            _outdated_label(lm, text),
+            _has_brief_summary(nodes, text),
+            _has_faq(nodes),
+            str(tables),
+            str(videos),
+            _styling_layout_label(html, nodes, text),
+        ]
+
+        out[page] = col
+
+    return pd.DataFrame(out)
 
 
 # =====================================================
@@ -1746,10 +1986,6 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
     st.markdown(html, unsafe_allow_html=True)
 
 def section_header_with_ai_button(title: str, button_label: str, button_key: str) -> bool:
-    """
-    Header and button on the SAME LEVEL (your request).
-    Button sits on the right side (above last column area).
-    """
     c1, c2 = st.columns([4.2, 1.3])
     with c1:
         st.markdown(f"<div class='section-pill section-pill-tight'>{title}</div>", unsafe_allow_html=True)
@@ -1798,6 +2034,9 @@ if "seo_update_df" not in st.session_state:
     st.session_state.seo_update_df = pd.DataFrame()
 if "ai_update_df" not in st.session_state:
     st.session_state.ai_update_df = pd.DataFrame()
+# NEW: Content Quality state (Update)
+if "cq_update_df" not in st.session_state:
+    st.session_state.cq_update_df = pd.DataFrame()
 
 if "new_df" not in st.session_state:
     st.session_state.new_df = pd.DataFrame()
@@ -1807,6 +2046,9 @@ if "seo_new_df" not in st.session_state:
     st.session_state.seo_new_df = pd.DataFrame()
 if "ai_new_df" not in st.session_state:
     st.session_state.ai_new_df = pd.DataFrame()
+# NEW: Content Quality state (New)
+if "cq_new_df" not in st.session_state:
+    st.session_state.cq_new_df = pd.DataFrame()
 
 
 # =====================================================
@@ -1823,7 +2065,6 @@ if st.session_state.mode == "update":
     )
     competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
 
-    # NEW: Manual FKW option (acts on FKW/SKW + ranking query)
     manual_fkw_update = st.text_input("Optional: Focus Keyword (FKW) for analysis + UAE ranking", placeholder="e.g., pros and cons business bay")
 
     run = st.button("Run analysis", type="primary")
@@ -1836,19 +2077,16 @@ if st.session_state.mode == "update":
             st.error("Add at least one competitor URL.")
             st.stop()
 
-        # 1) HARD: Bayut must be available (or paste)
         with st.spinner("Fetching Bayut (no exceptions)…"):
             bayut_fr_map = resolve_all_or_require_manual(agent, [bayut_url.strip()], st_key_prefix="bayut")
             bayut_tree_map = ensure_headings_or_require_repaste([bayut_url.strip()], bayut_fr_map, st_key_prefix="bayut_tree")
         bayut_fr = bayut_fr_map[bayut_url.strip()]
         bayut_nodes = bayut_tree_map[bayut_url.strip()]["nodes"]
 
-        # 2) HARD: ALL competitors must be available (or paste)
         with st.spinner("Fetching ALL competitors (no exceptions)…"):
             comp_fr_map = resolve_all_or_require_manual(agent, competitors, st_key_prefix="comp_update")
             comp_tree_map = ensure_headings_or_require_repaste(competitors, comp_fr_map, st_key_prefix="comp_update_tree")
 
-        # 3) Build content-gap rows
         all_rows = []
         internal_fetch = []
 
@@ -1872,7 +2110,6 @@ if st.session_state.mode == "update":
             else pd.DataFrame(columns=["Headers", "Description", "Source"])
         )
 
-        # 4) Build SEO Analysis table (no long-tail column)
         st.session_state.seo_update_df = build_seo_analysis_update(
             bayut_url=bayut_url.strip(),
             bayut_fr=bayut_fr,
@@ -1883,7 +2120,6 @@ if st.session_state.mode == "update":
             manual_fkw=manual_fkw_update.strip()
         )
 
-        # 5) Enrich with Google UAE rank + AI visibility
         with st.spinner("Fetching Google UAE ranking (desktop + mobile) + AI visibility…"):
             seo_enriched, ai_df = enrich_seo_df_with_rank_and_ai(
                 st.session_state.seo_update_df,
@@ -1892,13 +2128,23 @@ if st.session_state.mode == "update":
             st.session_state.seo_update_df = seo_enriched
             st.session_state.ai_update_df = ai_df
 
+        # ===== NEW: Content Quality Table build =====
+        with st.spinner("Building Content Quality table…"):
+            url_to_fr = {bayut_url.strip(): bayut_fr, **comp_fr_map}
+            url_to_tree = {bayut_url.strip(): {"nodes": bayut_nodes}, **{u: comp_tree_map[u] for u in competitors}}
+            st.session_state.cq_update_df = build_content_quality_table_from_seo(
+                seo_df=st.session_state.seo_update_df,
+                fr_map_by_url=url_to_fr,
+                tree_map_by_url=url_to_tree,
+                manual_query=manual_fkw_update.strip()
+            )
+
     if show_internal_fetch and st.session_state.update_fetch:
         st.sidebar.markdown("### Internal fetch log (Update Mode)")
         st.sidebar.write(f"Playwright enabled: {PLAYWRIGHT_OK}")
         for u, s in st.session_state.update_fetch:
             st.sidebar.write(u, "—", s)
 
-    # ===== Gaps Table header + button (same level) =====
     gaps_clicked = section_header_with_ai_button(
         "Gaps Table",
         "Summarize by AI",
@@ -1918,7 +2164,6 @@ if st.session_state.mode == "update":
     else:
         render_table(st.session_state.update_df)
 
-    # ===== SEO Analysis header + button (same level) =====
     seo_clicked = section_header_with_ai_button(
         "SEO Analysis",
         "Summarize by AI",
@@ -1938,12 +2183,18 @@ if st.session_state.mode == "update":
     else:
         render_table(st.session_state.seo_update_df, drop_internal_url=True)
 
-    # ===== AI Visibility Table (requested) =====
     section_header_with_ai_button("AI Visibility (Google AI Overview)", "Summarize by AI", "noop_ai_vis_update_btn")
     if st.session_state.ai_update_df is None or st.session_state.ai_update_df.empty:
         st.info("Run analysis to see AI visibility signals.")
     else:
         render_table(st.session_state.ai_update_df, drop_internal_url=True)
+
+    # ===== NEW: Content Quality Table (requested) =====
+    st.markdown("<div class='section-pill section-pill-tight'>Content Quality</div>", unsafe_allow_html=True)
+    if st.session_state.cq_update_df is None or st.session_state.cq_update_df.empty:
+        st.info("Run analysis to see Content Quality signals.")
+    else:
+        render_table(st.session_state.cq_update_df, drop_internal_url=True)
 
 
 # =====================================================
@@ -1960,7 +2211,6 @@ else:
     )
     competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
 
-    # NEW: Manual FKW option (acts on FKW/SKW + ranking query)
     manual_fkw_new = st.text_input("Optional: Focus Keyword (FKW) for SEO + UAE ranking", placeholder="e.g., pros and cons business bay")
 
     run = st.button("Generate competitor coverage", type="primary")
@@ -1993,7 +2243,6 @@ else:
             else pd.DataFrame(columns=["Headers covered", "Content covered", "Source"])
         )
 
-        # SEO Analysis (New Post Mode) - no long-tail column
         st.session_state.seo_new_df = build_seo_analysis_newpost(
             new_title=new_title.strip(),
             competitors=competitors,
@@ -2002,7 +2251,6 @@ else:
             manual_fkw=manual_fkw_new.strip()
         )
 
-        # UAE rank + AI visibility
         with st.spinner("Fetching Google UAE ranking (desktop + mobile) + AI visibility…"):
             seo_enriched, ai_df = enrich_seo_df_with_rank_and_ai(
                 st.session_state.seo_new_df,
@@ -2011,13 +2259,22 @@ else:
             st.session_state.seo_new_df = seo_enriched
             st.session_state.ai_new_df = ai_df
 
+        # ===== NEW: Content Quality Table build =====
+        with st.spinner("Building Content Quality table…"):
+            url_to_tree = {u: comp_tree_map[u] for u in competitors}
+            st.session_state.cq_new_df = build_content_quality_table_from_seo(
+                seo_df=st.session_state.seo_new_df,
+                fr_map_by_url={**comp_fr_map},
+                tree_map_by_url=url_to_tree,
+                manual_query=manual_fkw_new.strip()
+            )
+
     if show_internal_fetch and st.session_state.new_fetch:
         st.sidebar.markdown("### Internal fetch log (New Post Mode)")
         st.sidebar.write(f"Playwright enabled: {PLAYWRIGHT_OK}")
         for u, s in st.session_state.new_fetch:
             st.sidebar.write(u, "—", s)
 
-    # ===== Competitor Coverage header + button (same level) =====
     cov_clicked = section_header_with_ai_button(
         "Competitor Coverage",
         "Summarize by AI",
@@ -2040,7 +2297,6 @@ else:
     else:
         render_table(st.session_state.new_df)
 
-    # ===== SEO Analysis header + button (same level) =====
     seo_clicked = section_header_with_ai_button(
         "SEO Analysis",
         "Summarize by AI",
@@ -2060,12 +2316,18 @@ else:
     else:
         render_table(st.session_state.seo_new_df, drop_internal_url=True)
 
-    # ===== AI Visibility Table (requested) =====
     section_header_with_ai_button("AI Visibility (Google AI Overview)", "Summarize by AI", "noop_ai_vis_new_btn")
     if st.session_state.ai_new_df is None or st.session_state.ai_new_df.empty:
         st.info("Generate competitor coverage to see AI visibility signals.")
     else:
         render_table(st.session_state.ai_new_df, drop_internal_url=True)
+
+    # ===== NEW: Content Quality Table (requested) =====
+    st.markdown("<div class='section-pill section-pill-tight'>Content Quality</div>", unsafe_allow_html=True)
+    if st.session_state.cq_new_df is None or st.session_state.cq_new_df.empty:
+        st.info("Generate competitor coverage to see Content Quality signals.")
+    else:
+        render_table(st.session_state.cq_new_df, drop_internal_url=True)
 
 # Helpful note (only if missing SERPAPI key)
 if (st.session_state.seo_update_df is not None and not st.session_state.seo_update_df.empty) or \
