@@ -1809,17 +1809,31 @@ st.session_state.update_df = compute_update_mode_gaps_header_first(
     comp_fr_map=comp_fr_map,
     comp_tree_map=comp_tree_map,
 )
-        # --- SEO table
-        rows = []
-        rb = seo_row_for_page("Bayut", bayut_url.strip(), bayut_fr, bayut_nodes, manual_fkw=manual_fkw_update.strip())
-        rb["__url"] = bayut_url.strip()
-        rows.append(rb)
-        for u in competitors:
-            rr = seo_row_for_page(site_name(u), u, comp_fr_map[u], comp_tree_map[u]["nodes"], manual_fkw=manual_fkw_update.strip())
-            rr["__url"] = u
-            rows.append(rr)
+    # --- SEO table
+    rows = []
+    rb = seo_row_for_page(
+        "Bayut",
+        bayut_url.strip(),
+        bayut_fr,
+        bayut_nodes,
+        manual_fkw=manual_fkw_update.strip()
+    )
+    rb["__url"] = bayut_url.strip()
+    rows.append(rb)
 
-        st.session_state.seo_update_df = pd.DataFrame(rows)
+    for u in competitors:
+        rr = seo_row_for_page(
+            site_name(u),
+            u,
+            comp_fr_map[u],
+            comp_tree_map[u]["nodes"],
+            manual_fkw=manual_fkw_update.strip()
+        )
+        rr["__url"] = u
+        rows.append(rr)
+
+    st.session_state.seo_update_df = pd.DataFrame(rows)
+
 
         with st.spinner("Fetching Google UAE ranking (desktop + mobile) + AI visibility via DataForSEO…"):
             seo_enriched, ai_df = enrich_seo_df_with_rank_and_ai(
