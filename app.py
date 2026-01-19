@@ -1321,3 +1321,122 @@ if analysis:
                 st.write(f"• {d}")
 else:
     st.info("Run analysis to see results.")
+    # =========================
+# PART 2 (paste AFTER Part 1)
+# =========================
+
+# =====================================================
+# UI - NEW POST MODE
+# =====================================================
+else:
+    st.markdown("<div class='section-pill'>New Post Mode</div>", unsafe_allow_html=True)
+
+    new_title = st.text_input("New post title", placeholder="Pros & Cons of Living in Business Bay (2026)")
+    competitors_text = st.text_area("Competitor URLs (one per line)", height=120)
+    competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
+
+    manual_kw = st.text_input("Optional: Focus Keyword", placeholder="e.g., pros and cons business bay")
+
+    run_clicked = st.button("Generate competitor coverage", type="primary")
+
+    if run_clicked:
+        reset_results()
+
+        if not new_title.strip():
+            st.session_state.analysis_err = "New post title is required."
+        elif not competitors:
+            st.session_state.analysis_err = "Add at least one competitor URL."
+        else:
+            debug = []
+            try:
+                with st.spinner("Fetching competitors (forced to complete)…"):
+                    fr_map = resolve_all_or_require_manual(competitors, st_key_prefix="all_new")
+
+                comp_fr_map = {u: fr_map[u] for u in competitors}
+                comp_nodes_map = {u: get_tree(comp_fr_map[u]) for u in competitors}
+
+                for u in competitors:
+                    debug.append(f"{site_name(u)} fetch source: {comp_fr_map[u].source}")
+
+                # In New Post Mode we show a simple coverage table (not gaps vs bayut)
+                rows = []
+                for u in competitors:
+                    nodes = comp_nodes_map[u]
+                    h2s = [clean(x["header"]) for x in flatten(nodes) if x.get("level") == 2 and x.get("header")]
+                    h2s = h2s[:7]
+                    rows.append({
+                        "Competitor": source_link(u),
+                        "Main Sections (H2)": " → ".join(h2s) if h2s else "Not detected",
+                    })
+                coverage_df = pd.DataFrame(rows)
+
+                pages = []
+                for u in competitors:
+                    pages.append((site_name(u), u, comp_fr_map[u], comp_nodes_map[u]))
+
+                cq_df = build_content_quality(pages)
+                seo_df = build_seo_table(pages, manual_kw=manual_kw.strip())
+
+                st.session_state.analysis = {
+                    "gaps_df": coverage_df,  # reuse renderer slot
+                    "content_quality_df": cq_df,
+                    "seo_df": seo_df,
+                    "debug": debug,
+                }
+
+            except Exception as e:
+                st.session_state.analysis_err = f"Unexpected error: {e}"
+
+# =====================================================
+# RESULTS (NO AI SUMMARY BUTTONS)
+# =====================================================
+analysis = st.session_state.get("analysis")
+err = st.session_state.get("analysis_err")
+
+st.write("")
+st.subheader("Content Gaps Table")
+
+if err:
+    st.error(err)
+
+if analysis:
+    gaps_df = analysis.get("gaps_df")
+    cq_df = analysis.get("content_quality_df")
+    seo_df = analysis.get("seo_df")
+    debug = analysis.get("debug", [])
+
+    # 1) Content gaps / coverage
+    if gaps_df is None or gaps_df.empty:
+        st.info("No results.")
+    else:
+        render_table(gaps_df)
+
+    st.divider()
+
+    # 2) Content Quality (2nd table)
+    st.subheader("Content Quality")
+    if cq_df is None or cq_df.empty:
+        st.info("No content quality data.")
+    else:
+        render_table(cq_df)
+
+    st.divider()
+
+    # 3) SEO Analysis
+    st.subheader("SEO Analysis")
+    if seo_df is None or seo_df.empty:
+        st.info("No SEO data.")
+    else:
+        render_table(seo_df)
+
+    # Secrets warning (ONLY DataForSEO)
+    if not DATAFORSEO_LOGIN or not DATAFORSEO_PASSWORD:
+        st.warning("DataForSEO ranking requires DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD in Streamlit secrets.")
+
+    if debug:
+        with st.expander("Debug (only if needed)"):
+            for d in debug:
+                st.write(f"• {d}")
+else:
+    st.info("Run analysis to see results.")
+
