@@ -1524,12 +1524,16 @@ if st.session_state.mode == "update":
     bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
     competitors_text = st.text_area("Competitor URLs (one per line)", height=120)
     competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
-    manual_fkw_update = st.text_input("Optional: Focus Keyword (FKW) for analysis + UAE ranking", placeholder="e.g., living in Dubai Marina")
+    manual_fkw_update = st.text_input(
+        "Optional: Focus Keyword (FKW) for analysis + UAE ranking",
+        placeholder="e.g., living in Dubai Marina"
+    )
 
     # ✅ CLEAR stale results immediately when inputs change
     current_sig = signature("update", bayut_url, competitors_text, manual_fkw_update)
     if st.session_state.last_sig_update and st.session_state.last_sig_update != current_sig:
         clear_update_results()
+        st.session_state.update_fetch = []
 
     run = st.button("Run analysis", type="primary")
 
@@ -1542,6 +1546,7 @@ if st.session_state.mode == "update":
             st.stop()
 
         clear_update_results()  # ✅ ensure nothing old remains
+        st.session_state.update_fetch = []
         st.session_state.last_sig_update = current_sig
 
         with st.spinner("Fetching Bayut (no exceptions)…"):
@@ -1557,21 +1562,32 @@ if st.session_state.mode == "update":
             comp_fr_map = ensure_html_for_quality(competitors, comp_fr_map, st_key_prefix="comp_update_html")
             comp_tree_map = ensure_headings_or_require_repaste(competitors, comp_fr_map, st_key_prefix="comp_update_tree")
 
-        internal_fetch = [(u, f"ok ({comp_fr_map[u].source})") for u in competitors]
-        st.session_state.update_fetch = internal_fetch
+        st.session_state.update_fetch = [(u, f"ok ({comp_fr_map[u].source})") for u in competitors]
 
-        # --- GAPS table (keep your existing engine if you want; here we keep minimal placeholder)
-        # If you want, paste your update_mode_rows_header_first here (unchanged).
-        # For now: keep whatever you had earlier for gaps computation.
-        st.session_state.update_df = st.session_state.update_df  # keep (you already have your gaps engine earlier)
+        # ✅ --- GAPS table (FIXED: compute it, don't keep placeholder)
+        st.session_state.update_df = compute_gaps_header_first(
+            bayut_url=bayut_url.strip(),
+            bayut_fr=bayut_fr,
+            bayut_nodes=bayut_nodes,
+            competitors=competitors,
+            comp_fr_map=comp_fr_map,
+            comp_tree_map=comp_tree_map,
+        )
 
         # --- SEO table
         rows = []
         rb = seo_row_for_page("Bayut", bayut_url.strip(), bayut_fr, bayut_nodes, manual_fkw=manual_fkw_update.strip())
         rb["__url"] = bayut_url.strip()
         rows.append(rb)
+
         for u in competitors:
-            rr = seo_row_for_page(site_name(u), u, comp_fr_map[u], comp_tree_map[u]["nodes"], manual_fkw=manual_fkw_update.strip())
+            rr = seo_row_for_page(
+                site_name(u),
+                u,
+                comp_fr_map[u],
+                comp_tree_map[u]["nodes"],
+                manual_fkw=manual_fkw_update.strip()
+            )
             rr["__url"] = u
             rows.append(rr)
 
@@ -1610,7 +1626,8 @@ if st.session_state.mode == "update":
 
     if st.session_state.get("gaps_update_summary_text"):
         st.markdown(
-            f"<div class='ai-summary'><b>AI Summary</b><div class='muted'>6–8 bullets only.</div><pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state['gaps_update_summary_text']}</pre></div>",
+            f"<div class='ai-summary'><b>AI Summary</b><div class='muted'>6–8 bullets only.</div>"
+            f"<pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state['gaps_update_summary_text']}</pre></div>",
             unsafe_allow_html=True
         )
 
