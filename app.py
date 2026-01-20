@@ -165,7 +165,7 @@ st.markdown(
     f"""
     <div class="hero">
       <h1><span class="bayut">Bayut</span> Competitor Gap Analysis</h1>
-      <p><b>Header-first</b> gap logic — Missing headers first, then <b>(missing parts)</b> under matching headers. FAQs are <b>one row</b> (only if competitor has a REAL FAQ section).</p>
+<p>Identifies missing sections and incomplete coverage against competitor articles.</p>
     </div>
     """,
     unsafe_allow_html=True,
