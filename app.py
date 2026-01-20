@@ -116,21 +116,25 @@ st.markdown(
         background: white !important;
         margin-top: 0 !important;
       }}
-      thead th {{
-        background: {LIGHT_GREEN} !important;
-        text-align: center !important;
-        font-weight: 900 !important;
-        color: {TEXT_DARK} !important;
-        padding: 12px 10px !important;
-        border-bottom: 1px solid #E5E7EB !important;
-      }}
-      tbody td {{
-        vertical-align: top !important;
-        padding: 12px 10px !important;
-        border-bottom: 1px solid #F1F5F9 !important;
-        color: {TEXT_DARK} !important;
-        font-size: 14px !important;
-      }}
+      thead th {
+  background: #E9F7F1 !important;
+  text-align: center !important;
+  font-weight: 900 !important;
+  color: #1F2937 !important;
+  padding: 8px 8px !important;      /* was 12px 10px */
+  border-bottom: 1px solid #E5E7EB !important;
+  font-size: 12.5px !important;     /* NEW */
+  line-height: 1.15 !important;     /* NEW */
+}
+tbody td {
+  vertical-align: top !important;
+  padding: 8px 8px !important;      /* was 12px 10px */
+  border-bottom: 1px solid #F1F5F9 !important;
+  color: #1F2937 !important;
+  font-size: 12.5px !important;     /* was 14px */
+  line-height: 1.25 !important;     /* NEW */
+}
+
       tbody tr:last-child td {{
         border-bottom: 0 !important;
       }}
