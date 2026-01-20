@@ -2291,8 +2291,8 @@ if st.session_state.mode == "update":
     else:
         render_table(st.session_state.update_df)
 
-    # SEO Analysis (Table 1)
-    section_header_pill("SEO Analysis (Table 1)")
+    # SEO Analysis (now titled "SEO Analysis")
+    section_header_pill("SEO Analysis")
     if st.session_state.seo_update_df is None or st.session_state.seo_update_df.empty:
         st.info("Run analysis to see SEO comparison.")
     else:
@@ -2415,8 +2415,8 @@ else:
     else:
         render_table(st.session_state.new_df)
 
-    # SEO Analysis (Table 1)
-    section_header_pill("SEO Analysis (Table 1)")
+    # SEO Analysis (now titled "SEO Analysis")
+    section_header_pill("SEO Analysis")
     if st.session_state.seo_new_df is None or st.session_state.seo_new_df.empty:
         st.info("Generate competitor coverage to see SEO comparison.")
     else:
