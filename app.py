@@ -1,4 +1,5 @@
-# app.py
+# app.py (PART 1/2)
+import base64
 import streamlit as st
 import requests
 import re
@@ -669,7 +670,7 @@ def flatten(nodes: List[dict]) -> List[dict]:
 
 def strip_label(h: str) -> str:
     return clean(re.sub(r"\s*:\s*$", "", (h or "").strip()))
-
+# app.py (PART 2/2)
 
 # =====================================================
 # STRICT FAQ DETECTION (REAL FAQ ONLY)
@@ -785,11 +786,9 @@ def page_has_real_faq(fr: FetchResult, nodes: List[dict]) -> bool:
 
 def extract_questions_from_node(node: dict) -> List[str]:
     qs: List[str] = []
-    # We prefer question HEADINGS (strict)
     qh = _question_heading_children(node)
     qs.extend(qh)
 
-    # fallback to text if still not enough (but still strict: keep short)
     def add_from_text_block(txt: str):
         txt = clean(txt or "")
         if not txt:
@@ -856,7 +855,6 @@ def missing_faqs_row(
     comp_fr: FetchResult,
     comp_url: str
 ) -> Optional[dict]:
-    # Competitor must have REAL FAQ (no false positives)
     if not page_has_real_faq(comp_fr, comp_nodes):
         return None
 
@@ -868,7 +866,6 @@ def missing_faqs_row(
     if len(comp_qs) < 3:
         return None
 
-    # Bayut must be detected correctly (no false negatives)
     bayut_has = page_has_real_faq(bayut_fr, bayut_nodes)
     bayut_qs = []
     if bayut_has:
@@ -1181,7 +1178,7 @@ def update_mode_rows_header_first(
 
 
 # =====================================================
-# SEO ANALYSIS (SKWs REMOVED) + GOOGLE UAE RANKING + AI VISIBILITY
+# SEO ANALYSIS (DataForSEO) + GOOGLE UAE RANKING + AI VISIBILITY
 # =====================================================
 def _secrets_get(key: str, default=None):
     try:
@@ -1191,9 +1188,35 @@ def _secrets_get(key: str, default=None):
         pass
     return default
 
-SERPAPI_API_KEY = _secrets_get("SERPAPI_API_KEY", None)
+def _secrets_get_nested(section: str, key: str, default=None):
+    try:
+        if hasattr(st, "secrets") and section in st.secrets and key in st.secrets[section]:
+            return st.secrets[section][key]
+    except Exception:
+        pass
+    return default
+
+# DataForSEO credentials (support both flat and sectioned secrets)
+DATAFORSEO_LOGIN = (
+    _secrets_get("DATAFORSEO_LOGIN", None)
+    or _secrets_get_nested("DATAFORSEO", "login", None)
+    or _secrets_get_nested("DATAFORSEO", "username", None)
+)
+DATAFORSEO_PASSWORD = (
+    _secrets_get("DATAFORSEO_PASSWORD", None)
+    or _secrets_get_nested("DATAFORSEO", "password", None)
+)
+
+# Google settings (UAE)
+DATAFORSEO_LOCATION_CODE_UAE = int(_secrets_get("DATAFORSEO_LOCATION_CODE_UAE", 2840) or 2840)
+DATAFORSEO_LANGUAGE_CODE = _secrets_get("DATAFORSEO_LANGUAGE_CODE", "en") or "en"
+
+# OpenAI (optional summaries)
 OPENAI_API_KEY = _secrets_get("OPENAI_API_KEY", None)
 OPENAI_MODEL = _secrets_get("OPENAI_MODEL", "gpt-4o-mini")
+
+def _dataforseo_ready() -> bool:
+    return bool(DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD)
 
 def url_slug(url: str) -> str:
     try:
@@ -1348,43 +1371,68 @@ def normalize_url_for_match(u: str) -> str:
     except Exception:
         return (u or "").strip().lower().replace("www.", "").rstrip("/")
 
+# -----------------------------
+# DataForSEO SERP (cached)
+# -----------------------------
 @st.cache_data(show_spinner=False, ttl=1800)
-def serpapi_serp_cached(query: str, device: str) -> dict:
-    if not SERPAPI_API_KEY:
-        return {"_error": "missing_serpapi_key"}
+def dataforseo_google_serp_live_advanced_cached(query: str, device: str) -> dict:
+    """
+    Uses DataForSEO: /v3/serp/google/organic/live/advanced
+    """
+    if not _dataforseo_ready():
+        return {"_error": "missing_dataforseo_credentials"}
 
-    params = {
-        "engine": "google",
-        "q": query,
-        "google_domain": "google.ae",
-        "gl": "ae",
-        "hl": "en",
-        "api_key": SERPAPI_API_KEY,
-        "num": 20,
-        "device": device,
-    }
+    url = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced"
+    payload = [{
+        "keyword": query,
+        "location_code": DATAFORSEO_LOCATION_CODE_UAE,
+        "language_code": DATAFORSEO_LANGUAGE_CODE,
+        "device": device,  # "desktop" or "mobile"
+        "os": "windows" if device == "desktop" else "android",
+        "depth": 20,
+        "load_async_ai_overview": True,
+    }]
+
     try:
-        r = requests.get("https://serpapi.com/search.json", params=params, timeout=35)
+        r = requests.post(url, auth=(DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD), json=payload, timeout=45)
         if r.status_code != 200:
-            return {"_error": f"serpapi_http_{r.status_code}", "_text": r.text[:400]}
+            return {"_error": f"dataforseo_http_{r.status_code}", "_text": (r.text or "")[:400]}
         return r.json()
     except Exception as e:
         return {"_error": str(e)}
 
-def serp_rank_for_url(query: str, page_url: str, device: str) -> Tuple[Optional[int], str]:
-    data = serpapi_serp_cached(query, device)
-    if not data or data.get("_error"):
-        return (None, f"Not available ({data.get('_error')})" if isinstance(data, dict) else "Not available")
+def _dataforseo_extract_items(data: dict) -> Tuple[List[dict], List[str]]:
+    try:
+        tasks = (data or {}).get("tasks") or []
+        if not tasks:
+            return [], []
+        result = (tasks[0].get("result") or [])
+        if not result:
+            return [], []
+        r0 = result[0] if isinstance(result, list) else result
+        items = r0.get("items") or []
+        item_types = r0.get("item_types") or []
+        return items, item_types
+    except Exception:
+        return [], []
 
-    organic = data.get("organic_results") or []
+def dataforseo_rank_for_url(query: str, page_url: str, device: str) -> Tuple[Optional[int], str]:
+    data = dataforseo_google_serp_live_advanced_cached(query, device)
+    if not data or data.get("_error"):
+        err = data.get("_error") if isinstance(data, dict) else "Not available"
+        return (None, f"Not available ({err})")
+
+    items, _ = _dataforseo_extract_items(data)
     target = normalize_url_for_match(page_url)
 
-    for item in organic:
-        link = item.get("link") or ""
+    organic = [it for it in items if str(it.get("type", "")).lower() == "organic"]
+    for it in organic:
+        link = it.get("url") or it.get("link") or ""
         if not link:
             continue
-        if normalize_url_for_match(link) == target or target in normalize_url_for_match(link):
-            pos = item.get("position")
+        nm = normalize_url_for_match(link)
+        if nm == target or target in nm or nm in target:
+            pos = it.get("rank_absolute") or it.get("rank_group") or it.get("position")
             try:
                 return (int(pos), "OK")
             except Exception:
@@ -1392,54 +1440,60 @@ def serp_rank_for_url(query: str, page_url: str, device: str) -> Tuple[Optional[
 
     return (None, "Not in top results")
 
-def serp_ai_visibility(query: str, page_url: str, device: str) -> Dict[str, str]:
-    data = serpapi_serp_cached(query, device)
+def dataforseo_ai_visibility(query: str, page_url: str, device: str) -> Dict[str, str]:
+    data = dataforseo_google_serp_live_advanced_cached(query, device)
     if not data or data.get("_error"):
+        err = data.get("_error") if isinstance(data, dict) else "Not available"
         return {
             "AI Overview present": "Not available",
             "Cited in AI Overview": "Not available",
-            "AI Notes": f"{data.get('_error')}" if isinstance(data, dict) else "Not available"
+            "AI Notes": str(err),
         }
 
-    aio = data.get("ai_overview") or data.get("ai_overview_results") or None
-    if not aio:
-        ab = data.get("answer_box") or {}
-        if isinstance(ab, dict) and ("ai" in str(ab.get("type","")).lower() or "overview" in str(ab.get("type","")).lower()):
-            aio = ab
+    items, item_types = _dataforseo_extract_items(data)
+    item_types_low = [str(x).lower() for x in (item_types or [])]
+    present = "Yes" if ("ai_overview" in item_types_low) or any(str(it.get("type","")).lower() == "ai_overview" for it in items) else "No"
 
-    present = "Yes" if aio else "No"
+    if present == "No":
+        return {
+            "AI Overview present": "No",
+            "Cited in AI Overview": "No",
+            "AI Notes": "No AI overview detected in returned SERP fields.",
+        }
+
+    target = normalize_url_for_match(page_url)
     cited = "No"
-    notes = ""
 
-    if aio:
-        sources = []
-        if isinstance(aio, dict):
-            for k in ["sources", "citations", "references", "links"]:
-                v = aio.get(k)
-                if isinstance(v, list):
-                    sources = v
-                    break
+    ai_items = [it for it in items if str(it.get("type","")).lower() == "ai_overview"]
+    candidate_lists = []
+    for it in ai_items:
+        for k in ["references", "sources", "citations", "links", "items"]:
+            v = it.get(k)
+            if isinstance(v, list) and v:
+                candidate_lists.append(v)
 
-        target = normalize_url_for_match(page_url)
-        for s in sources:
+    for lst in candidate_lists:
+        for s in lst:
             link = ""
             if isinstance(s, dict):
-                link = s.get("link") or s.get("url") or ""
+                link = s.get("url") or s.get("link") or ""
             elif isinstance(s, str):
                 link = s
-            if link and (target in normalize_url_for_match(link) or normalize_url_for_match(link) in target):
-                cited = "Yes"
-                break
-
-        if sources and cited == "No":
-            notes = "AI overview detected, but this page was not found in the exposed citations."
+            if link:
+                nm = normalize_url_for_match(link)
+                if target in nm or nm in target:
+                    cited = "Yes"
+                    break
         if cited == "Yes":
-            notes = "Page appears in AI overview citations (based on SERP API fields)."
+            break
+
+    notes = "Page appears in AI Overview citations (based on DataForSEO SERP fields)." if cited == "Yes" else \
+            "AI overview detected, but this page was not found in the exposed citations."
 
     return {
-        "AI Overview present": present,
+        "AI Overview present": "Yes",
         "Cited in AI Overview": cited,
-        "AI Notes": notes or ("No AI overview detected in returned SERP fields." if present == "No" else "")
+        "AI Notes": notes,
     }
 
 def seo_row_for_page(label: str, url: str, fr: FetchResult, nodes: List[dict], manual_fkw: str = "") -> dict:
@@ -1517,13 +1571,13 @@ def enrich_seo_df_with_rank_and_ai(df: pd.DataFrame, manual_query: str = "") -> 
             })
             continue
 
-        rank_d, note_d = serp_rank_for_url(query, page_url, device="desktop")
-        rank_m, note_m = serp_rank_for_url(query, page_url, device="mobile")
+        rank_d, note_d = dataforseo_rank_for_url(query, page_url, device="desktop")
+        rank_m, note_m = dataforseo_rank_for_url(query, page_url, device="mobile")
 
         df2.at[i, "Google rank UAE (Desktop)"] = str(rank_d) if rank_d else note_d
         df2.at[i, "Google rank UAE (Mobile)"] = str(rank_m) if rank_m else note_m
 
-        ai = serp_ai_visibility(query, page_url, device="desktop")
+        ai = dataforseo_ai_visibility(query, page_url, device="desktop")
         rows_ai.append({
             "Page": page,
             "Query": query,
@@ -1735,21 +1789,24 @@ def _outdated_label(last_modified: str, text: str) -> str:
     return "Unclear"
 
 def _topic_cannibalization_label(query: str, page_url: str) -> str:
-    if not SERPAPI_API_KEY:
-        return "Not available (no SERPAPI_API_KEY)"
+    if not _dataforseo_ready():
+        return "Not available (no DataForSEO credentials)"
     dom = domain_of(page_url)
     if not dom or not query or query == "Not available":
         return "Not available"
     site_q = f"site:{dom} {query}"
-    data = serpapi_serp_cached(site_q, device="desktop")
+    data = dataforseo_google_serp_live_advanced_cached(site_q, device="desktop")
     if not data or data.get("_error"):
-        return f"Not available ({data.get('_error')})" if isinstance(data, dict) else "Not available"
+        err = data.get("_error") if isinstance(data, dict) else "Not available"
+        return f"Not available ({err})"
 
-    organic = data.get("organic_results") or []
+    items, _ = _dataforseo_extract_items(data)
+    organic = [it for it in items if str(it.get("type","")).lower() == "organic"]
+
     target = normalize_url_for_match(page_url)
     others = []
     for it in organic:
-        link = it.get("link") or ""
+        link = it.get("url") or it.get("link") or ""
         if not link:
             continue
         nm = normalize_url_for_match(link)
@@ -1822,7 +1879,6 @@ def build_content_quality_table_from_seo(
 
         tables, videos = _count_tables_videos(html)
 
-        # ✅ FIX: FAQ must use the STRICT real-FAQ detector (no false negatives)
         faq_value = "Yes" if (fr and page_has_real_faq(fr, nodes)) else "No"
 
         out[page] = [
@@ -1848,7 +1904,6 @@ def build_content_quality_table_from_seo(
 def openai_summarize_block(title: str, payload_text: str, max_bullets: int = 8) -> str:
     payload_text = clean(payload_text)
 
-    # If no OpenAI key, return the already-bulleted payload
     if not OPENAI_API_KEY:
         return payload_text
 
@@ -1891,7 +1946,6 @@ def openai_summarize_block(title: str, payload_text: str, max_bullets: int = 8) 
 
         out = clean(r.json()["choices"][0]["message"]["content"])
 
-        # hard safety: force bullets if model misbehaves
         lines = [l.strip() for l in out.splitlines() if l.strip()]
         bullets = [l for l in lines if l.startswith("•")]
 
@@ -1900,7 +1954,6 @@ def openai_summarize_block(title: str, payload_text: str, max_bullets: int = 8) 
             chunks = [c.strip() for c in chunks if c.strip()]
             bullets = [f"• {c}" for c in chunks]
 
-        # Ensure each bullet is ONE line (no multi-actions with • inside)
         cleaned = []
         for b in bullets:
             b = b.replace("•", "").strip()
@@ -1920,15 +1973,7 @@ def _ignore_summary_header(h: str) -> bool:
         "wrap up", "closing thoughts", "key takeaways"
     }
 
-
 def concise_gaps_summary(df: pd.DataFrame, min_bullets: int = 4, max_bullets: int = 8) -> str:
-    """
-    Guarantees 4–8 bullets:
-    - Add missing sections
-    - Expand missing parts
-    - Optional FAQ
-    - If still too few, add safe editorial fallbacks
-    """
     if df is None or df.empty:
         return "• No content gaps detected."
 
@@ -1947,16 +1992,13 @@ def concise_gaps_summary(df: pd.DataFrame, min_bullets: int = 4, max_bullets: in
         if _ignore_summary_header(h):
             continue
 
-        # FAQs (only once)
         if norm_header(h) == "faqs":
             faq_needed = True
             continue
 
-        # ignore question-style headers
         if _looks_like_question(h):
             continue
 
-        # missing parts
         if "(missing parts)" in h.lower():
             base = clean(re.sub(r"\(missing parts\)", "", h, flags=re.I))
             k = norm_header(base)
@@ -1965,7 +2007,6 @@ def concise_gaps_summary(df: pd.DataFrame, min_bullets: int = 4, max_bullets: in
                 expand_sections.append(base)
             continue
 
-        # normal missing sections
         k = norm_header(h)
         if k and k not in seen_add:
             seen_add.add(k)
@@ -1973,23 +2014,19 @@ def concise_gaps_summary(df: pd.DataFrame, min_bullets: int = 4, max_bullets: in
 
     bullets = []
 
-    # 1) Add missing sections
     for h in add_sections:
         bullets.append(f"• Add section: {h}")
         if len(bullets) >= max_bullets:
             return "\n".join(bullets[:max_bullets])
 
-    # 2) Expand existing sections
     for h in expand_sections:
         bullets.append(f"• Expand section: {h}")
         if len(bullets) >= max_bullets:
             return "\n".join(bullets[:max_bullets])
 
-    # 3) FAQs
     if faq_needed and len(bullets) < max_bullets:
         bullets.append("• Add or expand FAQs based on competitor coverage")
 
-    # 4) Force minimum (SAFE editorial fallbacks)
     fallbacks = [
         "• Strengthen decision framing (why/when this area fits different lifestyles)",
         "• Add a short pros/cons recap with clear takeaways for readers",
@@ -2002,7 +2039,6 @@ def concise_gaps_summary(df: pd.DataFrame, min_bullets: int = 4, max_bullets: in
         bullets.append(fb)
 
     return "\n".join(bullets[:max_bullets]) if bullets else "• No meaningful gaps detected."
-
 
 def concise_seo_summary(df: pd.DataFrame, min_bullets: int = 4, max_bullets: int = 8) -> str:
     if df is None or df.empty:
@@ -2026,7 +2062,6 @@ def concise_seo_summary(df: pd.DataFrame, min_bullets: int = 4, max_bullets: int
         if len(bullets) >= max_bullets:
             break
 
-    # Force minimum (SEO-safe fallbacks)
     seo_fallbacks = [
         "• Ensure title + H1 contain the exact Focus Keyword naturally",
         "• Reduce keyword repetition if it looks stuffed; prioritize readability",
@@ -2039,16 +2074,13 @@ def concise_seo_summary(df: pd.DataFrame, min_bullets: int = 4, max_bullets: int
 
     return "\n".join(bullets[:max_bullets])
 
-
 def ai_summary_from_df(kind: str, df: pd.DataFrame) -> str:
     if kind == "gaps":
         base = concise_gaps_summary(df, min_bullets=4, max_bullets=8)
         return openai_summarize_block("Turn this into a clear writer checklist.", base, max_bullets=8)
-
     if kind == "seo":
         base = concise_seo_summary(df, min_bullets=4, max_bullets=8)
         return openai_summarize_block("Turn this into a clear SEO checklist.", base, max_bullets=8)
-
     return "• No summary available."
 
 
@@ -2265,7 +2297,6 @@ if st.session_state.mode == "update":
             st.session_state.seo_update_df = seo_enriched
             st.session_state.ai_update_df = ai_df
 
-        # Content Quality table (uses STRICT FAQ detector)
         st.session_state.cq_update_df = build_content_quality_table_from_seo(
             seo_df=st.session_state.seo_update_df,
             fr_map_by_url={bayut_url.strip(): bayut_fr, **comp_fr_map},
@@ -2399,7 +2430,6 @@ else:
 
     cov_clicked = section_header_with_ai_button("Competitor Coverage", "Summarize by AI", "btn_cov_summary_new")
     if cov_clicked:
-        # compact summary for coverage: turn rows into bullets
         if st.session_state.new_df is None or st.session_state.new_df.empty:
             st.session_state["cov_new_summary_text"] = "No data."
         else:
@@ -2449,8 +2479,9 @@ else:
     else:
         render_table(st.session_state.cq_new_df, drop_internal_url=True)
 
-# Helpful note (only if missing SERPAPI key)
+# Helpful note (only if missing DataForSEO creds)
 if (st.session_state.seo_update_df is not None and not st.session_state.seo_update_df.empty) or \
    (st.session_state.seo_new_df is not None and not st.session_state.seo_new_df.empty):
-    if not SERPAPI_API_KEY:
-        st.warning("Google UAE ranking + AI visibility requires SERPAPI_API_KEY in Streamlit secrets.")
+    if not _dataforseo_ready():
+        st.warning("Google UAE ranking + AI visibility requires DataForSEO credentials in Streamlit secrets (DATAFORSEO login/password).")
+
