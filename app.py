@@ -1182,7 +1182,7 @@ def update_mode_rows_header_first(
 
 
 # =====================================================
-# SEO ANALYSIS (SKWs REMOVED) + GOOGLE UAE RANKING + AI VISIBILITY
+# SEO ANALYSIS (FIXED) + GOOGLE UAE RANK (MOBILE ONLY) + AI VISIBILITY
 # =====================================================
 def _secrets_get(key: str, default=None):
     try:
@@ -1196,12 +1196,14 @@ SERPAPI_API_KEY = _secrets_get("SERPAPI_API_KEY", None)
 OPENAI_API_KEY = _secrets_get("OPENAI_API_KEY", None)
 OPENAI_MODEL = _secrets_get("OPENAI_MODEL", "gpt-4o-mini")
 
+
 def url_slug(url: str) -> str:
     try:
         p = urlparse(url).path.strip("/")
         return "/" + p if p else "/"
     except Exception:
         return "/"
+
 
 def extract_head_seo(html: str) -> Tuple[str, str]:
     if not html:
@@ -1219,6 +1221,7 @@ def extract_head_seo(html: str) -> Tuple[str, str]:
         desc = clean(md.get("content"))
 
     return (title or "Not available", desc or "Not available")
+
 
 def extract_media_used(html: str) -> str:
     if not html:
@@ -1243,36 +1246,13 @@ def extract_media_used(html: str) -> str:
 
     return " | ".join(parts) if parts else "None detected"
 
-def count_headers_true_from_html(html: str) -> Dict[str, int]:
-    counts = {"H1": 0, "H2": 0, "H3": 0, "H4": 0}
-    if not html:
-        return counts
-    soup = BeautifulSoup(html, "html.parser")
-    for t in soup.find_all(list(IGNORE_TAGS)):
-        t.decompose()
-    root = soup.find("article") or soup
-
-    counts["H1"] = len(root.find_all("h1"))
-    counts["H2"] = len(root.find_all("h2"))
-    counts["H3"] = len(root.find_all("h3"))
-    counts["H4"] = len(root.find_all("h4"))
-    return counts
-
-def count_headers_from_nodes(nodes: List[dict]) -> Dict[str, int]:
-    counts = {"H1": 0, "H2": 0, "H3": 0, "H4": 0}
-    for x in flatten(nodes):
-        lvl = x.get("level", 0)
-        if lvl == 1: counts["H1"] += 1
-        if lvl == 2: counts["H2"] += 1
-        if lvl == 3: counts["H3"] += 1
-        if lvl == 4: counts["H4"] += 1
-    return counts
 
 def tokenize(text: str) -> List[str]:
     text = (text or "").lower()
     text = re.sub(r"[^a-z0-9\s]", " ", text)
     toks = [t for t in text.split() if t and len(t) >= 3]
     return toks
+
 
 def phrase_candidates(text: str, n_min=2, n_max=4) -> Dict[str, int]:
     toks = tokenize(text)
@@ -1291,6 +1271,7 @@ def phrase_candidates(text: str, n_min=2, n_max=4) -> Dict[str, int]:
                 continue
             freq[phrase] = freq.get(phrase, 0) + 1
     return freq
+
 
 def pick_fkw_only(seo_title: str, h1: str, headings_blob_text: str, body_text: str, manual_fkw: str = "") -> str:
     manual_fkw = clean(manual_fkw)
@@ -1316,6 +1297,7 @@ def pick_fkw_only(seo_title: str, h1: str, headings_blob_text: str, body_text: s
     scored.sort(key=lambda x: x[0], reverse=True)
     return scored[0][1] if scored else "Not available"
 
+
 def get_first_h1(nodes: List[dict]) -> str:
     for x in flatten(nodes):
         if x.get("level") == 1:
@@ -1323,6 +1305,7 @@ def get_first_h1(nodes: List[dict]) -> str:
             if h:
                 return h
     return ""
+
 
 def headings_blob(nodes: List[dict]) -> str:
     hs = []
@@ -1333,12 +1316,14 @@ def headings_blob(nodes: List[dict]) -> str:
                 hs.append(h)
     return " ".join(hs[:80])
 
+
 def compute_kw_repetition(text: str, phrase: str) -> str:
     if not text or not phrase or phrase == "Not available":
         return "Not available"
     t = " " + re.sub(r"\s+", " ", (text or "").lower()) + " "
     p = " " + re.sub(r"\s+", " ", (phrase or "").lower()) + " "
     return str(t.count(p))
+
 
 def normalize_url_for_match(u: str) -> str:
     try:
@@ -1348,6 +1333,7 @@ def normalize_url_for_match(u: str) -> str:
         return host + path
     except Exception:
         return (u or "").strip().lower().replace("www.", "").rstrip("/")
+
 
 @st.cache_data(show_spinner=False, ttl=1800)
 def serpapi_serp_cached(query: str, device: str) -> dict:
@@ -1372,6 +1358,7 @@ def serpapi_serp_cached(query: str, device: str) -> dict:
     except Exception as e:
         return {"_error": str(e)}
 
+
 def serp_rank_for_url(query: str, page_url: str, device: str) -> Tuple[Optional[int], str]:
     data = serpapi_serp_cached(query, device)
     if not data or data.get("_error"):
@@ -1392,6 +1379,7 @@ def serp_rank_for_url(query: str, page_url: str, device: str) -> Tuple[Optional[
                 return (None, "Not available")
 
     return (None, "Not in top results")
+
 
 def serp_ai_visibility(query: str, page_url: str, device: str) -> Dict[str, str]:
     data = serpapi_serp_cached(query, device)
@@ -1443,6 +1431,118 @@ def serp_ai_visibility(query: str, page_url: str, device: str) -> Dict[str, str]
         "AI Notes": notes or ("No AI overview detected in returned SERP fields." if present == "No" else "")
     }
 
+
+def kw_usage_summary(seo_title: str, h1: str, headings_blob_text: str, body_text: str, fkw: str) -> str:
+    """
+    Quality-focused KW usage:
+    - repeats + density per 1k words
+    - presence in Title / H1 / Headings / Intro
+    """
+    fkw = clean(fkw or "").lower()
+    if not fkw or fkw == "not available":
+        return "Not available"
+
+    text = clean(body_text or "")
+    wc = word_count_from_text(text)
+
+    rep = compute_kw_repetition(text, fkw)
+    try:
+        rep_i = int(rep)
+    except Exception:
+        rep_i = None
+
+    per_1k = "Not available"
+    if wc and rep_i is not None:
+        per_1k = f"{(rep_i / max(wc,1))*1000:.1f}/1k"
+
+    title_hit = "Yes" if fkw in (seo_title or "").lower() else "No"
+    h1_hit = "Yes" if fkw in (h1 or "").lower() else "No"
+    headings_hit = "Yes" if fkw in (headings_blob_text or "").lower() else "No"
+
+    intro_raw = (body_text or "")[:1200].lower()
+    intro_hit = "Yes" if fkw in intro_raw else "No"
+
+    return f"Repeats:{rep} | {per_1k} | Title:{title_hit} H1:{h1_hit} Headings:{headings_hit} Intro:{intro_hit}"
+
+
+def internal_link_opportunities(page_url: str, nodes: List[dict], body_text: str, fkw: str, max_suggestions: int = 3) -> str:
+    """
+    Identifies relevant internal linking opportunities via SERPAPI site: queries
+    + includes proper internal linking practices.
+    """
+    if not SERPAPI_API_KEY:
+        return "Not available (no SERPAPI_API_KEY)"
+
+    dom = domain_of(page_url)
+    if not dom:
+        return "Not available"
+
+    # candidate topics from H2/H3 headings
+    topics = []
+    seen = set()
+    for x in flatten(nodes):
+        if x.get("level") in (2, 3):
+            h = clean(x.get("header", ""))
+            if not h or is_noise_header(h) or header_is_faq(h):
+                continue
+            k = norm_header(h)
+            if k and k not in seen:
+                seen.add(k)
+                topics.append(h)
+        if len(topics) >= 10:
+            break
+
+    # fallback: top phrases from body (excluding FKW)
+    if len(topics) < 6:
+        freq = phrase_candidates(body_text or "", n_min=2, n_max=4)
+        fkw_n = norm_header(fkw or "")
+        for ph, c in sorted(freq.items(), key=lambda x: x[1], reverse=True):
+            if norm_header(ph) == fkw_n:
+                continue
+            k = norm_header(ph)
+            if k and k not in seen:
+                seen.add(k)
+                topics.append(ph)
+            if len(topics) >= 12:
+                break
+
+    if not topics:
+        return "Opportunities: Not available"
+
+    target_norm = normalize_url_for_match(page_url)
+
+    picks = []
+    for topic in topics:
+        q = f"site:{dom} {topic}"
+        data = serpapi_serp_cached(q, device="desktop")
+        if not data or data.get("_error"):
+            continue
+
+        organic = data.get("organic_results") or []
+        best = None
+        for it in organic:
+            link = it.get("link") or ""
+            if not link:
+                continue
+            nm = normalize_url_for_match(link)
+            if dom in nm and nm != target_norm:
+                best = link
+                break
+
+        if best:
+            picks.append((topic, best))
+
+        if len(picks) >= max_suggestions:
+            break
+
+    if not picks:
+        return "Opportunities: None found via SERP site: query."
+
+    opp_lines = [f"• {clean(t)} → {u}" for t, u in picks]
+    practices = "Practice: use descriptive anchors, link from the most relevant section, avoid over-linking, and vary anchors naturally."
+    return "<br>".join(opp_lines) + f"<br><span class='muted'>{practices}</span>"
+
+
 def seo_row_for_page(label: str, url: str, fr: FetchResult, nodes: List[dict], manual_fkw: str = "") -> dict:
     seo_title, meta_desc = extract_head_seo(fr.html or "")
     h1 = get_first_h1(nodes)
@@ -1452,30 +1552,30 @@ def seo_row_for_page(label: str, url: str, fr: FetchResult, nodes: List[dict], m
     media = extract_media_used(fr.html or "")
     slug = url_slug(url)
 
-    if fr.html:
-        hc = count_headers_true_from_html(fr.html)
-    else:
-        hc = count_headers_from_nodes(nodes)
-    headers_summary = f"H1:{hc['H1']} | H2:{hc['H2']} | H3:{hc['H3']} | H4:{hc['H4']}"
-
     blob = headings_blob(nodes)
     body_text = fr.text or ""
 
     fkw = pick_fkw_only(seo_title, h1, blob, body_text, manual_fkw=manual_fkw)
-    fkw_count = compute_kw_repetition(body_text, fkw)
+    kw_usage = kw_usage_summary(seo_title, h1, blob, body_text, fkw)
+
+    internal_links = (
+        internal_link_opportunities(url, nodes, body_text, fkw)
+        if url and url != "Not applicable"
+        else "Not applicable"
+    )
 
     return {
         "Page": label,
+        "Google rank UAE (Mobile)": "Not run",
+        "Internal linking": internal_links,
+        "KW usage": kw_usage,
         "SEO title": seo_title,
         "Meta description": meta_desc,
         "Slug": slug,
         "Media used": media,
-        "Headers count": headers_summary,
         "FKW": fkw,
-        "FKW repeats (body)": fkw_count,
-        "Google rank UAE (Desktop)": "Not run",
-        "Google rank UAE (Mobile)": "Not run",
     }
+
 
 def enrich_seo_df_with_rank_and_ai(df: pd.DataFrame, manual_query: str = "") -> Tuple[pd.DataFrame, pd.DataFrame]:
     if df is None or df.empty:
@@ -1489,13 +1589,11 @@ def enrich_seo_df_with_rank_and_ai(df: pd.DataFrame, manual_query: str = "") -> 
         page_url = str(r.get("__url", ""))
 
         if page.lower().startswith("target"):
-            df2.at[i, "Google rank UAE (Desktop)"] = "Not applicable"
             df2.at[i, "Google rank UAE (Mobile)"] = "Not applicable"
             continue
 
         query = clean(manual_query) if clean(manual_query) else str(r.get("FKW", ""))
         if not query or query == "Not available":
-            df2.at[i, "Google rank UAE (Desktop)"] = "Not available"
             df2.at[i, "Google rank UAE (Mobile)"] = "Not available"
             rows_ai.append({
                 "Page": page,
@@ -1507,7 +1605,6 @@ def enrich_seo_df_with_rank_and_ai(df: pd.DataFrame, manual_query: str = "") -> 
             continue
 
         if not page_url:
-            df2.at[i, "Google rank UAE (Desktop)"] = "Not available"
             df2.at[i, "Google rank UAE (Mobile)"] = "Not available"
             rows_ai.append({
                 "Page": page,
@@ -1518,10 +1615,7 @@ def enrich_seo_df_with_rank_and_ai(df: pd.DataFrame, manual_query: str = "") -> 
             })
             continue
 
-        rank_d, note_d = serp_rank_for_url(query, page_url, device="desktop")
         rank_m, note_m = serp_rank_for_url(query, page_url, device="mobile")
-
-        df2.at[i, "Google rank UAE (Desktop)"] = str(rank_d) if rank_d else note_d
         df2.at[i, "Google rank UAE (Mobile)"] = str(rank_m) if rank_m else note_m
 
         ai = serp_ai_visibility(query, page_url, device="desktop")
@@ -1535,6 +1629,7 @@ def enrich_seo_df_with_rank_and_ai(df: pd.DataFrame, manual_query: str = "") -> 
 
     ai_df = pd.DataFrame(rows_ai)
     return df2, ai_df
+
 
 def build_seo_analysis_update(
     bayut_url: str,
@@ -1557,7 +1652,23 @@ def build_seo_analysis_update(
         rr["__url"] = u
         rows.append(rr)
 
-    return pd.DataFrame(rows)
+    # Order columns exactly as you want
+    df = pd.DataFrame(rows)
+    desired = [
+        "Page",
+        "Google rank UAE (Mobile)",
+        "Internal linking",
+        "KW usage",
+        "SEO title",
+        "Meta description",
+        "Slug",
+        "Media used",
+        "FKW",
+        "__url",
+    ]
+    df = df[[c for c in desired if c in df.columns]]
+    return df
+
 
 def build_seo_analysis_newpost(
     new_title: str,
@@ -1578,17 +1689,33 @@ def build_seo_analysis_newpost(
     fake_nodes = [{"level": 1, "header": new_title, "content": "", "children": []}]
     fake_fr = FetchResult(True, "synthetic", 200, "", new_title, None)
     row = seo_row_for_page("Target (New Post)", "Not applicable", fake_fr, fake_nodes, manual_fkw=manual_fkw)
+
     row["Slug"] = "Suggested: /" + re.sub(r"[^a-z0-9]+", "-", new_title.lower()).strip("-") + "/"
     row["Meta description"] = "Suggested: write a 140–160 char meta based on the intro angle."
     row["Media used"] = "Suggested: 1 hero image + 1 map/graphic (optional)"
-    row["FKW repeats (body)"] = "Not applicable"
-    row["Google rank UAE (Desktop)"] = "Not applicable"
+    row["KW usage"] = "Not applicable"
     row["Google rank UAE (Mobile)"] = "Not applicable"
+    row["Internal linking"] = "Suggested: link to 3–5 relevant Bayut guides from matching sections."
+    row["FKW"] = pick_fkw_only(new_title, new_title, new_title, "", manual_fkw=manual_fkw)
     row["__url"] = ""
+
     rows.insert(0, row)
 
-    return pd.DataFrame(rows)
-
+    df = pd.DataFrame(rows)
+    desired = [
+        "Page",
+        "Google rank UAE (Mobile)",
+        "Internal linking",
+        "KW usage",
+        "SEO title",
+        "Meta description",
+        "Slug",
+        "Media used",
+        "FKW",
+        "__url",
+    ]
+    df = df[[c for c in desired if c in df.columns]]
+    return df
 
 # =====================================================
 # CONTENT QUALITY TABLE (FAQs fixed + your rows)
