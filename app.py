@@ -760,10 +760,7 @@ if "seo_new_summary_text" not in st.session_state:
 # UI - UPDATE MODE
 # =====================================================
 if st.session_state.mode == "update":
-    st.markdown(
-        "<div class='section-pill section-pill-tight'>Update Mode</div>",
-        unsafe_allow_html=True
-    )
+    st.markdown("<div class='section-pill section-pill-tight'>Update Mode</div>", unsafe_allow_html=True)
 
     bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
     competitors_text = st.text_area(
@@ -791,7 +788,6 @@ if st.session_state.mode == "update":
         with st.spinner("Fetching Bayut (no exceptions)…"):
             bayut_fr_map = resolve_all_or_require_manual(agent, [bayut_url.strip()], st_key_prefix="bayut")
             bayut_tree_map = ensure_headings_or_require_repaste([bayut_url.strip()], bayut_fr_map, st_key_prefix="bayut_tree")
-
         bayut_fr = bayut_fr_map[bayut_url.strip()]
         bayut_nodes = bayut_tree_map[bayut_url.strip()]["nodes"]
 
@@ -807,18 +803,15 @@ if st.session_state.mode == "update":
             internal_fetch.append((comp_url, f"ok ({src})"))
             comp_nodes = comp_tree_map[comp_url]["nodes"]
 
-            # IMPORTANT: this function MUST exist above this UI block
-            all_rows.extend(
-                update_mode_rows_header_first(
-                    bayut_nodes=bayut_nodes,
-                    bayut_fr=bayut_fr,
-                    comp_nodes=comp_nodes,
-                    comp_fr=comp_fr_map[comp_url],
-                    comp_url=comp_url,
-                    max_missing_headers=7,
-                    max_missing_parts=5,
-                )
-            )
+            all_rows.extend(update_mode_rows_header_first(
+                bayut_nodes=bayut_nodes,
+                bayut_fr=bayut_fr,
+                comp_nodes=comp_nodes,
+                comp_fr=comp_fr_map[comp_url],
+                comp_url=comp_url,
+                max_missing_headers=7,
+                max_missing_parts=5,
+            ))
 
         st.session_state.update_fetch = internal_fetch
         st.session_state.update_df = (
@@ -852,21 +845,26 @@ if st.session_state.mode == "update":
             manual_query=manual_fkw_update.strip()
         )
 
+    # Optional sidebar logs
     if show_internal_fetch and st.session_state.update_fetch:
         st.sidebar.markdown("### Internal fetch log (Update Mode)")
         st.sidebar.write(f"Playwright enabled: {PLAYWRIGHT_OK}")
         for u, s in st.session_state.update_fetch:
             st.sidebar.write(u, "—", s)
 
-    # ---------- Content Gaps (with AI button) ----------
+    # =========================
+    # 1) Content Gaps Table
+    # =========================
     gaps_clicked = section_header_with_ai_button("Content Gaps Table", "Summarize by AI", "btn_gaps_summary_update")
     if gaps_clicked:
-        st.session_state["gaps_update_summary_text"] = ai_summary_from_df("gaps", st.session_state.update_df)
+        st.session_state.gaps_update_summary_text = ai_summary_from_df("gaps", st.session_state.update_df)
 
     if st.session_state.get("gaps_update_summary_text"):
         st.markdown(
-            f"<div class='ai-summary'><b>AI Summary</b><div class='muted'>6–8 bullets only (real summary).</div>"
-            f"<pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state['gaps_update_summary_text']}</pre></div>",
+            f"<div class='ai-summary'><b>AI Summary</b>"
+            f"<div class='muted'>6–8 bullets only (real summary).</div>"
+            f"<pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state.gaps_update_summary_text}</pre>"
+            f"</div>",
             unsafe_allow_html=True
         )
 
@@ -875,22 +873,26 @@ if st.session_state.mode == "update":
     else:
         render_table(st.session_state.update_df)
 
-    # ---------- Content Quality (2nd table) ----------
+    # =========================
+    # 2) Content Quality (2nd table) ✅
+    # =========================
     st.markdown("<div class='section-pill section-pill-tight'>Content Quality</div>", unsafe_allow_html=True)
     if st.session_state.cq_update_df is None or st.session_state.cq_update_df.empty:
         st.info("Run analysis to see Content Quality signals.")
     else:
         render_table(st.session_state.cq_update_df, drop_internal_url=True)
 
-    # ---------- SEO Analysis ----------
+    # =========================
+    # 3) SEO Analysis
+    # =========================
     seo_clicked = section_header_with_ai_button("SEO Analysis", "Summarize by AI", "btn_seo_summary_update")
     if seo_clicked:
-        st.session_state["seo_update_summary_text"] = ai_summary_from_df("seo", st.session_state.seo_update_df)
+        st.session_state.seo_update_summary_text = ai_summary_from_df("seo", st.session_state.seo_update_df)
 
     if st.session_state.get("seo_update_summary_text"):
         st.markdown(
             f"<div class='ai-summary'><b>AI Summary</b><div class='muted'>6–8 bullets only.</div>"
-            f"<pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state['seo_update_summary_text']}</pre></div>",
+            f"<pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state.seo_update_summary_text}</pre></div>",
             unsafe_allow_html=True
         )
 
@@ -899,12 +901,15 @@ if st.session_state.mode == "update":
     else:
         render_table(st.session_state.seo_update_df, drop_internal_url=True)
 
-    # ---------- AI Visibility ----------
+    # =========================
+    # 4) AI Visibility
+    # =========================
     st.markdown("<div class='section-pill section-pill-tight'>AI Visibility (Google AI Overview)</div>", unsafe_allow_html=True)
     if st.session_state.ai_update_df is None or st.session_state.ai_update_df.empty:
         st.info("Run analysis to see AI visibility signals.")
     else:
         render_table(st.session_state.ai_update_df, drop_internal_url=True)
+
 
 # =====================================================
 # UI - NEW POST MODE
