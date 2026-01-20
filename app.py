@@ -80,7 +80,7 @@ st.markdown(
         color: {TEXT_DARK};
         display: inline-block;
       }}
-      /* tighter + closer to table (your request) */
+      /* tighter + closer to table */
       .section-pill-tight {{
         margin: 6px 0 4px 0;
       }}
@@ -121,15 +121,15 @@ st.markdown(
         text-align: center !important;
         font-weight: 900 !important;
         color: {TEXT_DARK} !important;
-        padding: 8px 18px !important;
+        padding: 6px 14px !important;      /* smaller */
         border-bottom: 1px solid #E5E7EB !important;
       }}
       tbody td {{
         vertical-align: top !important;
-        padding: 8px 8px !important;
+        padding: 6px 6px !important;       /* smaller */
         border-bottom: 1px solid #F1F5F9 !important;
         color: {TEXT_DARK} !important;
-        font-size: 12.5px !important;
+        font-size: 12px !important;        /* smaller */
       }}
       tbody tr:last-child td {{
         border-bottom: 0 !important;
@@ -376,6 +376,8 @@ def resolve_all_or_require_manual(agent: FetchAgent, urls: List[str], st_key_pre
         st.stop()
 
     return results
+
+
 # =====================================================
 # HEADING TREE + FILTERS
 # =====================================================
@@ -395,9 +397,7 @@ NOISE_PATTERNS = [
     r"\bplease stand by\b", r"\bloading\b", r"\bjust a moment\b",
 ]
 
-GENERIC_SECTION_HEADERS = {
-    "introduction", "overview",
-}
+GENERIC_SECTION_HEADERS = {"introduction", "overview"}
 
 STOP = {
     "the","and","for","with","that","this","from","you","your","are","was","were","will","have","has","had",
@@ -682,7 +682,6 @@ def get_first_h1(nodes: List[dict]) -> str:
             h = clean(x.get("header", ""))
             if h:
                 return h
-    # fallback: first H2
     for x in flatten(nodes):
         if x.get("level") == 2:
             h = clean(x.get("header", ""))
@@ -1178,8 +1177,6 @@ def update_mode_rows_header_first(
         rows.append(faq_row)
 
     return dedupe_rows(rows)
-
-
 # =====================================================
 # SEO ANALYSIS (UPDATED COLUMNS EXACTLY AS REQUESTED)
 # =====================================================
@@ -1312,11 +1309,6 @@ def compute_kw_repetition(text: str, phrase: str) -> str:
 
 
 def kw_usage_summary(seo_title: str, h1: str, headings_blob_text: str, body_text: str, fkw: str) -> str:
-    """
-    Quality-focused usage (not just repeats):
-    - repeats + per-1k words
-    - presence in Title / H1 / Headings / Intro
-    """
     fkw = clean(fkw or "").lower()
     if not fkw or fkw == "not available":
         return "Not available"
@@ -1351,18 +1343,23 @@ def domain_of(url: str) -> str:
     except Exception:
         return ""
 
-def _, robots = _extract_canonical_and_robots(fr.html or "")
+# ✅ FIXED FUNCTION (was broken in your code)
+def _extract_canonical_and_robots(html: str) -> Tuple[str, str]:
     if not html:
         return ("Not available", "Not available")
+
     soup = BeautifulSoup(html, "html.parser")
+
     canonical = ""
     can = soup.find("link", attrs={"rel": "canonical"})
     if can and can.get("href"):
         canonical = clean(can.get("href"))
+
     robots = ""
     mr = soup.find("meta", attrs={"name": re.compile("^robots$", re.I)})
     if mr and mr.get("content"):
         robots = clean(mr.get("content"))
+
     return (canonical or "Not available", robots or "Not available")
 
 def _count_headers(html: str) -> str:
@@ -1447,6 +1444,9 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
     media = extract_media_used(fr.html or "")
     schema = _schema_present(fr.html or "")
 
+    # ✅ FIX: define robots so no NameError
+    _, robots = _extract_canonical_and_robots(fr.html or "")
+
     return {
         "Page": label,
         "SEO Title": seo_title,
@@ -1480,7 +1480,6 @@ def build_seo_analysis_update(
         nodes = (comp_tree_map.get(cu) or {}).get("nodes", [])
         rows.append(seo_row_for_page_extended(site_name(cu), cu, fr, nodes, manual_fkw=manual_fkw))
     df = pd.DataFrame(rows)
-    # enforce exact column order
     cols = [
         "Page",
         "SEO Title",
@@ -1510,7 +1509,6 @@ def build_seo_analysis_newpost(
     manual_fkw: str = ""
 ) -> pd.DataFrame:
     rows = []
-    # "Target page (new)" is not a real URL => Not applicable
     fake_fr = FetchResult(True, "manual", 200, "", new_title, None)
     rows.append(seo_row_for_page_extended("Target page (new)", "Not applicable", fake_fr, [], manual_fkw=manual_fkw))
     for cu in competitors:
@@ -1519,6 +1517,7 @@ def build_seo_analysis_newpost(
         rows.append(seo_row_for_page_extended(site_name(cu), cu, fr, nodes, manual_fkw=manual_fkw))
     df = pd.DataFrame(rows)
 
+    # ✅ Canonical URL removed (as you asked)
     cols = [
         "Page",
         "SEO Title",
@@ -1526,7 +1525,6 @@ def build_seo_analysis_newpost(
         "URL Slug",
         "Headers (H1/H2/H3/Total)",
         "FKW Usage",
-        "Canonical URL",
         "Robots Meta (index/follow)",
         "Internal Links Count",
         "Outbound Links Count",
@@ -1545,8 +1543,6 @@ def build_seo_analysis_newpost(
 # KEEP ENRICH FUNCTION (but DO NOT add columns to SEO df)
 # =====================================================
 def enrich_seo_df_with_rank_and_ai(seo_df: pd.DataFrame, manual_query: str = "") -> Tuple[pd.DataFrame, pd.DataFrame]:
-    # Your requested SEO table columns do NOT include rank or AI fields,
-    # so we return seo_df unchanged and provide an empty ai_df.
     ai_df = pd.DataFrame(columns=["Note"])
     return seo_df, ai_df
 
@@ -1850,26 +1846,9 @@ def build_content_quality_table_from_seo(
         page = str(r.get("Page", "")).strip()
         page_url = str(r.get("__url", "")).strip()
 
-        # Target page (new) row
         if not page_url or page_url == "Not applicable":
-            rows.append({
-                "Page": page,
-                "Word Count": "Not applicable",
-                "Last Updated / Modified": "Not applicable",
-                "Topic Cannibalization": "Not applicable",
-                "Keyword Stuffing": "Not applicable",
-                "Brief Summary Present": "Not applicable",
-                "FAQs Present": "Not applicable",
-                "References Section Present": "Not applicable",
-                "Source Links Count": "Not applicable",
-                "Credible Sources Count": "Not applicable",
-                "Data Points Count (numbers/stats)": "Not applicable",
-                "Data-Backed Claims": "Not applicable",
-                "Unsupported Strong Claims": "Not applicable",
-                "Latest Information Score": "Not applicable",
-                "Outdated / Misleading Info": "Not applicable",
-                "Styling / Layout": "Not applicable",
-            })
+            rows.append({c: "Not applicable" for c in cols})
+            rows[-1]["Page"] = page
             continue
 
         fr = fr_map_by_url.get(page_url)
@@ -1923,12 +1902,11 @@ def build_content_quality_table_from_seo(
             "Styling / Layout": styling,
         })
 
-    df = pd.DataFrame(rows, columns=cols)
-    return df
+    return pd.DataFrame(rows, columns=cols)
 
 
 # =====================================================
-# NEW POST MODE helpers (unchanged)
+# NEW POST MODE helpers
 # =====================================================
 def list_headers(nodes: List[dict], level: int) -> List[str]:
     return [x["header"] for x in flatten(nodes) if x["level"] == level and not is_noise_header(x["header"])]
@@ -1993,13 +1971,11 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
         st.info("No results to show.")
         return
     if drop_internal_url:
-        # drop all internal columns (anything starting with "__")
         drop_cols = [c for c in df.columns if c.startswith("__")]
         if drop_cols:
             df = df.drop(columns=drop_cols)
     html = df.to_html(index=False, escape=False)
     st.markdown(html, unsafe_allow_html=True)
-
 
 def section_header_pill(title: str):
     st.markdown(f"<div class='section-pill section-pill-tight'>{title}</div>", unsafe_allow_html=True)
@@ -2129,7 +2105,6 @@ if st.session_state.mode == "update":
             manual_fkw=manual_fkw_update.strip()
         )
 
-        # keep call for compatibility but do not change SEO df columns
         st.session_state.seo_update_df, st.session_state.ai_update_df = enrich_seo_df_with_rank_and_ai(
             st.session_state.seo_update_df,
             manual_query=manual_fkw_update.strip()
