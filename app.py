@@ -1718,7 +1718,7 @@ def build_seo_analysis_newpost(
     return df
 
 # =====================================================
-# CONTENT QUALITY TABLE (FAQs fixed + your rows)
+# Build a Bayut-only AI Visibility table (SERPAPI-driven)
 # =====================================================
 def domain_of(url: str) -> str:
     try:
@@ -1727,6 +1727,193 @@ def domain_of(url: str) -> str:
     except Exception:
         return ""
 
+def _extract_urls_from_aio(aio_obj) -> List[str]:
+    urls = []
+    if not aio_obj:
+        return urls
+    if isinstance(aio_obj, dict):
+        for k in ["sources", "citations", "references", "links"]:
+            v = aio_obj.get(k)
+            if isinstance(v, list):
+                for s in v:
+                    if isinstance(s, dict):
+                        link = s.get("link") or s.get("url") or ""
+                    elif isinstance(s, str):
+                        link = s
+                    else:
+                        link = ""
+                    if link:
+                        urls.append(link)
+                if urls:
+                    return urls
+        # fallback: try to collect any url-like values in the dict
+        for v in aio_obj.values():
+            if isinstance(v, str) and v.startswith("http"):
+                urls.append(v)
+    elif isinstance(aio_obj, list):
+        for item in aio_obj:
+            if isinstance(item, dict):
+                link = item.get("link") or item.get("url") or ""
+                if link:
+                    urls.append(link)
+            elif isinstance(item, str) and item.startswith("http"):
+                urls.append(item)
+    return urls
+
+def build_bayut_ai_visibility_table(bayut_url: str, query: str = "") -> pd.DataFrame:
+    """
+    Returns a single-row DataFrame with the following columns (Bayut-only):
+    - Target URL
+    - Cited in AIO (Yes/No)
+    - Cited Domains (comma-separated)
+    - # AIO Citations (count)
+    - Top Competitor Domains (top organic domains excluding Bayut)
+    - SERP Features Present (comma-separated feature names)
+    - Direct Answer Block (Yes/No)
+    """
+    cols = [
+        "Target URL",
+        "Cited in AIO",
+        "Cited Domains",
+        "# AIO Citations",
+        "Top Competitor Domains",
+        "SERP Features Present",
+        "Direct Answer Block"
+    ]
+
+    if not SERPAPI_API_KEY:
+        return pd.DataFrame([{
+            "Target URL": bayut_url,
+            "Cited in AIO": "Not available (no SERPAPI_API_KEY)",
+            "Cited Domains": "Not available",
+            "# AIO Citations": "Not available",
+            "Top Competitor Domains": "Not available",
+            "SERP Features Present": "Not available",
+            "Direct Answer Block": "Not available",
+        }], columns=cols)
+
+    q = clean(query) or bayut_url
+    data = serpapi_serp_cached(q, device="desktop")
+    if not data or data.get("_error"):
+        return pd.DataFrame([{
+            "Target URL": bayut_url,
+            "Cited in AIO": f"Not available ({data.get('_error')})" if isinstance(data, dict) else "Not available",
+            "Cited Domains": "",
+            "# AIO Citations": "",
+            "Top Competitor Domains": "",
+            "SERP Features Present": "",
+            "Direct Answer Block": "",
+        }], columns=cols)
+
+    # AI overview / answer box extraction
+    aio = data.get("ai_overview") or data.get("ai_overview_results") or data.get("answer_box") or None
+    aio_urls = _extract_urls_from_aio(aio)
+    cited_domains = sorted({urlparse(u).netloc.replace("www.", "") for u in aio_urls if u})
+    cited_domains_str = ", ".join(cited_domains[:12]) if cited_domains else "None detected"
+    cited_in_aio = "Yes" if any(normalize_url_for_match(u).startswith(normalize_url_for_match(bayut_url)) or normalize_url_for_match(bayut_url) in normalize_url_for_match(u) for u in aio_urls) else "No"
+    num_citations = len(aio_urls)
+
+    # Top competitor domains from organic results
+    organic = data.get("organic_results") or []
+    bayut_dom = domain_of(bayut_url)
+    top_comp_domains = []
+    for it in organic:
+        link = it.get("link") or ""
+        if not link:
+            continue
+        dom = urlparse(link).netloc.replace("www.", "")
+        if dom == bayut_dom:
+            continue
+        if dom not in top_comp_domains:
+            top_comp_domains.append(dom)
+        if len(top_comp_domains) >= 8:
+            break
+    top_comp_str = ", ".join(top_comp_domains[:8]) if top_comp_domains else "None detected"
+
+    # SERP features detection (presence)
+    features = []
+    feature_map = {
+        "answer_box": "Answer box",
+        "featured_snippet": "Featured snippet",
+        "people_also_ask": "People Also Ask",
+        "top_stories": "Top stories",
+        "inline_videos": "Videos",
+        "images_results": "Images",
+        "knowledge_graph": "Knowledge graph",
+        "shopping_results": "Shopping results",
+        "sitelinks_searchbox": "Sitelinks searchbox",
+        "local_pack": "Local pack",
+    }
+    for fk, label in feature_map.items():
+        if fk in data and data.get(fk):
+            features.append(label)
+
+    # Some SERPAPI responses embed features under different keys; check common keys
+    if data.get("answer_box"):
+        features.append("Answer box")
+    if data.get("ai_overview") or data.get("ai_overview_results"):
+        features.append("AI Overview")
+
+    features_str = ", ".join(sorted(set(features))) if features else "None detected"
+
+    # Direct Answer Block detection: answer_box / featured_snippet / ai_overview
+    direct_answer = "Yes" if (data.get("answer_box") or data.get("featured_snippet") or aio) else "No"
+
+    row = {
+        "Target URL": bayut_url,
+        "Cited in AIO": cited_in_aio,
+        "Cited Domains": cited_domains_str,
+        "# AIO Citations": str(num_citations),
+        "Top Competitor Domains": top_comp_str,
+        "SERP Features Present": features_str,
+        "Direct Answer Block": direct_answer,
+    }
+
+    return pd.DataFrame([row], columns=cols)
+
+
+def build_seo_analysis_update(
+    bayut_url: str,
+    bayut_fr: FetchResult,
+    bayut_nodes: List[dict],
+    competitors: List[str],
+    comp_fr_map: Dict[str, FetchResult],
+    comp_tree_map: Dict[str, dict],
+    manual_fkw: str = ""
+) -> pd.DataFrame:
+    rows = []
+    row_b = seo_row_for_page("Bayut", bayut_url, bayut_fr, bayut_nodes, manual_fkw=manual_fkw)
+    row_b["__url"] = bayut_url
+    rows.append(row_b)
+
+    for u in competitors:
+        fr = comp_fr_map[u]
+        nodes = comp_tree_map[u]["nodes"]
+        rr = seo_row_for_page(site_name(u), u, fr, nodes, manual_fkw=manual_fkw)
+        rr["__url"] = u
+        rows.append(rr)
+
+    # Order columns exactly as you want
+    df = pd.DataFrame(rows)
+    desired = [
+        "Page",
+        "Google rank UAE (Mobile)",
+        "Internal linking",
+        "KW usage",
+        "SEO title",
+        "Meta description",
+        "Slug",
+        "Media used",
+        "FKW",
+        "__url",
+    ]
+    df = df[[c for c in desired if c in df.columns]]
+    return df
+
+
+# =====================================================
+# CONTENT QUALITY TABLE (FAQs fixed + your rows)
+# =====================================================
 @st.cache_data(show_spinner=False, ttl=86400)
 def _head_last_modified(url: str) -> str:
     try:
@@ -2406,28 +2593,36 @@ if st.session_state.mode == "update":
         for u, s in st.session_state.update_fetch:
             st.sidebar.write(u, "—", s)
 
-    # Replaced AI button + handler with static section pill (button removed)
+    # Gaps Table (static pill, button removed)
     st.markdown("<div class='section-pill section-pill-tight'>Gaps Table</div>", unsafe_allow_html=True)
-
     if st.session_state.update_df is None or st.session_state.update_df.empty:
         st.info("Run analysis to see results.")
     else:
         render_table(st.session_state.update_df)
 
-    # Replaced AI button + handler with static section pill (button removed)
+    # SEO Analysis (static pill, button removed)
     st.markdown("<div class='section-pill section-pill-tight'>SEO Analysis</div>", unsafe_allow_html=True)
-
     if st.session_state.seo_update_df is None or st.session_state.seo_update_df.empty:
         st.info("Run analysis to see SEO comparison.")
     else:
         render_table(st.session_state.seo_update_df, drop_internal_url=True)
 
-    st.markdown("<div class='section-pill section-pill-tight'>AI Visibility (Google AI Overview)</div>", unsafe_allow_html=True)
-    if st.session_state.ai_update_df is None or st.session_state.ai_update_df.empty:
-        st.info("Run analysis to see AI visibility signals.")
-    else:
-        render_table(st.session_state.ai_update_df, drop_internal_url=True)
+    # AI Visibility — now Bayut-only, custom table
+    st.markdown("<div class='section-pill section-pill-tight'>AI Visibility (Google AI Overview) — Bayut only</div>", unsafe_allow_html=True)
+    if run:
+        # compute query: manual_fkw_update if provided, else pick from Bayut page
+        seo_title_b, _ = extract_head_seo(bayut_fr.html or "")
+        h1_b = get_first_h1(bayut_nodes)
+        blob_b = headings_blob(bayut_nodes)
+        body_b = bayut_fr.text or ""
+        query_for_ai = manual_fkw_update.strip() or pick_fkw_only(seo_title_b, h1_b, blob_b, body_b, manual_fkw="")
 
+        bayut_ai_df = build_bayut_ai_visibility_table(bayut_url.strip(), query=query_for_ai)
+        render_table(bayut_ai_df, drop_internal_url=True)
+    else:
+        st.info("Run analysis to populate Bayut AI visibility.")
+
+    # Content Quality
     st.markdown("<div class='section-pill section-pill-tight'>Content Quality</div>", unsafe_allow_html=True)
     if st.session_state.cq_update_df is None or st.session_state.cq_update_df.empty:
         st.info("Run analysis to see Content Quality signals.")
@@ -2510,7 +2705,7 @@ else:
         for u, s in st.session_state.new_fetch:
             st.sidebar.write(u, "—", s)
 
-    # Replaced AI button + handler with static section pill (button removed)
+    # Competitor Coverage (static pill)
     st.markdown("<div class='section-pill section-pill-tight'>Competitor Coverage</div>", unsafe_allow_html=True)
 
     if st.session_state.new_df is None or st.session_state.new_df.empty:
@@ -2518,7 +2713,7 @@ else:
     else:
         render_table(st.session_state.new_df)
 
-    # Replaced AI button + handler with static section pill (button removed)
+    # SEO Analysis (static pill)
     st.markdown("<div class='section-pill section-pill-tight'>SEO Analysis</div>", unsafe_allow_html=True)
 
     if st.session_state.seo_new_df is None or st.session_state.seo_new_df.empty:
@@ -2526,11 +2721,9 @@ else:
     else:
         render_table(st.session_state.seo_new_df, drop_internal_url=True)
 
+    # AI Visibility (New Post Mode) — intentionally not shown; AI visibility table is Bayut-only
     st.markdown("<div class='section-pill section-pill-tight'>AI Visibility (Google AI Overview)</div>", unsafe_allow_html=True)
-    if st.session_state.ai_new_df is None or st.session_state.ai_new_df.empty:
-        st.info("Generate competitor coverage to see AI visibility signals.")
-    else:
-        render_table(st.session_state.ai_new_df, drop_internal_url=True)
+    st.info("AI visibility table is shown only for the Bayut article in Update Mode.")
 
     st.markdown("<div class='section-pill section-pill-tight'>Content Quality</div>", unsafe_allow_html=True)
     if st.session_state.cq_new_df is None or st.session_state.cq_new_df.empty:
