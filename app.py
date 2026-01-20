@@ -1488,7 +1488,6 @@ def build_seo_analysis_update(
         "URL Slug",
         "Headers (H1/H2/H3/Total)",
         "FKW Usage",
-        "Canonical URL",
         "Robots Meta (index/follow)",
         "Internal Links Count",
         "Outbound Links Count",
