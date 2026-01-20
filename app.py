@@ -1351,7 +1351,7 @@ def domain_of(url: str) -> str:
     except Exception:
         return ""
 
-def _extract_canonical_and_robots(html: str) -> Tuple[str, str]:
+def _, robots = _extract_canonical_and_robots(fr.html or "")
     if not html:
         return ("Not available", "Not available")
     soup = BeautifulSoup(html, "html.parser")
