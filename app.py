@@ -1443,7 +1443,6 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
     h_counts = _count_headers(fr.html or fr.text or "")
     fkw = pick_fkw_only(seo_title, get_first_h1(nodes), h_blob, fr.text or "", manual_fkw=manual_fkw)
     kw_usage = kw_usage_summary(seo_title, get_first_h1(nodes), h_blob, fr.text or "", fkw)
-    canonical, robots = _extract_canonical_and_robots(fr.html or "")
     internal_links_count, outbound_links_count = _count_internal_outbound_links(fr.html or "", url or "")
     media = extract_media_used(fr.html or "")
     schema = _schema_present(fr.html or "")
@@ -1455,7 +1454,6 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
         "URL Slug": slug,
         "Headers (H1/H2/H3/Total)": h_counts,
         "FKW Usage": kw_usage,
-        "Canonical URL": canonical,
         "Robots Meta (index/follow)": robots,
         "Internal Links Count": str(internal_links_count),
         "Outbound Links Count": str(outbound_links_count),
