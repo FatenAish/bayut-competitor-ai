@@ -1969,6 +1969,217 @@ def build_content_quality_table_from_seo(
 
     return pd.DataFrame(out)
 
+
+# =====================================================
+# AI SUMMARY (BULLETS ONLY – ORDERED & CLEAR)
+# =====================================================
+def openai_summarize_block(title: str, payload_text: str, max_bullets: int = 8) -> str:
+    payload_text = clean(payload_text)
+
+    # If no OpenAI key, return the already-bulleted payload
+    if not OPENAI_API_KEY:
+        return payload_text
+
+    try:
+        headers = {
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+        }
+
+        system = (
+            "You are a senior SEO/editorial analyst.\n"
+            "Output ONLY bullet points.\n"
+            "Rules:\n"
+            f"- Use '• ' at the start of each bullet\n"
+            f"- {max_bullets-2}–{max_bullets} bullets maximum\n"
+            "- One clear action per bullet\n"
+            "- Short, direct, no explanations\n"
+            "- No paragraphs, no numbering, no grouping text\n"
+            "- Never merge multiple actions into one bullet"
+        )
+
+        body = {
+            "model": OPENAI_MODEL,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": f"{title}\n\n{payload_text}\n\nReturn bullets only."}
+            ],
+            "temperature": 0.2,
+        }
+
+        r = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            data=json.dumps(body),
+            timeout=35
+        )
+
+        if r.status_code != 200:
+            return payload_text
+
+        out = clean(r.json()["choices"][0]["message"]["content"])
+
+        # hard safety: force bullets if model misbehaves
+        lines = [l.strip() for l in out.splitlines() if l.strip()]
+        bullets = [l for l in lines if l.startswith("•")]
+
+        if not bullets:
+            chunks = re.split(r"(?<=[.!?])\s+", out)
+            chunks = [c.strip() for c in chunks if c.strip()]
+            bullets = [f"• {c}" for c in chunks]
+
+        # Ensure each bullet is ONE line (no multi-actions with • inside)
+        cleaned = []
+        for b in bullets:
+            b = b.replace("•", "").strip()
+            if not b:
+                continue
+            cleaned.append("• " + b)
+
+        return "\n".join(cleaned[:max_bullets])
+
+    except Exception:
+        return payload_text
+
+
+def _ignore_summary_header(h: str) -> bool:
+    return norm_header(h) in {
+        "conclusion", "summary", "final thoughts",
+        "wrap up", "closing thoughts", "key takeaways"
+    }
+
+
+def concise_gaps_summary(df: pd.DataFrame, min_bullets: int = 4, max_bullets: int = 8) -> str:
+    """
+    Guarantees 4–8 bullets:
+    - Add missing sections
+    - Expand missing parts
+    - Optional FAQ
+    - If still too few, add safe editorial fallbacks
+    """
+    if df is None or df.empty:
+        return "• No content gaps detected."
+
+    add_sections = []
+    expand_sections = []
+    faq_needed = False
+
+    seen_add = set()
+    seen_expand = set()
+
+    for _, r in df.iterrows():
+        h = str(r.get("Headers", "")).strip()
+        if not h:
+            continue
+
+        if _ignore_summary_header(h):
+            continue
+
+        # FAQs (only once)
+        if norm_header(h) == "faqs":
+            faq_needed = True
+            continue
+
+        # ignore question-style headers
+        if _looks_like_question(h):
+            continue
+
+        # missing parts
+        if "(missing parts)" in h.lower():
+            base = clean(re.sub(r"\(missing parts\)", "", h, flags=re.I))
+            k = norm_header(base)
+            if k and k not in seen_expand:
+                seen_expand.add(k)
+                expand_sections.append(base)
+            continue
+
+        # normal missing sections
+        k = norm_header(h)
+        if k and k not in seen_add:
+            seen_add.add(k)
+            add_sections.append(h)
+
+    bullets = []
+
+    # 1) Add missing sections
+    for h in add_sections:
+        bullets.append(f"• Add section: {h}")
+        if len(bullets) >= max_bullets:
+            return "\n".join(bullets[:max_bullets])
+
+    # 2) Expand existing sections
+    for h in expand_sections:
+        bullets.append(f"• Expand section: {h}")
+        if len(bullets) >= max_bullets:
+            return "\n".join(bullets[:max_bullets])
+
+    # 3) FAQs
+    if faq_needed and len(bullets) < max_bullets:
+        bullets.append("• Add or expand FAQs based on competitor coverage")
+
+    # 4) Force minimum (SAFE editorial fallbacks)
+    fallbacks = [
+        "• Strengthen decision framing (why/when this area fits different lifestyles)",
+        "• Add a short pros/cons recap with clear takeaways for readers",
+        "• Add freshness signals (updated year, latest prices/transport changes if applicable)",
+        "• Improve scannability (shorter paragraphs, more subheadings, 1 table where relevant)",
+    ]
+    for fb in fallbacks:
+        if len(bullets) >= min_bullets:
+            break
+        bullets.append(fb)
+
+    return "\n".join(bullets[:max_bullets]) if bullets else "• No meaningful gaps detected."
+
+
+def concise_seo_summary(df: pd.DataFrame, min_bullets: int = 4, max_bullets: int = 8) -> str:
+    if df is None or df.empty:
+        return "• No SEO data available."
+
+    bullets = []
+    for _, r in df.iterrows():
+        page = str(r.get("Page", "")).strip()
+        if page.lower().startswith("target"):
+            continue
+
+        fkw = str(r.get("FKW", "")).strip()
+        rd = str(r.get("Google rank UAE (Desktop)", "")).strip()
+        rm = str(r.get("Google rank UAE (Mobile)", "")).strip()
+
+        if not fkw or fkw == "Not available":
+            bullets.append(f"• {page}: define a clear Focus Keyword (FKW) before optimizing rankings")
+        else:
+            bullets.append(f"• {page}: focus on '{fkw}' (UAE rank D/M: {rd}/{rm})")
+
+        if len(bullets) >= max_bullets:
+            break
+
+    # Force minimum (SEO-safe fallbacks)
+    seo_fallbacks = [
+        "• Ensure title + H1 contain the exact Focus Keyword naturally",
+        "• Reduce keyword repetition if it looks stuffed; prioritize readability",
+        "• Add internal links to related Bayut guides to improve relevance",
+    ]
+    for fb in seo_fallbacks:
+        if len(bullets) >= min_bullets:
+            break
+        bullets.append(fb)
+
+    return "\n".join(bullets[:max_bullets])
+
+
+def ai_summary_from_df(kind: str, df: pd.DataFrame) -> str:
+    if kind == "gaps":
+        base = concise_gaps_summary(df, min_bullets=4, max_bullets=8)
+        return openai_summarize_block("Turn this into a clear writer checklist.", base, max_bullets=8)
+
+    if kind == "seo":
+        base = concise_seo_summary(df, min_bullets=4, max_bullets=8)
+        return openai_summarize_block("Turn this into a clear SEO checklist.", base, max_bullets=8)
+
+    return "• No summary available."
+
+
 # =====================================================
 # NEW POST MODE (kept simple)
 # =====================================================
@@ -2195,6 +2406,7 @@ if st.session_state.mode == "update":
         for u, s in st.session_state.update_fetch:
             st.sidebar.write(u, "—", s)
 
+    # Replaced AI button + handler with static section pill (button removed)
     st.markdown("<div class='section-pill section-pill-tight'>Gaps Table</div>", unsafe_allow_html=True)
 
     if st.session_state.update_df is None or st.session_state.update_df.empty:
@@ -2202,9 +2414,7 @@ if st.session_state.mode == "update":
     else:
         render_table(st.session_state.update_df)
 
-    seo_clicked = section_header_with_ai_button("SEO Analysis", "Summarize by AI", "btn_seo_summary_update")
-    if seo_clicked:
-
+    # Replaced AI button + handler with static section pill (button removed)
     st.markdown("<div class='section-pill section-pill-tight'>SEO Analysis</div>", unsafe_allow_html=True)
 
     if st.session_state.seo_update_df is None or st.session_state.seo_update_df.empty:
@@ -2300,18 +2510,16 @@ else:
         for u, s in st.session_state.new_fetch:
             st.sidebar.write(u, "—", s)
 
-  st.markdown("<div class='section-pill section-pill-tight'>Competitor Coverage</div>", unsafe_allow_html=True)
+    # Replaced AI button + handler with static section pill (button removed)
+    st.markdown("<div class='section-pill section-pill-tight'>Competitor Coverage</div>", unsafe_allow_html=True)
 
     if st.session_state.new_df is None or st.session_state.new_df.empty:
         st.info("Generate competitor coverage to see results.")
     else:
         render_table(st.session_state.new_df)
 
+    # Replaced AI button + handler with static section pill (button removed)
     st.markdown("<div class='section-pill section-pill-tight'>SEO Analysis</div>", unsafe_allow_html=True)
-    
-            f"<div class='ai-summary'><b>AI Summary</b><div class='muted'>6–8 bullets only.</div><pre style='white-space:pre-wrap;margin:8px 0 0 0;'>{st.session_state['seo_new_summary_text']}</pre></div>",
-            unsafe_allow_html=True
-        )
 
     if st.session_state.seo_new_df is None or st.session_state.seo_new_df.empty:
         st.info("Generate competitor coverage to see SEO comparison.")
@@ -2335,7 +2543,3 @@ if (st.session_state.seo_update_df is not None and not st.session_state.seo_upda
    (st.session_state.seo_new_df is not None and not st.session_state.seo_new_df.empty):
     if not SERPAPI_API_KEY:
         st.warning("Google UAE ranking + AI visibility requires SERPAPI_API_KEY in Streamlit secrets.")
-
-
-
- 
