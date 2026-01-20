@@ -1193,9 +1193,7 @@ def _secrets_get(key: str, default=None):
     return default
 
 SERPAPI_API_KEY = _secrets_get("SERPAPI_API_KEY", None)
-OPENAI_API_KEY = _secrets_get("OPENAI_API_KEY", None)
-OPENAI_MODEL = _secrets_get("OPENAI_MODEL", "gpt-4o-mini")
-
+# OPENAI usage removed per request (AI Summary disabled)
 
 def url_slug(url: str) -> str:
     try:
@@ -1302,7 +1300,15 @@ def pick_fkw_only(seo_title: str, h1: str, headings_blob_text: str, body_text: s
     return scored[0][1] if scored else "Not available"
 
 
-# --- FIX: restore kw_usage_summary (was missing and caused NameError) ---
+# --- RESTORE kw_usage_summary (used by SEO row) ---
+def compute_kw_repetition(text: str, phrase: str) -> str:
+    if not text or not phrase or phrase == "Not available":
+        return "Not available"
+    t = " " + re.sub(r"\s+", " ", (text or "").lower()) + " "
+    p = " " + re.sub(r"\s+", " ", (phrase or "").lower()) + " "
+    return str(t.count(p))
+
+
 def kw_usage_summary(seo_title: str, h1: str, headings_blob_text: str, body_text: str, fkw: str) -> str:
     """
     Quality-focused KW usage:
@@ -1314,7 +1320,6 @@ def kw_usage_summary(seo_title: str, h1: str, headings_blob_text: str, body_text
         return "Not available"
 
     text = clean(body_text or "")
-    # word_count_from_text is defined later; calling it at runtime is fine
     wc = word_count_from_text(text)
 
     rep = compute_kw_repetition(text, fkw)
@@ -1336,14 +1341,6 @@ def kw_usage_summary(seo_title: str, h1: str, headings_blob_text: str, body_text
 
     return f"Repeats:{rep} | {per_1k} | Title:{title_hit} H1:{h1_hit} Headings:{headings_hit} Intro:{intro_hit}"
 # --- end restore ---
-
-
-def compute_kw_repetition(text: str, phrase: str) -> str:
-    if not text or not phrase or phrase == "Not available":
-        return "Not available"
-    t = " " + re.sub(r"\s+", " ", (text or "").lower()) + " "
-    p = " " + re.sub(r"\s+", " ", (phrase or "").lower()) + " "
-    return str(t.count(p))
 
 
 def normalize_url_for_match(u: str) -> str:
@@ -2072,6 +2069,14 @@ def build_content_quality_table_from_seo(
 
     df = pd.DataFrame(rows, columns=cols)
     return df
+
+
+# =====================================================
+# Remaining AI / Summarization functions removed per request
+# (openai_summarize_block, concise_gaps_summary, concise_seo_summary,
+#  ai_summary_from_df and related helpers have been removed intentionally)
+# =====================================================
+
 
 # =====================================================
 # NEW POST MODE helpers (unchanged)
