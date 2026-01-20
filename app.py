@@ -2190,8 +2190,6 @@ with outer_m:
         ):
             st.session_state.mode = "new"
 st.markdown("</div>", unsafe_allow_html=True)
-st.markdown("<div class='mode-note'>Tip: competitors one per line. If any page blocks the server, you will be forced to paste it — so nothing is missing.</div>", unsafe_allow_html=True)
-
 show_internal_fetch = st.sidebar.checkbox("Admin: show internal fetch log", value=False)
 
 # Keep last results visible
@@ -2222,8 +2220,7 @@ if "cq_new_df" not in st.session_state:
 # UI - UPDATE MODE
 # =====================================================
 if st.session_state.mode == "update":
-    st.markdown("<div class='section-pill section-pill-tight'>Update Mode (Header-first gaps)</div>", unsafe_allow_html=True)
-
+st.markdown("<div class='section-pill section-pill-tight'>Update Mode</div>", unsafe_allow_html=True)
     bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
     competitors_text = st.text_area(
         "Competitor URLs (one per line)",
@@ -2310,7 +2307,7 @@ if st.session_state.mode == "update":
         for u, s in st.session_state.update_fetch:
             st.sidebar.write(u, "—", s)
 
-    gaps_clicked = section_header_with_ai_button("Gaps Table", "Summarize by AI", "btn_gaps_summary_update")
+gaps_clicked = section_header_with_ai_button("Content Gaps Table", "Summarize by AI", "btn_gaps_summary_update")
     if gaps_clicked:
         st.session_state["gaps_update_summary_text"] = ai_summary_from_df("gaps", st.session_state.update_df)
 
@@ -2324,6 +2321,15 @@ if st.session_state.mode == "update":
         st.info("Run analysis to see results.")
     else:
         render_table(st.session_state.update_df)
+        st.markdown("<div class='section-pill section-pill-tight'>Content Quality</div>", unsafe_allow_html=True)
+    if st.session_state.cq_update_df is None or st.session_state.cq_update_df.empty:
+        st.info("Run analysis to see Content Quality signals.")
+    else:
+        render_table(st.session_state.cq_update_df, drop_internal_url=True)st.markdown("<div class='section-pill section-pill-tight'>Content Quality</div>", unsafe_allow_html=True)
+    if st.session_state.cq_update_df is None or st.session_state.cq_update_df.empty:
+        st.info("Run analysis to see Content Quality signals.")
+    else:
+        render_table(st.session_state.cq_update_df, drop_internal_url=True)
 
     seo_clicked = section_header_with_ai_button("SEO Analysis", "Summarize by AI", "btn_seo_summary_update")
     if seo_clicked:
@@ -2345,12 +2351,6 @@ if st.session_state.mode == "update":
         st.info("Run analysis to see AI visibility signals.")
     else:
         render_table(st.session_state.ai_update_df, drop_internal_url=True)
-
-    st.markdown("<div class='section-pill section-pill-tight'>Content Quality</div>", unsafe_allow_html=True)
-    if st.session_state.cq_update_df is None or st.session_state.cq_update_df.empty:
-        st.info("Run analysis to see Content Quality signals.")
-    else:
-        render_table(st.session_state.cq_update_df, drop_internal_url=True)
 
 
 # =====================================================
