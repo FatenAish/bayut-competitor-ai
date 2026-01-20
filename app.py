@@ -1237,11 +1237,15 @@ def extract_media_used(html: str) -> str:
     audios = len(root.find_all("audio"))
     tables = len(root.find_all("table"))
 
+    # Count embedded youtube/vimeo as videos if present in iframes
+    for x in root.find_all("iframe"):
+        src = (x.get("src") or "").lower()
+        if any(k in src for k in ["youtube", "youtu.be", "vimeo", "dailymotion"]):
+            videos += 1
+
     parts = []
     if imgs: parts.append(f"Images: {imgs}")
     if videos: parts.append(f"Videos: {videos}")
-    if iframes: parts.append(f"Iframes: {iframes}")
-    if audios: parts.append(f"Audio: {audios}")
     if tables: parts.append(f"Tables: {tables}")
 
     return " | ".join(parts) if parts else "None detected"
@@ -1432,203 +1436,123 @@ def serp_ai_visibility(query: str, page_url: str, device: str) -> Dict[str, str]
     }
 
 
-def kw_usage_summary(seo_title: str, h1: str, headings_blob_text: str, body_text: str, fkw: str) -> str:
-    """
-    Quality-focused KW usage:
-    - repeats + density per 1k words
-    - presence in Title / H1 / Headings / Intro
-    """
-    fkw = clean(fkw or "").lower()
-    if not fkw or fkw == "not available":
-        return "Not available"
+# =====================================================
+# New helpers for SEO columns
+# =====================================================
+def _extract_canonical_and_robots(html: str) -> Tuple[str, str]:
+    if not html:
+        return ("Not available", "Not available")
+    soup = BeautifulSoup(html, "html.parser")
+    canonical = ""
+    can = soup.find("link", attrs={"rel": "canonical"})
+    if can and can.get("href"):
+        canonical = clean(can.get("href"))
+    robots = ""
+    mr = soup.find("meta", attrs={"name": re.compile("^robots$", re.I)})
+    if mr and mr.get("content"):
+        robots = clean(mr.get("content"))
+    return (canonical or "Not available", robots or "Not available")
 
-    text = clean(body_text or "")
-    wc = word_count_from_text(text)
+def _count_headers(html: str) -> str:
+    if not html:
+        return "H1:0 / H2:0 / H3:0 / Total:0"
+    soup = BeautifulSoup(html, "html.parser")
+    for t in soup.find_all(list(IGNORE_TAGS)):
+        t.decompose()
+    h1 = len(soup.find_all("h1"))
+    h2 = len(soup.find_all("h2"))
+    h3 = len(soup.find_all("h3"))
+    total = h1 + h2 + h3
+    return f"H1:{h1} / H2:{h2} / H3:{h3} / Total:{total}"
 
-    rep = compute_kw_repetition(text, fkw)
-    try:
-        rep_i = int(rep)
-    except Exception:
-        rep_i = None
+def _count_internal_outbound_links(html: str, page_url: str) -> Tuple[int, int]:
+    if not html:
+        return (0, 0)
+    soup = BeautifulSoup(html, "html.parser")
+    a_tags = soup.find_all("a", href=True)
+    internal = 0
+    outbound = 0
+    base_dom = domain_of(page_url)
+    for a in a_tags:
+        href = a.get("href") or ""
+        if href.startswith("#") or href.lower().startswith("mailto:") or href.lower().startswith("tel:"):
+            continue
+        try:
+            p = urlparse(href)
+            if not p.netloc:
+                internal += 1
+            else:
+                dom = p.netloc.lower().replace("www.", "")
+                if dom == base_dom:
+                    internal += 1
+                else:
+                    outbound += 1
+        except Exception:
+            continue
+    return (internal, outbound)
 
-    per_1k = "Not available"
-    if wc and rep_i is not None:
-        per_1k = f"{(rep_i / max(wc,1))*1000:.1f}/1k"
-
-    title_hit = "Yes" if fkw in (seo_title or "").lower() else "No"
-    h1_hit = "Yes" if fkw in (h1 or "").lower() else "No"
-    headings_hit = "Yes" if fkw in (headings_blob_text or "").lower() else "No"
-
-    intro_raw = (body_text or "")[:1200].lower()
-    intro_hit = "Yes" if fkw in intro_raw else "No"
-
-    return f"Repeats:{rep} | {per_1k} | Title:{title_hit} H1:{h1_hit} Headings:{headings_hit} Intro:{intro_hit}"
-
-
-def internal_link_opportunities(page_url: str, nodes: List[dict], body_text: str, fkw: str, max_suggestions: int = 3) -> str:
-    """
-    Identifies relevant internal linking opportunities via SERPAPI site: queries
-    + includes proper internal linking practices.
-    """
-    if not SERPAPI_API_KEY:
-        return "Not available (no SERPAPI_API_KEY)"
-
-    dom = domain_of(page_url)
-    if not dom:
-        return "Not available"
-
-    # candidate topics from H2/H3 headings
-    topics = []
-    seen = set()
-    for x in flatten(nodes):
-        if x.get("level") in (2, 3):
-            h = clean(x.get("header", ""))
-            if not h or is_noise_header(h) or header_is_faq(h):
-                continue
-            k = norm_header(h)
-            if k and k not in seen:
-                seen.add(k)
-                topics.append(h)
-        if len(topics) >= 10:
-            break
-
-    # fallback: top phrases from body (excluding FKW)
-    if len(topics) < 6:
-        freq = phrase_candidates(body_text or "", n_min=2, n_max=4)
-        fkw_n = norm_header(fkw or "")
-        for ph, c in sorted(freq.items(), key=lambda x: x[1], reverse=True):
-            if norm_header(ph) == fkw_n:
-                continue
-            k = norm_header(ph)
-            if k and k not in seen:
-                seen.add(k)
-                topics.append(ph)
-            if len(topics) >= 12:
-                break
-
-    if not topics:
-        return "Opportunities: Not available"
-
-    target_norm = normalize_url_for_match(page_url)
-
-    picks = []
-    for topic in topics:
-        q = f"site:{dom} {topic}"
-        data = serpapi_serp_cached(q, device="desktop")
-        if not data or data.get("_error"):
+def _schema_present(html: str) -> str:
+    if not html:
+        return "None detected"
+    soup = BeautifulSoup(html, "html.parser")
+    scripts = soup.find_all("script", attrs={"type": re.compile(r"ld\+json", re.I)})
+    types = set()
+    for s in scripts:
+        raw = (s.string or "").strip()
+        if not raw:
+            continue
+        try:
+            j = json.loads(raw)
+        except Exception:
+            # sometimes not valid json - skip
             continue
 
-        organic = data.get("organic_results") or []
-        best = None
-        for it in organic:
-            link = it.get("link") or ""
-            if not link:
-                continue
-            nm = normalize_url_for_match(link)
-            if dom in nm and nm != target_norm:
-                best = link
-                break
-
-        if best:
-            picks.append((topic, best))
-
-        if len(picks) >= max_suggestions:
-            break
-
-    if not picks:
-        return "Opportunities: None found via SERP site: query."
-
-    opp_lines = [f"• {clean(t)} → {u}" for t, u in picks]
-    practices = "Practice: use descriptive anchors, link from the most relevant section, avoid over-linking, and vary anchors naturally."
-    return "<br>".join(opp_lines) + f"<br><span class='muted'>{practices}</span>"
+        def walk(x):
+            if isinstance(x, dict):
+                t = x.get("@type") or x.get("type")
+                if t:
+                    if isinstance(t, list):
+                        for z in t:
+                            types.add(str(z))
+                    else:
+                        types.add(str(t))
+                for v in x.values():
+                    walk(v)
+            elif isinstance(x, list):
+                for v in x:
+                    walk(v)
+        walk(j)
+    return ", ".join(sorted(types)) if types else "None detected"
 
 
-def seo_row_for_page(label: str, url: str, fr: FetchResult, nodes: List[dict], manual_fkw: str = "") -> dict:
+def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List[dict], manual_fkw: str = "") -> dict:
     seo_title, meta_desc = extract_head_seo(fr.html or "")
-    h1 = get_first_h1(nodes)
-    if seo_title == "Not available" and h1:
-        seo_title = h1
-
+    slug = url_slug(url) if url and url != "Not applicable" else "Not applicable"
+    h_blob = headings_blob(nodes)
+    h_counts = _count_headers(fr.html or fr.text or "")
+    fkw = pick_fkw_only(seo_title, get_first_h1(nodes), h_blob, fr.text or "", manual_fkw=manual_fkw)
+    kw_usage = kw_usage_summary(seo_title, get_first_h1(nodes), h_blob, fr.text or "", fkw)
+    canonical, robots = _extract_canonical_and_robots(fr.html or "")
+    internal_links_count, outbound_links_count = _count_internal_outbound_links(fr.html or "", url or "")
     media = extract_media_used(fr.html or "")
-    slug = url_slug(url)
-
-    blob = headings_blob(nodes)
-    body_text = fr.text or ""
-
-    fkw = pick_fkw_only(seo_title, h1, blob, body_text, manual_fkw=manual_fkw)
-    kw_usage = kw_usage_summary(seo_title, h1, blob, body_text, fkw)
-
-    internal_links = (
-        internal_link_opportunities(url, nodes, body_text, fkw)
-        if url and url != "Not applicable"
-        else "Not applicable"
-    )
+    schema = _schema_present(fr.html or "")
 
     return {
         "Page": label,
-        "Google rank UAE (Mobile)": "Not run",
-        "Internal linking": internal_links,
-        "KW usage": kw_usage,
-        "SEO title": seo_title,
-        "Meta description": meta_desc,
-        "Slug": slug,
-        "Media used": media,
-        "__fkw": fkw,  # internal only (hide from table)
+        "SEO Title": seo_title,
+        "Meta Description": meta_desc,
+        "URL Slug": slug,
+        "Headers (H1/H2/H3/Total)": h_counts,
+        "FKW Usage": kw_usage,
+        "Canonical URL": canonical,
+        "Robots Meta (index/follow)": robots,
+        "Internal Links Count": str(internal_links_count),
+        "Outbound Links Count": str(outbound_links_count),
+        "Media (Images/Video/Tables)": media,
+        "Schema Present": schema,
+        "__fkw": fkw,
+        "__url": url,
     }
-
-
-def enrich_seo_df_with_rank_and_ai(df: pd.DataFrame, manual_query: str = "") -> Tuple[pd.DataFrame, pd.DataFrame]:
-    if df is None or df.empty:
-        return df, pd.DataFrame(columns=["Page", "Query", "AI Overview present", "Cited in AI Overview", "AI Notes"])
-
-    rows_ai = []
-    df2 = df.copy()
-
-    for i, r in df2.iterrows():
-        page = str(r.get("Page", ""))
-        page_url = str(r.get("__url", ""))
-
-        if page.lower().startswith("target"):
-            df2.at[i, "Google rank UAE (Mobile)"] = "Not applicable"
-            continue
-
-        query = clean(manual_query) if clean(manual_query) else str(r.get("__fkw", ""))
-        if not query or query == "Not available":
-            df2.at[i, "Google rank UAE (Mobile)"] = "Not available"
-            rows_ai.append({
-                "Page": page,
-                "Query": "Not available",
-                "AI Overview present": "Not available",
-                "Cited in AI Overview": "Not available",
-                "AI Notes": "No FKW available to query Google ranking."
-            })
-            continue
-
-        if not page_url:
-            df2.at[i, "Google rank UAE (Mobile)"] = "Not available"
-            rows_ai.append({
-                "Page": page,
-                "Query": query,
-                "AI Overview present": "Not available",
-                "Cited in AI Overview": "Not available",
-                "AI Notes": "Missing URL mapping."
-            })
-            continue
-
-        rank_m, note_m = serp_rank_for_url(query, page_url, device="mobile")
-        df2.at[i, "Google rank UAE (Mobile)"] = str(rank_m) if rank_m else note_m
-
-        ai = serp_ai_visibility(query, page_url, device="desktop")
-        rows_ai.append({
-            "Page": page,
-            "Query": query,
-            "AI Overview present": ai.get("AI Overview present", "Not available"),
-            "Cited in AI Overview": ai.get("Cited in AI Overview", "Not available"),
-            "AI Notes": ai.get("AI Notes", ""),
-        })
-
-    ai_df = pd.DataFrame(rows_ai)
-    return df2, ai_df
 
 
 def build_seo_analysis_update(
@@ -1641,30 +1565,31 @@ def build_seo_analysis_update(
     manual_fkw: str = ""
 ) -> pd.DataFrame:
     rows = []
-    row_b = seo_row_for_page("Bayut", bayut_url, bayut_fr, bayut_nodes, manual_fkw=manual_fkw)
-    row_b["__url"] = bayut_url
+    row_b = seo_row_for_page_extended("Bayut", bayut_url, bayut_fr, bayut_nodes, manual_fkw=manual_fkw)
     rows.append(row_b)
 
     for u in competitors:
         fr = comp_fr_map[u]
         nodes = comp_tree_map[u]["nodes"]
-        rr = seo_row_for_page(site_name(u), u, fr, nodes, manual_fkw=manual_fkw)
-        rr["__url"] = u
+        rr = seo_row_for_page_extended(site_name(u), u, fr, nodes, manual_fkw=manual_fkw)
         rows.append(rr)
 
-    # Order columns exactly as you want
     df = pd.DataFrame(rows)
     desired = [
         "Page",
-        "Google rank UAE (Mobile)",
-        "Internal linking",
-        "KW usage",
-        "SEO title",
-        "Meta description",
-        "Slug",
-        "Media used",
-        "FKW",
+        "SEO Title",
+        "Meta Description",
+        "URL Slug",
+        "Headers (H1/H2/H3/Total)",
+        "FKW Usage",
+        "Canonical URL",
+        "Robots Meta (index/follow)",
+        "Internal Links Count",
+        "Outbound Links Count",
+        "Media (Images/Video/Tables)",
+        "Schema Present",
         "__url",
+        "__fkw",
     ]
     df = df[[c for c in desired if c in df.columns]]
     return df
@@ -1682,43 +1607,45 @@ def build_seo_analysis_newpost(
     for u in competitors:
         fr = comp_fr_map[u]
         nodes = comp_tree_map[u]["nodes"]
-        rr = seo_row_for_page(site_name(u), u, fr, nodes, manual_fkw=manual_fkw)
-        rr["__url"] = u
+        rr = seo_row_for_page_extended(site_name(u), u, fr, nodes, manual_fkw=manual_fkw)
         rows.append(rr)
 
+    # fake target row for new post
     fake_nodes = [{"level": 1, "header": new_title, "content": "", "children": []}]
     fake_fr = FetchResult(True, "synthetic", 200, "", new_title, None)
-    row = seo_row_for_page("Target (New Post)", "Not applicable", fake_fr, fake_nodes, manual_fkw=manual_fkw)
-
-    row["Slug"] = "Suggested: /" + re.sub(r"[^a-z0-9]+", "-", new_title.lower()).strip("-") + "/"
-    row["Meta description"] = "Suggested: write a 140–160 char meta based on the intro angle."
-    row["Media used"] = "Suggested: 1 hero image + 1 map/graphic (optional)"
-    row["KW usage"] = "Not applicable"
-    row["Google rank UAE (Mobile)"] = "Not applicable"
-    row["Internal linking"] = "Suggested: link to 3–5 relevant Bayut guides from matching sections."
-    row["FKW"] = pick_fkw_only(new_title, new_title, new_title, "", manual_fkw=manual_fkw)
-    row["__url"] = ""
-
-    rows.insert(0, row)
+    target_row = seo_row_for_page_extended("Target (New Post)", "Not applicable", fake_fr, fake_nodes, manual_fkw=manual_fkw)
+    target_row["URL Slug"] = "Suggested: /" + re.sub(r"[^a-z0-9]+", "-", new_title.lower()).strip("-") + "/"
+    target_row["Meta Description"] = "Suggested: write a 140–160 char meta based on the intro angle."
+    target_row["Media (Images/Video/Tables)"] = "Suggested: 1 hero image + 1 map/graphic (optional)"
+    target_row["FKW Usage"] = "Not applicable"
+    target_row["Internal Links Count"] = "Not applicable"
+    target_row["Outbound Links Count"] = "Not applicable"
+    target_row["Schema Present"] = "Suggested: add schema where relevant"
+    rows.insert(0, target_row)
 
     df = pd.DataFrame(rows)
     desired = [
         "Page",
-        "Google rank UAE (Mobile)",
-        "Internal linking",
-        "KW usage",
-        "SEO title",
-        "Meta description",
-        "Slug",
-        "Media used",
-        "FKW",
+        "SEO Title",
+        "Meta Description",
+        "URL Slug",
+        "Headers (H1/H2/H3/Total)",
+        "FKW Usage",
+        "Canonical URL",
+        "Robots Meta (index/follow)",
+        "Internal Links Count",
+        "Outbound Links Count",
+        "Media (Images/Video/Tables)",
+        "Schema Present",
         "__url",
+        "__fkw",
     ]
     df = df[[c for c in desired if c in df.columns]]
     return df
 
+
 # =====================================================
-# Build a Bayut-only AI Visibility table (SERPAPI-driven)
+# CONTENT QUALITY (page-row based table with requested metrics)
 # =====================================================
 def domain_of(url: str) -> str:
     try:
@@ -1727,356 +1654,88 @@ def domain_of(url: str) -> str:
     except Exception:
         return ""
 
-def _extract_urls_from_aio(aio_obj) -> List[str]:
-    urls = []
-    if not aio_obj:
-        return urls
-    if isinstance(aio_obj, dict):
-        for k in ["sources", "citations", "references", "links"]:
-            v = aio_obj.get(k)
-            if isinstance(v, list):
-                for s in v:
-                    if isinstance(s, dict):
-                        link = s.get("link") or s.get("url") or ""
-                    elif isinstance(s, str):
-                        link = s
-                    else:
-                        link = ""
-                    if link:
-                        urls.append(link)
-                if urls:
-                    return urls
-        # fallback: try to collect any url-like values in the dict
-        for v in aio_obj.values():
-            if isinstance(v, str) and v.startswith("http"):
-                urls.append(v)
-    elif isinstance(aio_obj, list):
-        for item in aio_obj:
-            if isinstance(item, dict):
-                link = item.get("link") or item.get("url") or ""
-                if link:
-                    urls.append(link)
-            elif isinstance(item, str) and item.startswith("http"):
-                urls.append(item)
-    return urls
-
-def build_bayut_ai_visibility_table(bayut_url: str, query: str = "") -> pd.DataFrame:
-    """
-    Returns a single-row DataFrame with the following columns (Bayut-only):
-    - Target URL
-    - Cited in AIO (Yes/No)
-    - Cited Domains (comma-separated)
-    - # AIO Citations (count)
-    - Top Competitor Domains (top organic domains excluding Bayut)
-    - SERP Features Present (comma-separated feature names)
-    - Direct Answer Block (Yes/No)
-    """
-    cols = [
-        "Target URL",
-        "Cited in AIO",
-        "Cited Domains",
-        "# AIO Citations",
-        "Top Competitor Domains",
-        "SERP Features Present",
-        "Direct Answer Block"
-    ]
-
-    if not SERPAPI_API_KEY:
-        return pd.DataFrame([{
-            "Target URL": bayut_url,
-            "Cited in AIO": "Not available (no SERPAPI_API_KEY)",
-            "Cited Domains": "Not available",
-            "# AIO Citations": "Not available",
-            "Top Competitor Domains": "Not available",
-            "SERP Features Present": "Not available",
-            "Direct Answer Block": "Not available",
-        }], columns=cols)
-
-    q = clean(query) or bayut_url
-    data = serpapi_serp_cached(q, device="desktop")
-    if not data or data.get("_error"):
-        return pd.DataFrame([{
-            "Target URL": bayut_url,
-            "Cited in AIO": f"Not available ({data.get('_error')})" if isinstance(data, dict) else "Not available",
-            "Cited Domains": "",
-            "# AIO Citations": "",
-            "Top Competitor Domains": "",
-            "SERP Features Present": "",
-            "Direct Answer Block": "",
-        }], columns=cols)
-
-    # AI overview / answer box extraction
-    aio = data.get("ai_overview") or data.get("ai_overview_results") or data.get("answer_box") or None
-    aio_urls = _extract_urls_from_aio(aio)
-    cited_domains = sorted({urlparse(u).netloc.replace("www.", "") for u in aio_urls if u})
-    cited_domains_str = ", ".join(cited_domains[:12]) if cited_domains else "None detected"
-    cited_in_aio = "Yes" if any(normalize_url_for_match(u).startswith(normalize_url_for_match(bayut_url)) or normalize_url_for_match(bayut_url) in normalize_url_for_match(u) for u in aio_urls) else "No"
-    num_citations = len(aio_urls)
-
-    # Top competitor domains from organic results
-    organic = data.get("organic_results") or []
-    bayut_dom = domain_of(bayut_url)
-    top_comp_domains = []
-    for it in organic:
-        link = it.get("link") or ""
-        if not link:
-            continue
-        dom = urlparse(link).netloc.replace("www.", "")
-        if dom == bayut_dom:
-            continue
-        if dom not in top_comp_domains:
-            top_comp_domains.append(dom)
-        if len(top_comp_domains) >= 8:
-            break
-    top_comp_str = ", ".join(top_comp_domains[:8]) if top_comp_domains else "None detected"
-
-    # SERP features detection (presence)
-    features = []
-    feature_map = {
-        "answer_box": "Answer box",
-        "featured_snippet": "Featured snippet",
-        "people_also_ask": "People Also Ask",
-        "top_stories": "Top stories",
-        "inline_videos": "Videos",
-        "images_results": "Images",
-        "knowledge_graph": "Knowledge graph",
-        "shopping_results": "Shopping results",
-        "sitelinks_searchbox": "Sitelinks searchbox",
-        "local_pack": "Local pack",
-    }
-    for fk, label in feature_map.items():
-        if fk in data and data.get(fk):
-            features.append(label)
-
-    # Some SERPAPI responses embed features under different keys; check common keys
-    if data.get("answer_box"):
-        features.append("Answer box")
-    if data.get("ai_overview") or data.get("ai_overview_results"):
-        features.append("AI Overview")
-
-    features_str = ", ".join(sorted(set(features))) if features else "None detected"
-
-    # Direct Answer Block detection: answer_box / featured_snippet / ai_overview
-    direct_answer = "Yes" if (data.get("answer_box") or data.get("featured_snippet") or aio) else "No"
-
-    row = {
-        "Target URL": bayut_url,
-        "Cited in AIO": cited_in_aio,
-        "Cited Domains": cited_domains_str,
-        "# AIO Citations": str(num_citations),
-        "Top Competitor Domains": top_comp_str,
-        "SERP Features Present": features_str,
-        "Direct Answer Block": direct_answer,
-    }
-
-    return pd.DataFrame([row], columns=cols)
-
-
-def build_seo_analysis_update(
-    bayut_url: str,
-    bayut_fr: FetchResult,
-    bayut_nodes: List[dict],
-    competitors: List[str],
-    comp_fr_map: Dict[str, FetchResult],
-    comp_tree_map: Dict[str, dict],
-    manual_fkw: str = ""
-) -> pd.DataFrame:
-    rows = []
-    row_b = seo_row_for_page("Bayut", bayut_url, bayut_fr, bayut_nodes, manual_fkw=manual_fkw)
-    row_b["__url"] = bayut_url
-    rows.append(row_b)
-
-    for u in competitors:
-        fr = comp_fr_map[u]
-        nodes = comp_tree_map[u]["nodes"]
-        rr = seo_row_for_page(site_name(u), u, fr, nodes, manual_fkw=manual_fkw)
-        rr["__url"] = u
-        rows.append(rr)
-
-    # Order columns exactly as you want
-    df = pd.DataFrame(rows)
-    desired = [
-        "Page",
-        "Google rank UAE (Mobile)",
-        "Internal linking",
-        "KW usage",
-        "SEO title",
-        "Meta description",
-        "Slug",
-        "Media used",
-        "FKW",
-        "__url",
-    ]
-    df = df[[c for c in desired if c in df.columns]]
-    return df
-
-
-# =====================================================
-# CONTENT QUALITY TABLE (FAQs fixed + your rows)
-# =====================================================
-@st.cache_data(show_spinner=False, ttl=86400)
-def _head_last_modified(url: str) -> str:
-    try:
-        r = requests.head(url, headers=DEFAULT_HEADERS, allow_redirects=True, timeout=18)
-        return r.headers.get("Last-Modified", "") or ""
-    except Exception:
-        return ""
-
-def _extract_last_modified_from_html(html: str) -> str:
+def _count_source_links(html: str) -> int:
     if not html:
-        return ""
-    soup = BeautifulSoup(html, "html.parser")
-
-    meta_candidates = [
-        ("meta", {"property": "article:modified_time"}, "content"),
-        ("meta", {"property": "article:published_time"}, "content"),
-        ("meta", {"name": "lastmod"}, "content"),
-        ("meta", {"name": "last-modified"}, "content"),
-        ("meta", {"name": "date"}, "content"),
-        ("meta", {"itemprop": "dateModified"}, "content"),
-        ("meta", {"itemprop": "datePublished"}, "content"),
-    ]
-    for tag, attrs, key in meta_candidates:
-        t = soup.find(tag, attrs=attrs)
-        if t and t.get(key):
-            v = clean(t.get(key))
-            if v:
-                return v
-
-    tm = soup.find("time", attrs={"datetime": True})
-    if tm and tm.get("datetime"):
-        v = clean(tm.get("datetime"))
-        if v:
-            return v
-
-    return ""
-
-def get_last_modified(url: str, html: str) -> str:
-    v = _extract_last_modified_from_html(html or "")
-    if v:
-        return v
-    h = _head_last_modified(url)
-    return h if h else "Not available"
-
-def word_count_from_text(text: str) -> int:
-    t = clean(text or "")
-    if not t:
         return 0
-    return len(re.findall(r"\b\w+\b", t))
+    soup = BeautifulSoup(html, "html.parser")
+    links = soup.find_all("a", href=True)
+    # Count links that look like source citations (contain 'http' and are external)
+    cnt = 0
+    for a in links:
+        href = a.get("href") or ""
+        if href.startswith("http"):
+            cnt += 1
+    return cnt
 
-def _kw_stuffing_label(word_count: int, repeats: str) -> str:
-    try:
-        rep = int(str(repeats).strip())
-    except Exception:
-        return "Not available"
-    if word_count <= 0:
-        return "Not available"
-    per_1k = (rep / max(word_count, 1)) * 1000.0
-    if per_1k >= 18:
-        return f"High ({rep} repeats, {per_1k:.1f}/1k words)"
-    if per_1k >= 10:
-        return f"Moderate ({rep} repeats, {per_1k:.1f}/1k words)"
-    return f"Low ({rep} repeats, {per_1k:.1f}/1k words)"
+CREDIBLE_KEYWORDS = ["gov", "edu", "who.int", "un.org", "worldbank", "statista", "imf", "oecd", "bbc", "nytimes", "guardian", "reuters", "wsj", "ft"]
 
-def _latest_year_mentioned(text: str) -> int:
-    years = re.findall(r"\b(19\d{2}|20\d{2})\b", (text or ""))
-    ys = []
-    for y in years:
-        try:
-            ys.append(int(y))
-        except Exception:
-            pass
-    return max(ys) if ys else 0
+def _credible_sources_count(html: str, page_url: str) -> int:
+    if not html:
+        return 0
+    soup = BeautifulSoup(html, "html.parser")
+    links = soup.find_all("a", href=True)
+    seen = set()
+    base_dom = domain_of(page_url)
+    for a in links:
+        href = a.get("href") or ""
+        if not href.startswith("http"):
+            continue
+        dom = urlparse(href).netloc.lower().replace("www.", "")
+        if dom == base_dom:
+            continue
+        if dom in seen:
+            continue
+        # heuristics: credible if domain contains any credible keyword or endswith .gov/.edu/.org (higher trust)
+        if any(k in dom for k in CREDIBLE_KEYWORDS) or dom.endswith(".gov") or dom.endswith(".edu") or dom.endswith(".org"):
+            seen.add(dom)
+    return len(seen)
 
-def _has_brief_summary(nodes: List[dict], text: str) -> str:
-    blob = (headings_blob(nodes) or "").lower()
-    t = (text or "").lower()
-    cues = ["tl;dr", "tldr", "key takeaways", "in summary", "summary", "quick summary", "at a glance"]
-    if any(c in blob for c in cues) or any(c in t[:1400] for c in cues):
+def _references_section_present(nodes: List[dict], html: str) -> str:
+    # Check for headings "References", "Sources", "Further reading"
+    blob = headings_blob(nodes).lower()
+    if any(k in blob for k in ["references", "sources", "further reading", "bibliography"]):
         return "Yes"
+    # fallback: look for a bottom list with many external links
+    if html:
+        soup = BeautifulSoup(html, "html.parser")
+        footers = soup.find_all(["footer", "section"])
+        for s in footers[-3:]:
+            txt = (s.get_text(" ") or "").lower()
+            if "references" in txt or "sources" in txt:
+                return "Yes"
     return "No"
 
-def _count_tables_videos(html: str) -> Tuple[int, int]:
-    if not html:
-        return (0, 0)
-    soup = BeautifulSoup(html, "html.parser")
-    for t in soup.find_all(list(IGNORE_TAGS)):
-        t.decompose()
-    root = soup.find("article") or soup
-    tables = len(root.find_all("table"))
-    videos = len(root.find_all("video"))
-    ifr = root.find_all("iframe")
-    for x in ifr:
-        src = (x.get("src") or "").lower()
-        if any(k in src for k in ["youtube", "youtu.be", "vimeo", "dailymotion"]):
-            videos += 1
-    return (tables, videos)
+def _data_points_count(text: str) -> int:
+    if not text:
+        return 0
+    # Count numbers that look like data points: integers, percentages, currency, decimals
+    matches = re.findall(r"\b\d{1,3}(?:[,\d]{0,})(?:\.\d+)?\b|\b\d+%|\b\d+\.\d+%", text)
+    return len(matches)
 
-def _styling_layout_label(html: str, nodes: List[dict], text: str) -> str:
-    wc = word_count_from_text(text)
-    h2_count = sum(1 for x in flatten(nodes) if x.get("level") == 2)
-    has_toc = "table of contents" in (text or "").lower()
-    tables, videos = _count_tables_videos(html or "")
+def _data_backed_claims_count(text: str) -> int:
+    if not text:
+        return 0
+    patterns = [
+        r"according to", r"data from", r"study", r"survey", r"research", r"reported that", r"found that",
+        r"statistics", r"according to a", r"according to the"
+    ]
+    cnt = 0
+    for p in patterns:
+        cnt += len(re.findall(p, text, flags=re.I))
+    return cnt
 
-    score = 0
-    if wc >= 1200: score += 1
-    if h2_count >= 6: score += 1
-    if has_toc: score += 1
-    if tables > 0: score += 1
-    if videos > 0: score += 1
-
-    if score >= 4: return "Strong"
-    if score >= 2: return "OK"
-    return "Weak"
-
-def _latest_information_label(last_modified: str, text: str) -> str:
-    lm = (last_modified or "").lower()
-    y = _latest_year_mentioned(text or "")
-    if ("2026" in lm) or ("2025" in lm) or y >= 2025:
-        return "Likely up-to-date"
-    if y >= 2024:
-        return "Somewhat recent"
-    return "Unclear/Older"
-
-def _outdated_label(last_modified: str, text: str) -> str:
-    lm = (last_modified or "").lower()
-    y = _latest_year_mentioned(text or "")
-    if ("2026" in lm) or ("2025" in lm) or y >= 2025:
-        return "No obvious outdated signal"
-    if y and y <= 2022:
-        return "Potentially outdated (mentions older years)"
-    if y and y <= 2023:
-        return "Possibly outdated"
-    return "Unclear"
-
-def _topic_cannibalization_label(query: str, page_url: str) -> str:
-    if not SERPAPI_API_KEY:
-        return "Not available (no SERPAPI_API_KEY)"
-    dom = domain_of(page_url)
-    if not dom or not query or query == "Not available":
-        return "Not available"
-    site_q = f"site:{dom} {query}"
-    data = serpapi_serp_cached(site_q, device="desktop")
-    if not data or data.get("_error"):
-        return f"Not available ({data.get('_error')})" if isinstance(data, dict) else "Not available"
-
-    organic = data.get("organic_results") or []
-    target = normalize_url_for_match(page_url)
-    others = []
-    for it in organic:
-        link = it.get("link") or ""
-        if not link:
-            continue
-        nm = normalize_url_for_match(link)
-        if dom in nm and nm != target:
-            others.append(link)
-
-    cnt = len(set(others))
-    if cnt >= 3:
-        return f"High risk (≈{cnt} other pages on same domain)"
-    if cnt >= 1:
-        return f"Medium risk (≈{cnt} other page(s) on same domain)"
-    return "Low risk"
+def _unsupported_strong_claims_count(text: str) -> int:
+    if not text:
+        return 0
+    # Count sentences with strong claims but no nearby numbers
+    strong_words = r"\b(best|worst|always|never|guarantee|guaranteed|unbeatable|the most|the best|huge|massive)\b"
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    cnt = 0
+    for s in sentences:
+        if re.search(strong_words, s, flags=re.I):
+            if not re.search(r"\d", s):  # no numbers nearby
+                cnt += 1
+    return cnt
 
 def build_content_quality_table_from_seo(
     seo_df: pd.DataFrame,
@@ -2084,43 +1743,71 @@ def build_content_quality_table_from_seo(
     tree_map_by_url: Dict[str, dict],
     manual_query: str = ""
 ) -> pd.DataFrame:
+    """
+    Returns a DataFrame with one row per Page and columns as requested by the user.
+    Columns:
+    Word Count
+    Last Updated / Modified
+    Topic Cannibalization
+    Keyword Stuffing
+    Brief Summary Present
+    FAQs Present
+    References Section Present
+    Source Links Count
+    Credible Sources Count
+    Data Points Count (numbers/stats)
+    Data-Backed Claims
+    Unsupported Strong Claims
+    Latest Information Score
+    Outdated / Misleading Info
+    Styling / Layout
+    """
     if seo_df is None or seo_df.empty:
         return pd.DataFrame()
 
-    metrics = [
-        "Topic Cannibalization",
+    cols = [
+        "Page",
         "Word Count",
-        "Last Modified",
+        "Last Updated / Modified",
+        "Topic Cannibalization",
         "Keyword Stuffing",
-        "Latest Information",
-        "Outdated/Misleading Information",
-        "Provides a brief summary",
-        "FAQs",
-        "Tables",
-        "Video",
-        "Styling / Overall Layout",
+        "Brief Summary Present",
+        "FAQs Present",
+        "References Section Present",
+        "Source Links Count",
+        "Credible Sources Count",
+        "Data Points Count (numbers/stats)",
+        "Data-Backed Claims",
+        "Unsupported Strong Claims",
+        "Latest Information Score",
+        "Outdated / Misleading Info",
+        "Styling / Layout",
     ]
 
-    out = {"Content Quality": metrics}
-
-    for _, row in seo_df.iterrows():
-        page = str(row.get("Page", "")).strip()
-        page_url = str(row.get("__url", "")).strip()
-
-        if page.lower().startswith("target"):
-            out[page] = [
-                "Not applicable",
-                "Not applicable",
-                "Not applicable",
-                "Not applicable",
-                "Suggested: include 2026 updates + fresh stats",
-                "Not applicable",
-                "Suggested: add TL;DR / key takeaways",
-                "Suggested: add FAQs (6–10)",
-                "Suggested: add 1–2 tables",
-                "Suggested: add 1 short video (optional)",
-                "Suggested: TOC + clean spacing + visuals",
-            ]
+    rows = []
+    for _, r in seo_df.iterrows():
+        page = str(r.get("Page", "")).strip()
+        page_url = str(r.get("__url", "")).strip()
+        if not page_url and page.lower().startswith("target"):
+            # suggested new post row
+            rows.append({
+                "Page": page,
+                "Word Count": "Not applicable",
+                "Last Updated / Modified": "Not applicable",
+                "Topic Cannibalization": "Not applicable",
+                "Keyword Stuffing": "Not applicable",
+                "Brief Summary Present": "Suggested: add TL;DR / key takeaways",
+                "FAQs Present": "Suggested: add FAQs (6–10)",
+                "References Section Present": "Suggested: add References/Sources",
+                "Source Links Count": "Suggested: 1–3",
+                "Credible Sources Count": "Suggested: 1–3",
+                "Data Points Count (numbers/stats)": "Suggested: add key numbers",
+                "Data-Backed Claims": "Suggested: cite data",
+                "Unsupported Strong Claims": "Suggested: avoid unbacked superlatives",
+                "Latest Information Score": "Suggested: include 2026 updates",
+                "Outdated / Misleading Info": "Not applicable",
+                "Styling / Layout": "Suggested: TOC + clean spacing + visuals",
+            })
             continue
 
         fr = fr_map_by_url.get(page_url)
@@ -2132,33 +1819,49 @@ def build_content_quality_table_from_seo(
 
         wc = word_count_from_text(text)
         lm = get_last_modified(page_url, html)
-        fkw = clean(manual_query) if clean(manual_query) else str(row.get("FKW", ""))
-        repeats = row.get("FKW repeats (body)", "Not available")
+        fkw = clean(manual_query) if clean(manual_query) else str(r.get("__fkw", ""))
+        repeats = r.get("FKW repeats (body)", "Not available")
 
-        tables, videos = _count_tables_videos(html)
+        topic_cann = _topic_cannibalization_label(fkw, page_url) if fkw else "Not available"
+        kw_stuff = _kw_stuffing_label(wc, repeats)
 
-        # ✅ FIX: FAQ must use the STRICT real-FAQ detector (no false negatives)
-        faq_value = "Yes" if (fr and page_has_real_faq(fr, nodes)) else "No"
+        brief = _has_brief_summary(nodes, text)
+        faqs = "Yes" if (fr and page_has_real_faq(fr, nodes)) else "No"
+        refs = _references_section_present(nodes, html)
+        src_links = _count_source_links(html)
+        credible_cnt = _credible_sources_count(html, page_url)
+        data_points = _data_points_count(text)
+        data_backed = _data_backed_claims_count(text)
+        unsupported = _unsupported_strong_claims_count(text)
+        latest_score = _latest_information_label(lm, text)
+        outdated = _outdated_label(lm, text)
+        styling = _styling_layout_label(html, nodes, text)
 
-        out[page] = [
-            _topic_cannibalization_label(fkw, page_url),
-            str(wc) if wc else "Not available",
-            lm,
-            _kw_stuffing_label(wc, repeats),
-            _latest_information_label(lm, text),
-            _outdated_label(lm, text),
-            _has_brief_summary(nodes, text),
-            faq_value,
-            str(tables),
-            str(videos),
-            _styling_layout_label(html, nodes, text),
-        ]
+        rows.append({
+            "Page": page,
+            "Word Count": str(wc) if wc else "Not available",
+            "Last Updated / Modified": lm,
+            "Topic Cannibalization": topic_cann,
+            "Keyword Stuffing": kw_stuff,
+            "Brief Summary Present": brief,
+            "FAQs Present": faqs,
+            "References Section Present": refs,
+            "Source Links Count": str(src_links),
+            "Credible Sources Count": str(credible_cnt),
+            "Data Points Count (numbers/stats)": str(data_points),
+            "Data-Backed Claims": str(data_backed),
+            "Unsupported Strong Claims": str(unsupported),
+            "Latest Information Score": latest_score,
+            "Outdated / Misleading Info": outdated,
+            "Styling / Layout": styling,
+        })
 
-    return pd.DataFrame(out)
+    df = pd.DataFrame(rows, columns=cols)
+    return df
 
 
 # =====================================================
-# AI SUMMARY (BULLETS ONLY – ORDERED & CLEAR)
+# Remaining AI / Summarization functions (unchanged)
 # =====================================================
 def openai_summarize_block(title: str, payload_text: str, max_bullets: int = 8) -> str:
     payload_text = clean(payload_text)
@@ -2237,13 +1940,6 @@ def _ignore_summary_header(h: str) -> bool:
 
 
 def concise_gaps_summary(df: pd.DataFrame, min_bullets: int = 4, max_bullets: int = 8) -> str:
-    """
-    Guarantees 4–8 bullets:
-    - Add missing sections
-    - Expand missing parts
-    - Optional FAQ
-    - If still too few, add safe editorial fallbacks
-    """
     if df is None or df.empty:
         return "• No content gaps detected."
 
@@ -2329,7 +2025,7 @@ def concise_seo_summary(df: pd.DataFrame, min_bullets: int = 4, max_bullets: int
         if page.lower().startswith("target"):
             continue
 
-        fkw = str(r.get("FKW", "")).strip()
+        fkw = str(r.get("__fkw", "")).strip()
         rd = str(r.get("Google rank UAE (Desktop)", "")).strip()
         rm = str(r.get("Google rank UAE (Mobile)", "")).strip()
 
@@ -2341,7 +2037,6 @@ def concise_seo_summary(df: pd.DataFrame, min_bullets: int = 4, max_bullets: int
         if len(bullets) >= max_bullets:
             break
 
-    # Force minimum (SEO-safe fallbacks)
     seo_fallbacks = [
         "• Ensure title + H1 contain the exact Focus Keyword naturally",
         "• Reduce keyword repetition if it looks stuffed; prioritize readability",
@@ -2368,7 +2063,7 @@ def ai_summary_from_df(kind: str, df: pd.DataFrame) -> str:
 
 
 # =====================================================
-# NEW POST MODE (kept simple)
+# NEW POST MODE helpers (unchanged)
 # =====================================================
 def list_headers(nodes: List[dict], level: int) -> List[str]:
     return [x["header"] for x in flatten(nodes) if x["level"] == level and not is_noise_header(x["header"])]
@@ -2437,13 +2132,9 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
     html = df.to_html(index=False, escape=False)
     st.markdown(html, unsafe_allow_html=True)
 
-def section_header_with_ai_button(title: str, button_label: str, button_key: str) -> bool:
-    c1, c2 = st.columns([4.2, 1.3])
-    with c1:
-        st.markdown(f"<div class='section-pill section-pill-tight'>{title}</div>", unsafe_allow_html=True)
-    with c2:
-        clicked = st.button(button_label, type="secondary", use_container_width=True, key=button_key)
-    return clicked
+
+def section_header_pill(title: str):
+    st.markdown(f"<div class='section-pill section-pill-tight'>{title}</div>", unsafe_allow_html=True)
 
 
 # =====================================================
@@ -2504,7 +2195,7 @@ if "cq_new_df" not in st.session_state:
 # UI - UPDATE MODE
 # =====================================================
 if st.session_state.mode == "update":
-    st.markdown("<div class='section-pill section-pill-tight'>Update Mode</div>", unsafe_allow_html=True)
+    section_header_pill("Update Mode")
 
     bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
     competitors_text = st.text_area(
@@ -2579,7 +2270,7 @@ if st.session_state.mode == "update":
             st.session_state.seo_update_df = seo_enriched
             st.session_state.ai_update_df = ai_df
 
-        # Content Quality table (uses STRICT FAQ detector)
+        # Content Quality table (page-row based)
         st.session_state.cq_update_df = build_content_quality_table_from_seo(
             seo_df=st.session_state.seo_update_df,
             fr_map_by_url={bayut_url.strip(): bayut_fr, **comp_fr_map},
@@ -2593,37 +2284,49 @@ if st.session_state.mode == "update":
         for u, s in st.session_state.update_fetch:
             st.sidebar.write(u, "—", s)
 
-    # Gaps Table (static pill, button removed)
-    st.markdown("<div class='section-pill section-pill-tight'>Gaps Table</div>", unsafe_allow_html=True)
+    # Gaps Table
+    section_header_pill("Gaps Table")
     if st.session_state.update_df is None or st.session_state.update_df.empty:
         st.info("Run analysis to see results.")
     else:
         render_table(st.session_state.update_df)
 
-    # SEO Analysis (static pill, button removed)
-    st.markdown("<div class='section-pill section-pill-tight'>SEO Analysis</div>", unsafe_allow_html=True)
+    # SEO Analysis (Table 1)
+    section_header_pill("SEO Analysis (Table 1)")
     if st.session_state.seo_update_df is None or st.session_state.seo_update_df.empty:
         st.info("Run analysis to see SEO comparison.")
     else:
+        # hide internal columns when rendering
         render_table(st.session_state.seo_update_df, drop_internal_url=True)
 
-    # AI Visibility — now Bayut-only, custom table
-    st.markdown("<div class='section-pill section-pill-tight'>AI Visibility (Google AI Overview) — Bayut only</div>", unsafe_allow_html=True)
+    # AI Visibility — Bayut-only
+    section_header_pill("AI Visibility (Google AI Overview) — Bayut only")
     if run:
-        # compute query: manual_fkw_update if provided, else pick from Bayut page
         seo_title_b, _ = extract_head_seo(bayut_fr.html or "")
         h1_b = get_first_h1(bayut_nodes)
         blob_b = headings_blob(bayut_nodes)
         body_b = bayut_fr.text or ""
         query_for_ai = manual_fkw_update.strip() or pick_fkw_only(seo_title_b, h1_b, blob_b, body_b, manual_fkw="")
 
-        bayut_ai_df = build_bayut_ai_visibility_table(bayut_url.strip(), query=query_for_ai)
+        bayut_ai_df = None
+        try:
+            bayut_ai_df = build_bayut_ai_visibility_table(bayut_url.strip(), query=query_for_ai)
+        except Exception as e:
+            bayut_ai_df = pd.DataFrame([{
+                "Target URL": bayut_url.strip(),
+                "Cited in AIO": f"Error: {str(e)}",
+                "Cited Domains": "",
+                "# AIO Citations": "",
+                "Top Competitor Domains": "",
+                "SERP Features Present": "",
+                "Direct Answer Block": "",
+            }])
         render_table(bayut_ai_df, drop_internal_url=True)
     else:
         st.info("Run analysis to populate Bayut AI visibility.")
 
-    # Content Quality
-    st.markdown("<div class='section-pill section-pill-tight'>Content Quality</div>", unsafe_allow_html=True)
+    # Content Quality (Table 2) — page-row table
+    section_header_pill("Content Quality (Table 2)")
     if st.session_state.cq_update_df is None or st.session_state.cq_update_df.empty:
         st.info("Run analysis to see Content Quality signals.")
     else:
@@ -2634,7 +2337,7 @@ if st.session_state.mode == "update":
 # UI - NEW POST MODE
 # =====================================================
 else:
-    st.markdown("<div class='section-pill section-pill-tight'>New Post Mode</div>", unsafe_allow_html=True)
+    section_header_pill("New Post Mode")
 
     new_title = st.text_input("New post title", placeholder="Pros & Cons of Living in Business Bay (2026)")
     competitors_text = st.text_area(
@@ -2694,7 +2397,7 @@ else:
 
         st.session_state.cq_new_df = build_content_quality_table_from_seo(
             seo_df=st.session_state.seo_new_df,
-            fr_map_by_url={**comp_fr_map},
+            fr_map_by_url={u: comp_fr_map[u] for u in competitors},
             tree_map_by_url={u: comp_tree_map[u] for u in competitors},
             manual_query=manual_fkw_new.strip()
         )
@@ -2705,27 +2408,26 @@ else:
         for u, s in st.session_state.new_fetch:
             st.sidebar.write(u, "—", s)
 
-    # Competitor Coverage (static pill)
-    st.markdown("<div class='section-pill section-pill-tight'>Competitor Coverage</div>", unsafe_allow_html=True)
-
+    # Competitor Coverage
+    section_header_pill("Competitor Coverage")
     if st.session_state.new_df is None or st.session_state.new_df.empty:
         st.info("Generate competitor coverage to see results.")
     else:
         render_table(st.session_state.new_df)
 
-    # SEO Analysis (static pill)
-    st.markdown("<div class='section-pill section-pill-tight'>SEO Analysis</div>", unsafe_allow_html=True)
-
+    # SEO Analysis (Table 1)
+    section_header_pill("SEO Analysis (Table 1)")
     if st.session_state.seo_new_df is None or st.session_state.seo_new_df.empty:
         st.info("Generate competitor coverage to see SEO comparison.")
     else:
         render_table(st.session_state.seo_new_df, drop_internal_url=True)
 
-    # AI Visibility (New Post Mode) — intentionally not shown; AI visibility table is Bayut-only
-    st.markdown("<div class='section-pill section-pill-tight'>AI Visibility (Google AI Overview)</div>", unsafe_allow_html=True)
+    # AI Visibility note
+    section_header_pill("AI Visibility (Google AI Overview)")
     st.info("AI visibility table is shown only for the Bayut article in Update Mode.")
 
-    st.markdown("<div class='section-pill section-pill-tight'>Content Quality</div>", unsafe_allow_html=True)
+    # Content Quality (Table 2)
+    section_header_pill("Content Quality (Table 2)")
     if st.session_state.cq_new_df is None or st.session_state.cq_new_df.empty:
         st.info("Generate competitor coverage to see Content Quality signals.")
     else:
