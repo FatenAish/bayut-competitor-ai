@@ -615,7 +615,67 @@ if "cov_new_summary_text" not in st.session_state:
     st.session_state.cov_new_summary_text = ""
 if "seo_new_summary_text" not in st.session_state:
     st.session_state.seo_new_summary_text = ""
+# =====================================================
+# COMPAT PATCH: ensure_headings_or_require_repaste (prevents NameError)
+# Paste this ABOVE any usage of ensure_headings_or_require_repaste
+# =====================================================
+if "ensure_headings_or_require_repaste" not in globals():
 
+    def ensure_headings_or_require_repaste(
+        urls: List[str],
+        fr_map: Dict[str, "FetchResult"],
+        st_key_prefix: str
+    ) -> Dict[str, dict]:
+        """
+        Guarantees: returns a tree_map for each URL with extracted nodes.
+        If headings can't be extracted -> forces manual paste per URL (no skipping).
+        """
+        tree_map: Dict[str, dict] = {}
+        bad: List[str] = []
+
+        for u in urls:
+            try:
+                tr = get_tree_from_fetchresult(fr_map[u])
+            except Exception:
+                tr = {"ok": False, "source": None, "nodes": [], "status": None}
+
+            tree_map[u] = tr
+            if not tr.get("nodes"):
+                bad.append(u)
+
+        if not bad:
+            return tree_map
+
+        st.error(
+            "Some URLs were fetched, but headings could not be extracted. "
+            "Paste readable HTML (preferred) or clearly structured text for EACH URL below to continue."
+        )
+
+        for u in bad:
+            with st.expander(f"Headings extraction required: {u}", expanded=True):
+                repaste = st.text_area(
+                    "Paste readable HTML (preferred) OR structured text with headings:",
+                    key=_safe_key(st_key_prefix + "__repaste", u),
+                    height=240,
+                )
+                if repaste and len(repaste.strip()) > 400:
+                    fr_map[u] = FetchResult(True, "manual", 200, repaste.strip(), repaste.strip(), None)
+
+        # Re-try extraction after manual paste
+        still_bad: List[str] = []
+        for u in bad:
+            try:
+                tr = get_tree_from_fetchresult(fr_map[u])
+            except Exception:
+                tr = {"ok": False, "source": None, "nodes": [], "status": None}
+            tree_map[u] = tr
+            if not tr.get("nodes"):
+                still_bad.append(u)
+
+        if still_bad:
+            st.stop()
+
+        return tree_map
 
 # =====================================================
 # UI - UPDATE MODE
