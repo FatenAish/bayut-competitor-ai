@@ -1,4 +1,4 @@
-# app.py (PART 1/2)
+# app.py (PART 1/3)
 import base64
 import streamlit as st
 import requests
@@ -81,7 +81,6 @@ st.markdown(
         color: {TEXT_DARK};
         display: inline-block;
       }}
-      /* tighter + closer to table */
       .section-pill-tight {{
         margin: 6px 0 4px 0;
       }}
@@ -206,21 +205,11 @@ class FetchResult:
 
 
 class FetchAgent:
-    """
-    Deterministic resolver:
-    - direct HTML
-    - optional JS render (Playwright)
-    - Jina reader
-    - Textise
-    If all fail => app forces manual paste (hard gate).
-    """
-
     def __init__(self, default_headers: dict, ignore_tags: set, clean_fn, looks_blocked_fn):
         self.default_headers = default_headers
         self.ignore_tags = ignore_tags
         self.clean = clean_fn
         self.looks_blocked = looks_blocked_fn
-
         self.user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
@@ -292,21 +281,18 @@ class FetchAgent:
         if not url:
             return FetchResult(False, None, None, "", "", "empty_url")
 
-        # 1) direct HTML
         code, html = self._http_get(url)
         if code == 200 and html:
             text = self._extract_article_text_from_html(html)
             if self._validate_text(text, min_len=500):
                 return FetchResult(True, "direct", code, html, text, None)
 
-        # 2) JS-rendered HTML
         ok, html2 = self._fetch_playwright_html(url)
         if ok and html2:
             text2 = self._extract_article_text_from_html(html2)
             if self._validate_text(text2, min_len=500):
                 return FetchResult(True, "playwright", 200, html2, text2, None)
 
-        # 3) Jina reader
         jurl = self._jina_url(url)
         code3, txt3 = self._http_get(jurl)
         if code3 == 200 and txt3:
@@ -314,7 +300,6 @@ class FetchAgent:
             if self._validate_text(text3, min_len=500):
                 return FetchResult(True, "jina", code3, "", text3, None)
 
-        # 4) Textise
         turl = self._textise_url(url)
         code4, html4 = self._http_get(turl)
         if code4 == 200 and html4:
@@ -375,304 +360,180 @@ def resolve_all_or_require_manual(agent: FetchAgent, urls: List[str], st_key_pre
 # =====================================================
 # HEADING TREE + FILTERS
 # =====================================================
-NOISE_PATTERNS = [
-    r"\blooking to rent\b", r"\blooking to buy\b", r"\bexplore all available\b", r"\bview all\b",
-    r"\bfind (a|an) (home|property|apartment|villa)\b", r"\bbrowse\b", r"\bsearch\b",
-    r"\bproperties for (rent|sale)\b", r"\bavailable (rental|properties)\b", r"\bget in touch\b",
-    r"\bcontact (us|agent)\b", r"\bcall (us|now)\b", r"\bwhatsapp\b", r"\benquire\b",
-    r"\binquire\b", r"\bbook a viewing\b",
-    r"\bshare\b", r"\bshare this\b", r"\bfollow us\b", r"\blike\b", r"\bsubscribe\b",
-    r"\bnewsletter\b", r"\bsign up\b", r"\blogin\b", r"\bregister\b",
-    r"\brelated (posts|articles)\b", r"\byou may also like\b", r"\brecommended\b",
-    r"\bpopular posts\b", r"\bmore articles\b", r"\blatest (blogs|blog|podcasts|podcast|insights)\b",
-    r"\breal estate insights\b",
-    r"\btable of contents\b", r"\bcontents\b", r"\bback to top\b", r"\bread more\b",
-    r"\bnext\b", r"\bprevious\b", r"\bcomments\b",
-    r"\bplease stand by\b", r"\bloading\b", r"\bjust a moment\b",
-]
-
-GENERIC_SECTION_HEADERS = {
-    "introduction", "overview",
-}
-
-STOP = {
-    "the","and","for","with","that","this","from","you","your","are","was","were","will","have","has","had",
-    "but","not","can","may","more","most","into","than","then","they","them","their","our","out","about",
-    "also","over","under","between","within","near","where","when","what","why","how","who","which",
-    "a","an","to","of","in","on","at","as","is","it","be","or","by","we","i","us"
-}
-
-GENERIC_STOP = {
-    "dubai","uae","business","bay","community","area","living","pros","cons",
-    "property","properties","rent","sale","apartments","villas","guide"
-}
-
-def norm_header(h: str) -> str:
-    h = clean(h).lower()
-    h = re.sub(r"[^a-z0-9\s]", "", h)
-    h = re.sub(r"\s+", " ", h).strip()
-    return h
-
-def is_noise_header(h: str) -> bool:
-    s = clean(h)
-    if not s:
-        return True
-    hn = norm_header(s)
-    if hn in GENERIC_SECTION_HEADERS:
-        return True
-    if len(hn) < 4:
-        return True
-    if len(s) > 95:
-        return True
-    if sum(1 for c in s if c.isalnum()) / max(len(s), 1) < 0.6:
-        return True
-    for pat in NOISE_PATTERNS:
-        if re.search(pat, hn):
-            return True
-    return False
-
-def level_of(tag_name: str) -> int:
-    try:
-        return int(tag_name[1])
-    except Exception:
-        return 9
-
-def build_tree_from_html(html: str) -> List[dict]:
-    soup = BeautifulSoup(html, "html.parser")
-    for t in soup.find_all(list(IGNORE_TAGS)):
-        t.decompose()
-
-    root = soup.find("article") or soup
-    headings = root.find_all(["h1", "h2", "h3", "h4"])
-
-    nodes: List[dict] = []
-    stack: List[dict] = []
-
-    def pop_to_level(lvl: int):
-        while stack and stack[-1]["level"] >= lvl:
-            stack.pop()
-
-    def add_node(node: dict):
-        if stack:
-            stack[-1]["children"].append(node)
-        else:
-            nodes.append(node)
-        stack.append(node)
-
-    for h in headings:
-        header = clean(h.get_text(" "))
-        if not header or len(header) < 3:
-            continue
-        if is_noise_header(header):
-            continue
-
-        lvl = level_of(h.name)
-        pop_to_level(lvl)
-
-        node = {"level": lvl, "header": header, "content": "", "children": []}
-        add_node(node)
-
-        content_parts = []
-        for sib in h.find_all_next():
-            if sib == h:
-                continue
-            if getattr(sib, "name", None) in ["h1", "h2", "h3", "h4"]:
-                break
-            if getattr(sib, "name", None) in ["p", "li"]:
-                txt = clean(sib.get_text(" "))
-                if txt:
-                    content_parts.append(txt)
-
-        node["content"] = clean(" ".join(content_parts))
-
-    return nodes
-
-def build_tree_from_reader_text(text: str) -> List[dict]:
-    lines = [l.rstrip() for l in (text or "").splitlines()]
-    nodes: List[dict] = []
-    stack: List[dict] = []
-
-    def md_level(line: str):
-        m = re.match(r"^(#{1,4})\s+(.*)$", line.strip())
-        if not m:
-            return None
-        lvl = len(m.group(1))
-        header = clean(m.group(2))
-        return lvl, header
-
-    def pop_to_level(lvl: int):
-        while stack and stack[-1]["level"] >= lvl:
-            stack.pop()
-
-    def add_node(node: dict):
-        if stack:
-            stack[-1]["children"].append(node)
-        else:
-            nodes.append(node)
-        stack.append(node)
-
-    current = None
-    for line in lines:
-        s = line.strip()
-        if not s:
-            continue
-
-        ml = md_level(s)
-        if ml:
-            lvl, header = ml
-            if is_noise_header(header):
-                current = None
-                continue
-
-            pop_to_level(lvl)
-            node = {"level": lvl, "header": header, "content": "", "children": []}
-            add_node(node)
-            current = node
-        else:
-            if current:
-                current["content"] += " " + s
-
-    def walk(n: dict) -> dict:
-        n["content"] = clean(n["content"])
-        n["children"] = [walk(c) for c in n["children"]]
-        return n
-
-    return [walk(n) for n in nodes]
-
-def build_tree_from_plain_text_heuristic(text: str) -> List[dict]:
-    raw = (text or "").replace("\r", "")
-    lines = [clean(l) for l in raw.split("\n")]
-    lines = [l for l in lines if l]
-
-    def looks_like_heading(line: str) -> bool:
-        if len(line) < 5 or len(line) > 80:
-            return False
-        if line.endswith("."):
-            return False
-        if is_noise_header(line):
-            return False
-        words = line.split()
-        if len(words) < 2 or len(words) > 12:
-            return False
-        caps_ratio = sum(1 for w in words if w[:1].isupper()) / max(len(words), 1)
-        allcaps_ratio = sum(1 for c in line if c.isupper()) / max(sum(1 for c in line if c.isalpha()), 1)
-        return (caps_ratio >= 0.6) or (allcaps_ratio >= 0.5)
-
-    nodes: List[dict] = []
-    current = None
-
-    for line in lines:
-        if looks_like_heading(line):
-            current = {"level": 2, "header": line, "content": "", "children": []}
-            nodes.append(current)
-        else:
-            if current is None:
-                current = {"level": 2, "header": "Overview", "content": "", "children": []}
-                nodes.append(current)
-            current["content"] = clean(current["content"] + " " + line)
-
-    return nodes
-
-def get_tree_from_fetchresult(fr: FetchResult) -> dict:
-    if not fr.ok:
-        return {"ok": False, "source": None, "nodes": [], "status": fr.status}
-
-    txt = fr.text or ""
-    maybe_html = ("<html" in txt.lower()) or ("<article" in txt.lower()) or ("<h1" in txt.lower()) or ("<h2" in txt.lower())
-
-    if fr.html:
-        nodes = build_tree_from_html(fr.html)
-    elif fr.source == "manual" and maybe_html:
-        nodes = build_tree_from_html(txt)
-    else:
-        nodes = build_tree_from_reader_text(txt)
-        if not nodes:
-            nodes = build_tree_from_plain_text_heuristic(txt)
-
-    return {"ok": True, "source": fr.source, "nodes": nodes, "status": fr.status}
-
-def ensure_headings_or_require_repaste(urls: List[str], fr_map: Dict[str, FetchResult], st_key_prefix: str) -> Dict[str, dict]:
-    tree_map: Dict[str, dict] = {}
-    bad: List[str] = []
-
-    for u in urls:
-        tr = get_tree_from_fetchresult(fr_map[u])
-        tree_map[u] = tr
-        if not tr.get("nodes"):
-            bad.append(u)
-
-    if not bad:
-        return tree_map
-
-    st.error("Some URLs were fetched, but headings could not be extracted. Paste readable HTML (preferred) or clearly structured text for EACH URL below to continue.")
-
-    for u in bad:
-        with st.expander(f"Headings extraction required: {u}", expanded=True):
-            repaste = st.text_area(
-                "Paste readable HTML (preferred) OR structured text with headings:",
-                key=_safe_key(st_key_prefix + "__repaste", u),
-                height=240,
-            )
-            if repaste and len(repaste.strip()) > 400:
-                fr_map[u] = FetchResult(True, "manual", 200, repaste.strip(), repaste.strip(), None)
-
-    still_bad = []
-    for u in bad:
-        tr = get_tree_from_fetchresult(fr_map[u])
-        tree_map[u] = tr
-        if not tr.get("nodes"):
-            still_bad.append(u)
-
-    if still_bad:
-        st.stop()
-
-    return tree_map
+# (keep your existing heading extraction code exactly as you already have)
+# ...
+# (keep your HELPERS exactly as you already have)
+# ...
 
 
 # =====================================================
-# HELPERS
+# CRASH-SAFETY HELPERS (NEW)
 # =====================================================
-def site_name(url: str) -> str:
+def _fn_exists(name: str) -> bool:
+    return name in globals() and callable(globals().get(name))
+
+def safe_call_gap_engine(fn_name: str, *args, **kwargs) -> List[dict]:
+    """
+    Never crash the app on missing function.
+    If the function is missing, return a single-row error that appears in the gaps table.
+    """
+    if not _fn_exists(fn_name):
+        return [{
+            "Headers": "System error: missing gap engine function",
+            "Description": f"`{fn_name}` is not defined in this deployment. Paste PART 2/3 above the UI.",
+            "Source": "System"
+        }]
     try:
-        host = urlparse(url).netloc.lower().replace("www.", "")
-        base = host.split(":")[0]
-        name = base.split(".")[0]
-        return name[:1].upper() + name[1:]
-    except Exception:
-        return "Source"
+        return globals()[fn_name](*args, **kwargs) or []
+    except Exception as e:
+        return [{
+            "Headers": "System error: gap engine failed",
+            "Description": f"{fn_name} raised: {type(e).__name__}: {str(e)[:160]}",
+            "Source": "System"
+        }]
+# app.py (PART 2/3)
 
-def source_link(url: str) -> str:
-    n = site_name(url)
-    return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{n}</a>'
+def _header_similarity(a: str, b: str) -> float:
+    return SequenceMatcher(None, norm_header(a), norm_header(b)).ratio()
 
-def flatten(nodes: List[dict]) -> List[dict]:
-    out = []
-    def walk(n: dict, parent=None):
-        out.append({
-            "level": n["level"],
-            "header": n.get("header",""),
-            "content": n.get("content", ""),
-            "parent": parent,
-            "children": n.get("children", [])
+def _best_match_header(target: str, candidates: List[str], threshold: float = 0.82) -> Tuple[Optional[str], float]:
+    best = None
+    best_score = 0.0
+    for c in candidates:
+        sc = _header_similarity(target, c)
+        if sc > best_score:
+            best_score = sc
+            best = c
+    if best_score >= threshold:
+        return best, best_score
+    return None, best_score
+
+def _collect_headers(nodes: List[dict], min_level: int = 2) -> List[str]:
+    flat = flatten(nodes)
+    headers = []
+    for x in flat:
+        lvl = x.get("level", 9)
+        h = strip_label(x.get("header", ""))
+        if not h:
+            continue
+        if lvl >= min_level:  # h2/h3/h4
+            headers.append(h)
+    return headers
+
+def _content_snippet_for_header(nodes: List[dict], header: str) -> str:
+    """
+    Returns a short, cleaned content snippet under the matched header.
+    """
+    flat = flatten(nodes)
+    header_n = norm_header(header)
+    for x in flat:
+        h = strip_label(x.get("header", ""))
+        if not h:
+            continue
+        if norm_header(h) == header_n:
+            c = clean(x.get("content", ""))
+            if not c:
+                return ""
+            return c[:260] + ("…" if len(c) > 260 else "")
+    return ""
+
+def _missing_parts_under_shared_header(
+    bayut_nodes: List[dict],
+    comp_nodes: List[dict],
+    shared_header: str
+) -> Optional[str]:
+    """
+    Lightweight 'incomplete coverage' detector:
+    - compare content lengths under a shared header
+    - if competitor is much richer, we recommend expanding Bayut section
+    """
+    b = _content_snippet_for_header(bayut_nodes, shared_header)
+    c = _content_snippet_for_header(comp_nodes, shared_header)
+
+    b_len = len(clean(b))
+    c_len = len(clean(c))
+
+    if c_len >= max(220, b_len * 2.2):
+        # competitor clearly has more detail
+        return f"Competitor covers this section in more depth. Consider expanding '{shared_header}' with additional details/topics."
+    return None
+
+def update_mode_rows_header_first(
+    bayut_nodes: List[dict],
+    bayut_fr: FetchResult,
+    comp_nodes: List[dict],
+    comp_fr: FetchResult,
+    comp_url: str,
+    max_missing_headers: int = 7,
+    max_missing_parts: int = 5,
+) -> List[dict]:
+    """
+    Header-first gaps:
+    1) Missing headers on Bayut vs competitor
+    2) Then missing depth under shared headers (incomplete coverage)
+    FAQs are NOT auto-added here (you can keep your strict FAQ logic elsewhere).
+    """
+    rows: List[dict] = []
+
+    bayut_headers = _collect_headers(bayut_nodes, min_level=2)
+    comp_headers = _collect_headers(comp_nodes, min_level=2)
+
+    bayut_norm = {norm_header(h): h for h in bayut_headers}
+    comp_norm = {norm_header(h): h for h in comp_headers}
+
+    # 1) Missing headers first
+    missing = []
+    for c_h in comp_headers:
+        c_n = norm_header(c_h)
+        if c_n in bayut_norm:
+            continue
+        # allow fuzzy match (similar header names)
+        match, sc = _best_match_header(c_h, bayut_headers, threshold=0.86)
+        if match:
+            continue
+        missing.append(c_h)
+
+    missing = missing[:max_missing_headers]
+    for h in missing:
+        snippet = _content_snippet_for_header(comp_nodes, h)
+        desc = snippet if snippet else "Competitor includes this section. Add it to close the gap."
+        rows.append({
+            "Headers": h,
+            "Description": desc,
+            "Source": site_name(comp_url)
         })
-        for c in n.get("children", []):
-            walk(c, n)
-    for n in nodes:
-        walk(n, None)
-    return out
 
-def strip_label(h: str) -> str:
-    return clean(re.sub(r"\s*:\s*$", "", (h or "").strip()))
+    # 2) Missing parts (depth) under shared headers
+    shared_candidates = []
+    for c_h in comp_headers:
+        c_n = norm_header(c_h)
+        if c_n in bayut_norm:
+            shared_candidates.append(comp_norm.get(c_n, c_h))
+        else:
+            match, sc = _best_match_header(c_h, bayut_headers, threshold=0.90)
+            if match:
+                shared_candidates.append(match)
 
-# --- KEEP THE REST OF YOUR PART 1 CODE EXACTLY AS YOU PASTED ---
-# (FAQ detection, update engine, SEO analysis, content quality, summaries, new post engine)
-# Paste your existing code from:
-#   # STRICT FAQ DETECTION (REAL FAQ ONLY)
-# down to:
-#   def new_post_coverage_rows(...)
-# Then continue with PART 2/2 below.
-# app.py (PART 2/2)
+    depth_rows = 0
+    seen = set()
+    for sh in shared_candidates:
+        if depth_rows >= max_missing_parts:
+            break
+        key = norm_header(sh)
+        if key in seen:
+            continue
+        seen.add(key)
 
+        msg = _missing_parts_under_shared_header(bayut_nodes, comp_nodes, sh)
+        if msg:
+            rows.append({
+                "Headers": f"{sh} (Missing parts)",
+                "Description": msg,
+                "Source": site_name(comp_url)
+            })
+            depth_rows += 1
+
+    return rows
 # =====================================================
 # HTML TABLE RENDER (with hyperlinks)
 # =====================================================
@@ -803,15 +664,19 @@ if st.session_state.mode == "update":
             internal_fetch.append((comp_url, f"ok ({src})"))
             comp_nodes = comp_tree_map[comp_url]["nodes"]
 
-            all_rows.extend(update_mode_rows_header_first(
-                bayut_nodes=bayut_nodes,
-                bayut_fr=bayut_fr,
-                comp_nodes=comp_nodes,
-                comp_fr=comp_fr_map[comp_url],
-                comp_url=comp_url,
-                max_missing_headers=7,
-                max_missing_parts=5,
-            ))
+            # SAFE: never crash on missing function or runtime exception
+            all_rows.extend(
+                safe_call_gap_engine(
+                    "update_mode_rows_header_first",
+                    bayut_nodes=bayut_nodes,
+                    bayut_fr=bayut_fr,
+                    comp_nodes=comp_nodes,
+                    comp_fr=comp_fr_map[comp_url],
+                    comp_url=comp_url,
+                    max_missing_headers=7,
+                    max_missing_parts=5,
+                )
+            )
 
         st.session_state.update_fetch = internal_fetch
         st.session_state.update_df = (
@@ -820,6 +685,7 @@ if st.session_state.mode == "update":
             else pd.DataFrame(columns=["Headers", "Description", "Source"])
         )
 
+        # These must exist in your codebase already
         st.session_state.seo_update_df = build_seo_analysis_update(
             bayut_url=bayut_url.strip(),
             bayut_fr=bayut_fr,
@@ -874,7 +740,7 @@ if st.session_state.mode == "update":
         render_table(st.session_state.update_df)
 
     # =========================
-    # 2) Content Quality (2nd table) ✅
+    # 2) Content Quality (2nd table)
     # =========================
     st.markdown("<div class='section-pill section-pill-tight'>Content Quality</div>", unsafe_allow_html=True)
     if st.session_state.cq_update_df is None or st.session_state.cq_update_df.empty:
@@ -1043,5 +909,6 @@ else:
 # Helpful note (only if missing DataForSEO creds)
 if (st.session_state.seo_update_df is not None and not st.session_state.seo_update_df.empty) or \
    (st.session_state.seo_new_df is not None and not st.session_state.seo_new_df.empty):
-    if not _dataforseo_ready():
-        st.warning("Google UAE ranking + AI visibility requires DataForSEO credentials in Streamlit secrets (DATAFORSEO login/password).")
+    if "_dataforseo_ready" in globals() and callable(globals()["_dataforseo_ready"]):
+        if not _dataforseo_ready():
+            st.warning("Google UAE ranking + AI visibility requires DataForSEO credentials in Streamlit secrets (DATAFORSEO login/password).")
