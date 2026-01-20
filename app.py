@@ -2191,7 +2191,7 @@ if "cq_new_df" not in st.session_state:
 # UI - UPDATE MODE
 # =====================================================
 if st.session_state.mode == "update":
-    st.markdown("<div class='section-pill section-pill-tight'>Update Mode (Header-first gaps)</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-pill section-pill-tight'>Update Mode</div>", unsafe_allow_html=True)
 
     bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
     competitors_text = st.text_area(
