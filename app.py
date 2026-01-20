@@ -121,15 +121,15 @@ st.markdown(
         text-align: center !important;
         font-weight: 900 !important;
         color: {TEXT_DARK} !important;
-        padding: 12px 10px !important;
+        padding: 8px 18px !important;
         border-bottom: 1px solid #E5E7EB !important;
       }}
       tbody td {{
         vertical-align: top !important;
-        padding: 12px 10px !important;
+        padding: 8px 8px !important;
         border-bottom: 1px solid #F1F5F9 !important;
         color: {TEXT_DARK} !important;
-        font-size: 14px !important;
+        font-size: 12.5px !important;
       }}
       tbody tr:last-child td {{
         border-bottom: 0 !important;
