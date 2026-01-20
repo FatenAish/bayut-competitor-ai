@@ -1573,7 +1573,7 @@ def seo_row_for_page(label: str, url: str, fr: FetchResult, nodes: List[dict], m
         "Meta description": meta_desc,
         "Slug": slug,
         "Media used": media,
-        "FKW": fkw,
+        "__fkw": fkw,  # internal only (hide from table)
     }
 
 
@@ -1592,7 +1592,7 @@ def enrich_seo_df_with_rank_and_ai(df: pd.DataFrame, manual_query: str = "") -> 
             df2.at[i, "Google rank UAE (Mobile)"] = "Not applicable"
             continue
 
-        query = clean(manual_query) if clean(manual_query) else str(r.get("FKW", ""))
+        query = clean(manual_query) if clean(manual_query) else str(r.get("__fkw", ""))
         if not query or query == "Not available":
             df2.at[i, "Google rank UAE (Mobile)"] = "Not available"
             rows_ai.append({
