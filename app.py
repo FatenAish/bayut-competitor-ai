@@ -1374,30 +1374,61 @@ def _count_headers(html: str) -> str:
     total = h1 + h2 + h3
     return f"H1:{h1} / H2:{h2} / H3:{h3} / Total:{total}"
 
+from urllib.parse import urlparse, urljoin
+
 def _count_internal_outbound_links(html: str, page_url: str) -> Tuple[int, int]:
     if not html:
         return (0, 0)
+
     soup = BeautifulSoup(html, "html.parser")
-    a_tags = soup.find_all("a", href=True)
+
+    # remove non-body areas globally
+    for t in soup.find_all(["nav","footer","header","aside","script","style","noscript","form"]):
+        t.decompose()
+
+    # main content container
+    root = soup.find("article") or soup.find("main") or soup
+    for bad in root.find_all(["nav","footer","header","aside"]):
+        bad.decompose()
+
+    # BODY ONLY: links inside typical body text blocks
+    body_blocks = root.find_all(["p","li","td","th","blockquote","figcaption"])
+
     internal = 0
     outbound = 0
+
     base_dom = domain_of(page_url)
-    for a in a_tags:
-        href = a.get("href") or ""
-        if href.startswith("#") or href.lower().startswith("mailto:") or href.lower().startswith("tel:"):
-            continue
-        try:
-            p = urlparse(href)
-            if not p.netloc:
+    base_root = ".".join(base_dom.split(".")[-2:]) if base_dom else ""
+
+    for blk in body_blocks:
+        for a in blk.find_all("a", href=True):
+            href = (a.get("href") or "").strip()
+            if not href:
+                continue
+
+            hlow = href.lower()
+            if hlow.startswith("#") or hlow.startswith("mailto:") or hlow.startswith("tel:") or hlow.startswith("javascript:"):
+                continue
+
+            full = urljoin(page_url, href)
+            try:
+                p = urlparse(full)
+            except Exception:
+                continue
+
+            dom = (p.netloc or "").lower().replace("www.", "")
+            if not dom:
+                internal += 1
+                continue
+
+            # treat subdomains as internal
+            if base_root and dom.endswith(base_root):
+                internal += 1
+            elif dom == base_dom:
                 internal += 1
             else:
-                dom = p.netloc.lower().replace("www.", "")
-                if dom == base_dom:
-                    internal += 1
-                else:
-                    outbound += 1
-        except Exception:
-            continue
+                outbound += 1
+
     return (internal, outbound)
 
 def _schema_present(html: str) -> str:
