@@ -1481,20 +1481,21 @@ def build_seo_analysis_update(
         rows.append(seo_row_for_page_extended(site_name(cu), cu, fr, nodes, manual_fkw=manual_fkw))
     df = pd.DataFrame(rows)
     cols = [
-        "Page",
-        "SEO Title",
-        "Meta Description",
-        "URL Slug",
-        "Headers (H1/H2/H3/Total)",
-        "FKW Usage",
-        "Robots Meta (index/follow)",
-        "Internal Links Count",
-        "Outbound Links Count",
-        "Media (Images/Video/Tables)",
-        "Schema Present",
-        "__fkw",
-        "__url",
-    ]
+    "Page",
+    "UAE Rank (Mobile)",
+    "SEO Title",
+    "Meta Description",
+    "URL Slug",
+    "Headers (H1/H2/H3/Total)",
+    "FKW Usage",
+    "Robots Meta (index/follow)",
+    "Internal Links Count",
+    "Outbound Links Count",
+    "Media (Images/Video/Tables)",
+    "Schema Present",
+    "__fkw",
+    "__url",
+]
     for c in cols:
         if c not in df.columns:
             df[c] = ""
@@ -1519,20 +1520,21 @@ def build_seo_analysis_newpost(
 
     # ✅ Canonical URL removed (as you asked)
     cols = [
-        "Page",
-        "SEO Title",
-        "Meta Description",
-        "URL Slug",
-        "Headers (H1/H2/H3/Total)",
-        "FKW Usage",
-        "Robots Meta (index/follow)",
-        "Internal Links Count",
-        "Outbound Links Count",
-        "Media (Images/Video/Tables)",
-        "Schema Present",
-        "__fkw",
-        "__url",
-    ]
+    "Page",
+    "UAE Rank (Mobile)",
+    "SEO Title",
+    "Meta Description",
+    "URL Slug",
+    "Headers (H1/H2/H3/Total)",
+    "FKW Usage",
+    "Robots Meta (index/follow)",
+    "Internal Links Count",
+    "Outbound Links Count",
+    "Media (Images/Video/Tables)",
+    "Schema Present",
+    "__fkw",
+    "__url",
+]
     for c in cols:
         if c not in df.columns:
             df[c] = ""
