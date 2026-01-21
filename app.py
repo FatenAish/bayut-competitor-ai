@@ -2612,6 +2612,13 @@ if app_source:
         mime="text/x-python",
         use_container_width=True,
     )
+    st.sidebar.download_button(
+        "Download app.py.txt",
+        app_source,
+        file_name="app.py.txt",
+        mime="text/plain",
+        use_container_width=True,
+    )
 
 if "update_df" not in st.session_state:
     st.session_state.update_df = pd.DataFrame()
