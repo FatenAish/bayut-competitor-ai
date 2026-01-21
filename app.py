@@ -717,6 +717,61 @@ def _looks_like_question(s: str) -> bool:
         return True
     return False
 
+def _extract_questions_from_text(text: str) -> List[str]:
+    """
+    Fallback when HTML isn't available (e.g., Jina/text-only fetch).
+    Extract question-like lines/sentences with minimal false positives.
+    """
+    if not text:
+        return []
+
+    raw = (text or "").replace("\r", "\n")
+    lines = [clean(l) for l in raw.split("\n") if clean(l)]
+
+    candidates: List[str] = []
+
+    # 1) Question-looking lines
+    for l in lines[:2500]:
+        if 6 <= len(l) <= 180 and _looks_like_question(l):
+            candidates.append(normalize_question(l))
+
+    # 2) Question-looking sentences (for long paragraphs)
+    if len(candidates) < 3:
+        parts = re.split(r"(?<=[\?\!])\s+|(?<=\.)\s+", raw)
+        for p in parts[:1200]:
+            p = clean(p)
+            if 6 <= len(p) <= 180 and _looks_like_question(p):
+                candidates.append(normalize_question(p))
+
+    # Dedupe
+    out: List[str] = []
+    seen = set()
+    for q in candidates:
+        k = norm_header(q)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        out.append(q)
+    return out[:60]
+
+def _has_faq_signal_in_text(text: str, min_questions: int = 3) -> bool:
+    """
+    Detect FAQ sections even if headings weren't extracted.
+    - Strong signal: "faq"/"frequently asked" + >=2 questions
+    - Or: >=5 distinct questions overall (dense Q/A blocks)
+    """
+    t = (text or "").lower()
+    qs = _extract_questions_from_text(text)
+    if not qs:
+        return False
+
+    has_faq_keyword = ("faq" in t) or ("frequently asked" in t)
+    if has_faq_keyword and len(qs) >= max(2, min_questions - 1):
+        return True
+
+    # Dense-question fallback (to catch accordion dumps)
+    return len(qs) >= max(5, min_questions + 2)
+
 def normalize_question(q: str) -> str:
     q = clean(q or "")
     q = re.sub(r"^\s*\d+[\.\)]\s*", "", q)
@@ -857,6 +912,9 @@ def page_has_real_faq(fr: FetchResult, nodes: List[dict]) -> bool:
     # 3) Heading-based fallback (your old strict logic, kept)
     faq_nodes = _faq_heading_nodes(nodes)
     if not faq_nodes:
+        # 4) Text-only fallback (e.g., Jina/textise) where headings may be lost
+        if fr and _has_faq_signal_in_text(fr.text or "", min_questions=3):
+            return True
         return False
 
     # if schema exists, already returned True above
@@ -995,10 +1053,10 @@ def missing_faqs_row(
     bayut_set = {q_key(q) for q in bayut_qs if q}
 
     if not bayut_qs:
-        topics = faq_subjects_from_questions(comp_qs, limit=10)
+        # User requested "gaps only": don't enumerate competitor FAQs if Bayut has none.
         return {
             "Headers": "FAQs",
-            "Description": "Competitor has a real FAQ section covering topics such as: " + ", ".join(topics) + ".",
+            "Description": "Missing FAQ section (competitor includes FAQs; Bayut does not).",
             "Source": source_link(comp_url),
         }
 
@@ -1012,6 +1070,97 @@ def missing_faqs_row(
         "Description": "Missing FAQ topics: " + ", ".join(topics) + ".",
         "Source": source_link(comp_url),
     }
+
+def _merge_gap_rows_by_header(rows: List[dict]) -> List[dict]:
+    """
+    Merge same header across competitors into one row with combined sources.
+    Also tries to merge "Missing subtopics" lists when present.
+    """
+    def strip_html(a: str) -> str:
+        return clean(re.sub(r"<[^>]+>", "", a or ""))
+
+    def parse_missing_subtopics(desc: str) -> List[str]:
+        # Expecting our standardized phrasing: "Missing subtopics: a; b; c."
+        m = re.search(r"Missing subtopics:\s*(.+?)(?:\.\s*$|$)", desc or "", flags=re.I)
+        if not m:
+            return []
+        body = clean(m.group(1))
+        if not body:
+            return []
+        parts = [clean(p) for p in re.split(r"\s*;\s*|\s*,\s*", body) if clean(p)]
+        # Dedupe by normalized header
+        out = []
+        seen = set()
+        for p in parts:
+            k = norm_header(p)
+            if not k or k in seen:
+                continue
+            seen.add(k)
+            out.append(p)
+        return out
+
+    buckets: Dict[str, dict] = {}
+    for r in rows or []:
+        hdr = clean(r.get("Headers", ""))
+        if not hdr:
+            continue
+        key = norm_header(hdr)
+        src = clean(r.get("Source", ""))
+        desc = clean(r.get("Description", ""))
+
+        if key not in buckets:
+            buckets[key] = {
+                "Headers": hdr,
+                "Description": desc,
+                "Source": src,
+                "_sources": set([strip_html(src)]) if src else set(),
+                "_source_html": [src] if src else [],
+                "_missing_subtopics": parse_missing_subtopics(desc),
+            }
+            continue
+
+        b = buckets[key]
+
+        # Merge sources (keep HTML)
+        if src:
+            s_plain = strip_html(src)
+            if s_plain and s_plain not in b["_sources"]:
+                b["_sources"].add(s_plain)
+                b["_source_html"].append(src)
+
+        # Merge missing subtopics if both sides have them
+        cur = b.get("_missing_subtopics") or []
+        nxt = parse_missing_subtopics(desc)
+        if nxt:
+            seen = {norm_header(x) for x in cur}
+            for it in nxt:
+                k = norm_header(it)
+                if k and k not in seen:
+                    cur.append(it)
+                    seen.add(k)
+            b["_missing_subtopics"] = cur
+
+        # Prefer the more informative description, but preserve merged subtopics if we have them
+        if len(desc) > len(b.get("Description", "")):
+            b["Description"] = desc
+
+    merged = []
+    for b in buckets.values():
+        # Recompose description if we have merged subtopics list
+        ms = b.get("_missing_subtopics") or []
+        if ms:
+            # Preserve whether this is a "Missing section" description
+            prefix = "Missing section. " if (b.get("Description", "").lower().startswith("missing section")) else ""
+            b["Description"] = prefix + "Missing subtopics: " + "; ".join(ms) + "."
+
+        b["Source"] = ", ".join(b.get("_source_html") or [b.get("Source", "")]).strip(", ").strip()
+        # Drop internal fields
+        b.pop("_sources", None)
+        b.pop("_source_html", None)
+        b.pop("_missing_subtopics", None)
+        merged.append({k: b[k] for k in ["Headers", "Description", "Source"] if k in b})
+
+    return merged
 # =====================================================
 # SECTION EXTRACTION (HEADER-FIRST COMPARISON)
 # =====================================================
@@ -1187,27 +1336,42 @@ def update_mode_rows_header_first(
         comp_h2_ranked.append((score, h2))
     comp_h2_ranked.sort(key=lambda x: x[0], reverse=True)
 
+    # Build lookup of competitor children by parent H2
+    comp_children_by_h2: Dict[str, List[str]] = {}
+    for h3 in comp_h3:
+        parent = clean(h3.get("parent_h2") or "")
+        if not parent:
+            continue
+        k = norm_header(parent)
+        comp_children_by_h2.setdefault(k, []).append(h3["header"])
+
+    # Build lookup of Bayut children by parent H2 (normed)
+    bayut_children_by_h2: Dict[str, List[str]] = {}
+    for h3 in bayut_h3:
+        parent = clean(h3.get("parent_h2") or "")
+        if not parent:
+            continue
+        k = norm_header(parent)
+        bayut_children_by_h2.setdefault(k, []).append(h3["header"])
+
     missing_h2_norms = set()
 
-    missing_rows = []
+    # 1) Missing whole H2 sections (one row per H2, include ALL subtopics in description)
+    missing_rows: List[dict] = []
     for _, cs in comp_h2_ranked:
         m = find_best_bayut_match(cs["header"], bayut_h2, min_score=0.73)
         if m:
             continue
 
-        missing_h2_norms.add(norm_header(cs["header"]))
+        h2_key = norm_header(cs["header"])
+        missing_h2_norms.add(h2_key)
 
-        children = []
-        for h3 in comp_h3:
-            if norm_header(h3.get("parent_h2") or "") == norm_header(cs["header"]):
-                children.append(h3["header"])
-
-        comp_text = (cs.get("content", "") or "")
-        desc = summarize_missing_section_action(cs["header"], children, comp_text)
-
+        children = comp_children_by_h2.get(h2_key, []) or []
+        # "gaps only" + group by header: list all child headings as the gaps
         if children:
-            hint = ", ".join(children[:3])
-            desc = desc + f" (Breakdown: {hint}.)"
+            desc = "Missing section. Missing subtopics: " + "; ".join(children) + "."
+        else:
+            desc = "Missing section (competitor has this section; Bayut does not)."
 
         missing_rows.append({
             "Headers": cs["header"],
@@ -1220,30 +1384,51 @@ def update_mode_rows_header_first(
 
     rows.extend(missing_rows)
 
+    # 2) For matched H2s, aggregate missing H3 subtopics into a SINGLE row per parent H2
     if len(rows) < max_missing_headers:
-        for cs in comp_h3:
-            parent = cs.get("parent_h2") or ""
-            if parent and norm_header(parent) in missing_h2_norms:
+        grouped_missing: List[dict] = []
+
+        for _, cs in comp_h2_ranked:
+            if len(rows) + len(grouped_missing) >= max_missing_headers:
+                break
+
+            # If the H2 itself is missing we already added it above
+            if norm_header(cs["header"]) in missing_h2_norms:
                 continue
 
-            if parent:
-                parent_match = find_best_bayut_match(parent, bayut_h2, min_score=0.73)
-                if not parent_match:
-                    continue
-
-            m = find_best_bayut_match(cs["header"], bayut_h3, min_score=0.73)
-            if m:
+            parent_match = find_best_bayut_match(cs["header"], bayut_h2, min_score=0.73)
+            if not parent_match:
                 continue
 
-            label = f"{parent} → {cs['header']}" if parent else cs["header"]
-            rows.append({
-                "Headers": label,
-                "Description": summarize_missing_section_action(cs["header"], None, cs.get("content", "")),
+            bayut_parent = parent_match["bayut_section"]["header"]
+            comp_k = norm_header(cs["header"])
+            bayut_k = norm_header(bayut_parent)
+
+            comp_children = comp_children_by_h2.get(comp_k, []) or []
+            if not comp_children:
+                continue
+
+            bayut_children = bayut_children_by_h2.get(bayut_k, []) or []
+
+            # Determine which competitor subtopics are missing on Bayut
+            missing_children: List[str] = []
+            for ch in comp_children:
+                best_sc = 0.0
+                for bh in bayut_children:
+                    best_sc = max(best_sc, header_similarity(ch, bh))
+                if best_sc < 0.74:
+                    missing_children.append(ch)
+
+            if not missing_children:
+                continue
+
+            grouped_missing.append({
+                "Headers": cs["header"],
+                "Description": "Missing subtopics: " + "; ".join(missing_children) + ".",
                 "Source": source_link(comp_url),
             })
 
-            if len(rows) >= max_missing_headers:
-                break
+        rows.extend(grouped_missing)
 
     missing_parts_rows = []
     for cs in comp_secs:
@@ -1281,6 +1466,8 @@ def update_mode_rows_header_first(
     if faq_row:
         rows.append(faq_row)
 
+    # Merge identical headers across competitors (e.g., "Conclusion")
+    rows = _merge_gap_rows_by_header(rows)
     return dedupe_rows(rows)
 
 # =====================================================
