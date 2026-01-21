@@ -202,7 +202,7 @@ section.main > div.block-container{
   color: white;
 }
 .hero-h1{
-  font-size: 60px;
+  font-size: 62px;
   line-height: 1.06;
   margin: 0;
   color: hsl(var(--foreground));
@@ -1695,7 +1695,14 @@ def extract_media_used(html: str) -> str:
         if any(k in src for k in ["youtube", "youtu.be", "vimeo", "dailymotion"]):
             videos += 1
 
-    return f"Images:{imgs} / Video:{videos} / Tables:{tables}"
+    types = []
+    if imgs:
+        types.append("Images")
+    if videos:
+        types.append("Video")
+    if tables:
+        types.append("Tables")
+    return ", ".join(types) if types else "None detected"
 
 def tokenize(text: str) -> List[str]:
     text = (text or "").lower()
@@ -1909,7 +1916,7 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
     h_counts = _count_headers(fr.html or fr.text or "")
     fkw = pick_fkw_only(seo_title, get_first_h1(nodes), h_blob, fr.text or "", manual_fkw=manual_fkw)
     kw_usage = kw_usage_summary(seo_title, get_first_h1(nodes), h_blob, fr.text or "", fkw)
-    internal_links_count, outbound_links_count = _count_internal_outbound_links(fr.html or "", url or "")
+    _, outbound_links_count = _count_internal_outbound_links(fr.html or "", url or "")
     media = extract_media_used(fr.html or "")
     schema = _schema_present(fr.html or "")
     _, robots = _extract_canonical_and_robots(fr.html or "")
@@ -1923,7 +1930,6 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
         "Headers (H1/H2/H3/Total)": h_counts,
         "FKW Usage": kw_usage,
         "Robots Meta (index/follow)": robots,
-        "Internal Links Count": str(internal_links_count),
         "Outbound Links Count": str(outbound_links_count),
         "Media (Images/Video/Tables)": media,
         "Schema Present": schema,
@@ -1950,7 +1956,7 @@ def build_seo_analysis_update(
     cols = [
         "Page","UAE Rank (Mobile)","SEO Title","Meta Description","URL Slug",
         "Headers (H1/H2/H3/Total)","FKW Usage","Robots Meta (index/follow)",
-        "Internal Links Count","Outbound Links Count","Media (Images/Video/Tables)",
+        "Outbound Links Count","Media (Images/Video/Tables)",
         "Schema Present","__fkw","__url"
     ]
     for c in cols:
@@ -1976,7 +1982,7 @@ def build_seo_analysis_newpost(
     cols = [
         "Page","UAE Rank (Mobile)","SEO Title","Meta Description","URL Slug",
         "Headers (H1/H2/H3/Total)","FKW Usage","Robots Meta (index/follow)",
-        "Internal Links Count","Outbound Links Count","Media (Images/Video/Tables)",
+        "Outbound Links Count","Media (Images/Video/Tables)",
         "Schema Present","__fkw","__url"
     ]
     for c in cols:
