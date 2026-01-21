@@ -145,14 +145,25 @@ st.markdown(
         padding: 2px 6px;
         border-radius: 8px;
       }}
-      .details-link summary {{
+      details.details-card summary {{
         cursor: pointer;
-        color: {BAYUT_GREEN};
-        text-decoration: underline;
-        font-weight: 900;
+        color: {TEXT_DARK};
+        font-weight: 800;
         list-style: none;
+        display: block;
+        padding: 6px 10px;
+        border: 1px solid #E5E7EB;
+        border-radius: 10px;
+        background: #F9FAFB;
       }}
-      .details-link summary::-webkit-details-marker {{
+      details.details-card summary:hover {{
+        background: #F3F4F6;
+      }}
+      details.details-card[open] summary {{
+        border-bottom-left-radius: 0;
+        border-bottom-right-radius: 0;
+      }}
+      details.details-card summary::-webkit-details-marker {{
         display: none;
       }}
       .details-box {{
@@ -162,6 +173,11 @@ st.markdown(
         border: 1px solid #E5E7EB;
         border-radius: 10px;
         color: {TEXT_DARK};
+      }}
+      details.details-card .details-box {{
+        margin-top: 0;
+        border-top: 0;
+        border-radius: 0 0 10px 10px;
       }}
       .ai-summary {{
         background: white;
@@ -205,11 +221,30 @@ DEFAULT_HEADERS = {
     "Pragma": "no-cache",
 }
 
-IGNORE_TAGS = {"nav", "footer", "header", "aside", "script", "style", "noscript"}
+IGNORE_TAGS = {"nav", "footer", "header", "aside", "script", "style", "noscript", "form"}
+CONTENT_CONTAINER_RE = re.compile(r"(content|article|post|entry|blog|main|body|page|story|news|text|detail|details)", re.I)
 
 
 def clean(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "")).strip()
+
+
+def pick_main_content_root(soup: BeautifulSoup):
+    body = soup.body or soup
+    candidates = []
+    for tag in body.find_all(["article", "main"]):
+        candidates.append(tag)
+    for tag in body.find_all(["div", "section"]):
+        ident = f"{tag.get('id', '')} {' '.join(tag.get('class', []) or [])}"
+        if CONTENT_CONTAINER_RE.search(ident):
+            candidates.append(tag)
+    if not candidates:
+        return body
+
+    def text_len(tag):
+        return len(clean(tag.get_text(" ")))
+
+    return max(candidates, key=text_len)
 
 
 def looks_blocked(text: str) -> bool:
@@ -293,8 +328,8 @@ class FetchAgent:
         soup = BeautifulSoup(html, "html.parser")
         for t in soup.find_all(list(self.ignore_tags)):
             t.decompose()
-        article = soup.find("article") or soup
-        return self.clean(article.get_text(" "))
+        root = pick_main_content_root(soup)
+        return self.clean(root.get_text(" "))
 
     def _fetch_playwright_html(self, url: str, timeout_ms: int = 25000) -> Tuple[bool, str]:
         if not PLAYWRIGHT_OK:
@@ -405,6 +440,8 @@ NOISE_PATTERNS = [
     r"\bfind (a|an) (home|property|apartment|villa)\b", r"\bbrowse\b", r"\bsearch\b",
     r"\bproperties for (rent|sale)\b", r"\bavailable (rental|properties)\b", r"\bget in touch\b",
     r"\bcontact (us|agent)\b", r"\bcall (us|now)\b", r"\bwhatsapp\b", r"\benquire\b",
+    r"\brequest a call\b", r"\brequest (a|an) callback\b", r"\bcall back\b", r"\bbook a call\b",
+    r"\bcontact (an|our) expert\b", r"\bfree consultation\b",
     r"\binquire\b", r"\bbook a viewing\b",
     r"\bshare\b", r"\bshare this\b", r"\bfollow us\b", r"\blike\b", r"\bsubscribe\b",
     r"\bnewsletter\b", r"\bsign up\b", r"\blogin\b", r"\bregister\b",
@@ -467,7 +504,7 @@ def build_tree_from_html(html: str) -> List[dict]:
     for t in soup.find_all(list(IGNORE_TAGS)):
         t.decompose()
 
-    root = soup.find("article") or soup
+    root = pick_main_content_root(soup)
     headings = root.find_all(["h1", "h2", "h3", "h4"])
 
     nodes: List[dict] = []
@@ -743,6 +780,27 @@ FAQ_TITLES = {
     "frequently asked question",
 }
 
+FAQ_NOISE_PATTERNS = [
+    r"\b(sign up|signup|sign-in|sign in|log in|login|register|create account|already have an account|dont have an account|don't have an account)\b",
+    r"\b(password|email address|username|forgot password|reset password)\b",
+    r"\b(terms|privacy|cookie)\b",
+    r"\bat least \d+ characters\b",
+    r"\bcontains a number\b",
+    r"\bcontains a symbol\b",
+    r"\bcontain the name or email\b",
+]
+
+
+def is_noise_faq_question(q: str) -> bool:
+    s = clean(q or "").lower()
+    if not s:
+        return True
+    for pat in FAQ_NOISE_PATTERNS:
+        if re.search(pat, s):
+            return True
+    return False
+
+
 def header_is_faq(header: str) -> bool:
     nh = norm_header(header)
     if not nh:
@@ -831,6 +889,8 @@ def _faq_questions_from_schema(html: str) -> List[str]:
                 qn = normalize_question(q)
                 if not qn or len(qn) < 6 or len(qn) > 180:
                     return
+                if is_noise_faq_question(qn):
+                    return
                 qs.append(qn)
 
             def walk(x):
@@ -893,8 +953,50 @@ def _faq_questions_from_html(html: str) -> List[str]:
             txt = clean(el.get_text(" "))
             if not txt or len(txt) < 6 or len(txt) > 180:
                 continue
-            if _looks_like_question(txt):
+            if _looks_like_question(txt) and not is_noise_faq_question(txt):
                 qs.append(normalize_question(txt))
+
+    seen = set()
+    out = []
+    for q in qs:
+        k = norm_header(q)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        out.append(q)
+    return out
+
+
+def _split_sentences_basic(text: str) -> List[str]:
+    if not text:
+        return []
+    parts = re.split(r"(?<=[.!?])\s+", text)
+    return [clean(p) for p in parts if clean(p)]
+
+
+def _faq_questions_from_text(text: str) -> List[str]:
+    if not text:
+        return []
+    t = text.lower()
+    if "faq" not in t and "frequently asked" not in t:
+        return []
+    qs: List[str] = []
+
+    for line in (text or "").splitlines():
+        s = clean(line)
+        if not s or len(s) > 200:
+            continue
+        if _looks_like_question(s) and not is_noise_faq_question(s):
+            qs.append(normalize_question(s))
+
+    if len(qs) < 2:
+        for sent in _split_sentences_basic(text):
+            if "?" not in sent:
+                continue
+            if _looks_like_question(sent) and not is_noise_faq_question(sent):
+                qs.append(normalize_question(sent))
+            if len(qs) >= 8:
+                break
 
     seen = set()
     out = []
@@ -917,7 +1019,7 @@ def _question_heading_children(node: dict) -> List[str]:
     qs = []
     for c in node.get("children", []) or []:
         hdr = clean(c.get("header", ""))
-        if hdr and _looks_like_question(hdr):
+        if hdr and _looks_like_question(hdr) and not is_noise_faq_question(hdr):
             qs.append(normalize_question(hdr))
     return qs
 
@@ -926,6 +1028,10 @@ def page_has_real_faq(fr: FetchResult, nodes: List[dict]) -> bool:
         if _has_faq_schema(fr.html):
             return True
         if len(_faq_questions_from_html(fr.html)) >= 2:
+            return True
+
+    if fr and fr.text:
+        if len(_faq_questions_from_text(fr.text)) >= 2:
             return True
 
     faq_nodes = _faq_heading_nodes(nodes)
@@ -946,6 +1052,8 @@ def extract_faq_questions(fr: FetchResult, nodes: List[dict]) -> List[str]:
     qs: List[str] = []
     if fr and fr.html:
         qs.extend(_faq_questions_from_html(fr.html))
+    if fr and fr.text:
+        qs.extend(_faq_questions_from_text(fr.text))
     for fn in _faq_heading_nodes(nodes):
         qs.extend(extract_questions_from_node(fn))
 
@@ -973,7 +1081,7 @@ def extract_questions_from_node(node: dict) -> List[str]:
             ch = clean(ch)
             if not ch or len(ch) > 160:
                 continue
-            if _looks_like_question(ch):
+            if _looks_like_question(ch) and not is_noise_faq_question(ch):
                 qs.append(normalize_question(ch))
 
     if len(qs) < 3:
@@ -1574,58 +1682,73 @@ def _count_headers(html: str) -> str:
 
 from urllib.parse import urlparse, urljoin
 
-def _count_internal_outbound_links(html: str, page_url: str) -> Tuple[int, int]:
-    if not html:
+def _count_internal_outbound_links(html: str, page_url: str, text_fallback: str = "") -> Tuple[int, int]:
+    if not html and not text_fallback:
         return (0, 0)
 
-    soup = BeautifulSoup(html, "html.parser")
+    links: List[str] = []
+    if html:
+        soup = BeautifulSoup(html, "html.parser")
 
-    # remove non-body areas globally
-    for t in soup.find_all(["nav","footer","header","aside","script","style","noscript","form"]):
-        t.decompose()
+        # remove non-body areas globally
+        for t in soup.find_all(["nav", "footer", "header", "aside", "script", "style", "noscript", "form"]):
+            t.decompose()
 
-    # main content container
-    root = soup.find("article") or soup.find("main") or soup
-    for bad in root.find_all(["nav","footer","header","aside"]):
-        bad.decompose()
+        # main content container
+        root = pick_main_content_root(soup)
+        for bad in root.find_all(["nav", "footer", "header", "aside", "form"]):
+            bad.decompose()
 
-    # BODY ONLY: links inside typical body text blocks
-    body_blocks = root.find_all(["p","li","td","th","blockquote","figcaption"])
+        for a in root.find_all("a", href=True):
+            href = (a.get("href") or "").strip()
+            if href:
+                links.append(href)
+
+    if not links and text_fallback:
+        link_re = re.compile(r"https?://[^\s\)\"'>]+")
+        links.extend(link_re.findall(text_fallback))
+        links.extend(re.findall(r"\]\((https?://[^)]+)\)", text_fallback))
+        links.extend(re.findall(r"\]\((/[^)]+)\)", text_fallback))
+        links.extend(re.findall(r"href=['\"](/[^'\"]+)['\"]", text_fallback, flags=re.I))
 
     internal = 0
     outbound = 0
 
     base_dom = domain_of(page_url)
     base_root = ".".join(base_dom.split(".")[-2:]) if base_dom else ""
+    seen = set()
 
-    for blk in body_blocks:
-        for a in blk.find_all("a", href=True):
-            href = (a.get("href") or "").strip()
-            if not href:
-                continue
+    for href in links:
+        href = (href or "").strip()
+        if not href:
+            continue
 
-            hlow = href.lower()
-            if hlow.startswith("#") or hlow.startswith("mailto:") or hlow.startswith("tel:") or hlow.startswith("javascript:"):
-                continue
+        hlow = href.lower()
+        if hlow.startswith("#") or hlow.startswith("mailto:") or hlow.startswith("tel:") or hlow.startswith("javascript:"):
+            continue
 
-            full = urljoin(page_url, href)
-            try:
-                p = urlparse(full)
-            except Exception:
-                continue
+        full = urljoin(page_url, href).split("#")[0]
+        if not full or full in seen:
+            continue
+        seen.add(full)
 
-            dom = (p.netloc or "").lower().replace("www.", "")
-            if not dom:
-                internal += 1
-                continue
+        try:
+            p = urlparse(full)
+        except Exception:
+            continue
 
-            # treat subdomains as internal
-            if base_root and dom.endswith(base_root):
-                internal += 1
-            elif dom == base_dom:
-                internal += 1
-            else:
-                outbound += 1
+        dom = (p.netloc or "").lower().replace("www.", "")
+        if not dom:
+            internal += 1
+            continue
+
+        # treat subdomains as internal
+        if base_root and dom.endswith(base_root):
+            internal += 1
+        elif dom == base_dom:
+            internal += 1
+        else:
+            outbound += 1
 
     return (internal, outbound)
 
@@ -1669,7 +1792,7 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
     h_counts = _count_headers(fr.html or fr.text or "")
     fkw = pick_fkw_only(seo_title, get_first_h1(nodes), h_blob, fr.text or "", manual_fkw=manual_fkw)
     kw_usage = kw_usage_summary(seo_title, get_first_h1(nodes), h_blob, fr.text or "", fkw)
-    internal_links_count, outbound_links_count = _count_internal_outbound_links(fr.html or "", url or "")
+    internal_links_count, outbound_links_count = _count_internal_outbound_links(fr.html or "", url or "", fr.text or "")
     media = extract_media_used(fr.html or "")
     schema = _schema_present(fr.html or "")
 
@@ -2089,42 +2212,51 @@ def _strong_claim_snippets(text: str, limit: int = 6) -> List[str]:
             break
     return out
 
+
+def _shorten_snippet(text: str, max_len: int = 120) -> str:
+    s = clean(text or "")
+    if len(s) <= max_len:
+        return s
+    return (s[: max_len - 1].rstrip() + "…") if max_len > 4 else s[:max_len]
+
 def _outdated_misleading_cell(last_modified: str, text: str) -> str:
     lm = clean(last_modified or "")
     lm_years = _extract_years(lm)
-    outdated_items = _outdated_snippets(text, max_year=2023, limit=6)
-    if lm_years and max(lm_years) <= 2023:
-        outdated_items.insert(0, f"Last modified date: {lm}")
+    outdated_items = _outdated_snippets(text, max_year=2023, limit=2)
+    wrong_items = _strong_claim_snippets(text, limit=2)
 
-    wrong_items = _strong_claim_snippets(text, limit=6)
-
-    has_outdated = bool(outdated_items)
+    has_outdated = bool(outdated_items) or (lm_years and max(lm_years) <= 2023)
     has_wrong = bool(wrong_items)
 
     if not has_outdated and not has_wrong:
         return "No obvious issues"
 
     if has_outdated and has_wrong:
-        label = "Outdated + Wrong info"
+        label = "Outdated + strong claims"
     elif has_outdated:
-        label = "Outdated info"
+        label = "Outdated signals"
     else:
-        label = "Wrong info"
+        label = "Strong claims"
 
-    def as_list(items: List[str]) -> str:
-        lis = "".join(f"<li>{html_lib.escape(i)}</li>" for i in items)
-        return f"<ul>{lis}</ul>" if lis else ""
+    points = []
+    if lm_years and max(lm_years) <= 2023:
+        points.append(f"Last modified shows {lm} (source: page metadata).")
+    if outdated_items:
+        points.append(
+            f"Year mention: \"{_shorten_snippet(outdated_items[0])}\" (source: page text)."
+        )
+    if wrong_items:
+        points.append(
+            f"Strong claim: \"{_shorten_snippet(wrong_items[0])}\" (source: page text)."
+        )
 
-    details = []
-    if has_outdated:
-        details.append("<div><strong>Outdated signals</strong>" + as_list(outdated_items) + "</div>")
-    if has_wrong:
-        details.append("<div><strong>Potentially wrong or unsupported claims</strong>" + as_list(wrong_items) + "</div>")
+    points = points[:3]
+    lis = "".join(f"<li>{html_lib.escape(i)}</li>" for i in points if i)
+    detail_html = f"<ul>{lis}</ul>" if lis else ""
 
-    detail_html = "".join(details)
     return (
-        "<details class='details-link'>"
-        f"<summary><span class='link-like'>{html_lib.escape(label)}</span></summary>"
+        "<details class='details-card'>"
+        f"<summary>{html_lib.escape(label)}</summary>"
         f"<div class='details-box'>{detail_html}</div>"
         "</details>"
     )
@@ -2434,6 +2566,14 @@ def section_header_pill(title: str):
     st.markdown(f"<div class='section-pill section-pill-tight'>{title}</div>", unsafe_allow_html=True)
 
 
+def get_app_source() -> str:
+    try:
+        with open(__file__, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return ""
+
+
 # =====================================================
 # MODE SELECTOR (CENTERED BUTTONS)
 # =====================================================
@@ -2463,6 +2603,15 @@ with outer_m:
 st.markdown("</div>", unsafe_allow_html=True)
 
 show_internal_fetch = st.sidebar.checkbox("Admin: show internal fetch log", value=False)
+app_source = get_app_source()
+if app_source:
+    st.sidebar.download_button(
+        "Download app.py",
+        app_source,
+        file_name="app.py",
+        mime="text/x-python",
+        use_container_width=True,
+    )
 
 if "update_df" not in st.session_state:
     st.session_state.update_df = pd.DataFrame()
@@ -2586,7 +2735,7 @@ if st.session_state.mode == "update":
         for u, s in st.session_state.update_fetch:
             st.sidebar.write(u, "—", s)
 
-    section_header_pill("Gaps Table")
+    section_header_pill("Content Gaps")
     if st.session_state.update_df is None or st.session_state.update_df.empty:
         st.info("Run analysis to see results.")
     else:
