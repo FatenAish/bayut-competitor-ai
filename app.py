@@ -2134,6 +2134,59 @@ def _collect_urls(obj) -> List[str]:
             urls.extend(_collect_urls(v))
     return urls
 
+def _dataforseo_items(data: dict) -> List[dict]:
+    items: List[dict] = []
+    if not isinstance(data, dict):
+        return items
+    for task in data.get("tasks") or []:
+        if task.get("status_code") != 20000:
+            continue
+        for res in task.get("result") or []:
+            for item in res.get("items") or []:
+                if isinstance(item, dict):
+                    items.append(item)
+    return items
+
+def _dataforseo_ai_blocks(data: dict) -> List[dict]:
+    ai_items = []
+    for item in _dataforseo_items(data):
+        t = (item.get("type") or "").lower()
+        if "ai_overview" in t:
+            ai_items.append(item)
+    if ai_items:
+        return ai_items
+    fallback = _find_ai_overview_block(data)
+    if fallback:
+        return [fallback] if isinstance(fallback, dict) else fallback
+    return []
+
+def _dataforseo_features_present(data: dict) -> List[str]:
+    features = []
+    seen = set()
+    feature_map = {
+        "ai_overview": "AI Overview",
+        "featured_snippet": "Featured snippet",
+        "answer_box": "Answer box",
+        "knowledge_graph": "Knowledge panel",
+        "local_pack": "Local pack",
+        "people_also_ask": "People also ask",
+        "top_stories": "Top stories",
+        "news": "News results",
+        "images": "Image pack",
+        "image_pack": "Image pack",
+        "videos": "Video results",
+        "video": "Video results",
+        "shopping": "Shopping results",
+        "related_questions": "People also ask",
+    }
+    for item in _dataforseo_items(data):
+        t = (item.get("type") or "").lower()
+        for key, label in feature_map.items():
+            if key in t and label not in seen:
+                seen.add(label)
+                features.append(label)
+    return features
+
 def _serp_features_present(data: dict) -> List[str]:
     if not isinstance(data, dict):
         return []
@@ -2184,8 +2237,65 @@ def serpapi_serp_cached(query: str, device: str) -> dict:
 
 def build_ai_visibility_table(query: str, target_url: str, competitors: List[str], device: str = "mobile") -> pd.DataFrame:
     cols = ["Target URL Cited in AIO","Cited Domains","# AIO Citations","Top Competitor Domains","SERP Features Present"]
-    if not query or not SERPAPI_API_KEY:
+    if not query:
         return pd.DataFrame([{c: "Not available" for c in cols}], columns=cols)
+
+    if DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD:
+        data = dataforseo_serp_cached(query, device=device)
+        if isinstance(data, dict) and data.get("_error"):
+            return pd.DataFrame([{c: f"Not available ({data.get('_error')})" for c in cols}], columns=cols)
+
+        ai_blocks = _dataforseo_ai_blocks(data)
+        cited_urls = _collect_urls(ai_blocks) if ai_blocks else []
+        cited_urls = list(dict.fromkeys([u for u in cited_urls if u.startswith("http")]))
+        cited_domains = []
+        for u in cited_urls:
+            d = domain_of(u)
+            if d and d not in cited_domains:
+                cited_domains.append(d)
+
+        target_dom = domain_of(target_url) if target_url and target_url != "Not applicable" else ""
+        if not ai_blocks:
+            target_cited = "None detected"
+            cited_domains_txt = "None detected"
+            cited_count = "0"
+        else:
+            if not target_dom:
+                target_cited = "Not applicable"
+            else:
+                target_cited = "Yes" if target_dom in cited_domains else "No"
+            cited_domains_txt = format_gap_list(cited_domains, limit=6) if cited_domains else "None detected"
+            cited_count = str(len(cited_urls))
+
+        top_comp_domains = []
+        for item in _dataforseo_items(data):
+            if (item.get("type") or "").lower() not in {"organic", "organic_extended"}:
+                continue
+            link = item.get("url") or ""
+            dom = domain_of(link)
+            if not dom:
+                continue
+            if target_dom and dom == target_dom:
+                continue
+            if dom not in top_comp_domains:
+                top_comp_domains.append(dom)
+            if len(top_comp_domains) >= 6:
+                break
+
+        serp_features = _dataforseo_features_present(data)
+        serp_features_txt = format_gap_list(serp_features, limit=6) if serp_features else "None detected"
+
+        row = {
+            "Target URL Cited in AIO": target_cited,
+            "Cited Domains": cited_domains_txt or "Not available",
+            "# AIO Citations": cited_count,
+            "Top Competitor Domains": format_gap_list(top_comp_domains, limit=6) if top_comp_domains else "Not available",
+            "SERP Features Present": serp_features_txt,
+        }
+        return pd.DataFrame([row], columns=cols)
+
+    if not SERPAPI_API_KEY:
+        return pd.DataFrame([{c: "Not available (no DataForSEO credentials)" for c in cols}], columns=cols)
 
     data = serpapi_serp_cached(query, device=device)
     if not data or (isinstance(data, dict) and data.get("_error")):
@@ -3080,8 +3190,8 @@ else:
 
 if (st.session_state.seo_update_df is not None and not st.session_state.seo_update_df.empty) or \
    (st.session_state.seo_new_df is not None and not st.session_state.seo_new_df.empty):
-    if not SERPAPI_API_KEY:
-        st.warning("Note: SERPAPI_API_KEY is optional now (used for Topic Cannibalization and AI Visibility).")
+    if not (DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD) and not SERPAPI_API_KEY:
+        st.warning("Note: Add DATAFORSEO_LOGIN/DATAFORSEO_PASSWORD (preferred) or SERPAPI_API_KEY to enable Topic Cannibalization and AI Visibility.")
 
 st.markdown(
     "<div class='footer-note'>Bayut Competitor Gap Analysis Tool - Built for content optimization</div>",
