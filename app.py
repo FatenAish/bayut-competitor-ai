@@ -180,12 +180,12 @@ section.main > div.block-container{
 .hero-wrap:before{
   content:"";
   position:absolute;
-  top:-140px;
+  top:-180px;
   left:50%;
   transform: translateX(-50%);
-  width: 900px;
-  height: 460px;
-  background: radial-gradient(circle at center, hsl(163 60% 85% / 0.55), transparent 65%);
+  width: 1000px;
+  height: 520px;
+  background: radial-gradient(circle at center, hsl(163 70% 82% / 0.65), transparent 62%);
   z-index: -1;
 }
 .hero-icon{
@@ -202,7 +202,7 @@ section.main > div.block-container{
   color: white;
 }
 .hero-h1{
-  font-size: 52px;
+  font-size: 60px;
   line-height: 1.06;
   margin: 0;
   color: hsl(var(--foreground));
