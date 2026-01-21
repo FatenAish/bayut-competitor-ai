@@ -1642,6 +1642,13 @@ def _secrets_get(key: str, default=None):
     return default
 
 SERPAPI_API_KEY = _secrets_get("SERPAPI_API_KEY", None)
+DATAFORSEO_LOGIN = _secrets_get("DATAFORSEO_LOGIN", None) or _secrets_get("DATAFORSEO_EMAIL", None)
+DATAFORSEO_PASSWORD = _secrets_get("DATAFORSEO_PASSWORD", None) or _secrets_get("DATAFORSEO_API_PASSWORD", None)
+DATAFORSEO_LOCATION_CODE = _secrets_get("DATAFORSEO_LOCATION_CODE", None)
+DATAFORSEO_LOCATION_NAME = _secrets_get("DATAFORSEO_LOCATION_NAME", "United Arab Emirates")
+DATAFORSEO_LANGUAGE_CODE = _secrets_get("DATAFORSEO_LANGUAGE_CODE", "en")
+DATAFORSEO_SE_DOMAIN = _secrets_get("DATAFORSEO_SE_DOMAIN", "google.ae")
+DATAFORSEO_DEPTH = _secrets_get("DATAFORSEO_DEPTH", 50)
 
 def url_slug(url: str) -> str:
     try:
@@ -1979,8 +1986,103 @@ def build_seo_analysis_newpost(
             df[c] = ""
     return df[cols]
 
+def _dataforseo_task_payload(query: str, device: str) -> dict:
+    payload = {
+        "keyword": query,
+        "language_code": DATAFORSEO_LANGUAGE_CODE,
+        "se_domain": DATAFORSEO_SE_DOMAIN,
+        "device": device,
+        "depth": int(DATAFORSEO_DEPTH) if str(DATAFORSEO_DEPTH).isdigit() else 50,
+    }
+    if device == "mobile":
+        payload["os"] = "android"
+    if DATAFORSEO_LOCATION_CODE:
+        try:
+            payload["location_code"] = int(DATAFORSEO_LOCATION_CODE)
+        except Exception:
+            payload["location_code"] = DATAFORSEO_LOCATION_CODE
+    elif DATAFORSEO_LOCATION_NAME:
+        payload["location_name"] = DATAFORSEO_LOCATION_NAME
+    return payload
+
+@st.cache_data(show_spinner=False, ttl=1800)
+def dataforseo_serp_cached(query: str, device: str = "mobile") -> dict:
+    if not query:
+        return {"_error": "missing_query"}
+    if not DATAFORSEO_LOGIN or not DATAFORSEO_PASSWORD:
+        return {"_error": "missing_dataforseo_credentials"}
+    payload = [_dataforseo_task_payload(query, device)]
+    try:
+        r = requests.post(
+            "https://api.dataforseo.com/v3/serp/google/organic/live/advanced",
+            json=payload,
+            auth=(DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD),
+            timeout=40,
+        )
+        if r.status_code != 200:
+            return {"_error": f"dataforseo_http_{r.status_code}", "_text": r.text[:400]}
+        data = r.json()
+    except Exception as e:
+        return {"_error": str(e)}
+
+    if isinstance(data, dict) and data.get("status_code") not in (20000, None):
+        return {"_error": data.get("status_message", "dataforseo_error")}
+    return data
+
+def _dataforseo_rank_map(data: dict) -> Dict[str, int]:
+    rank_map: Dict[str, int] = {}
+    if not isinstance(data, dict):
+        return rank_map
+    tasks = data.get("tasks") or []
+    for task in tasks:
+        if task.get("status_code") != 20000:
+            continue
+        for res in task.get("result") or []:
+            for item in res.get("items") or []:
+                if item.get("type") not in {"organic", "organic_extended"}:
+                    continue
+                url = item.get("url") or ""
+                if not url:
+                    continue
+                rank = item.get("rank_absolute") or item.get("rank_group")
+                if not rank:
+                    continue
+                norm = normalize_url_for_match(url)
+                if norm and (norm not in rank_map or int(rank) < rank_map[norm]):
+                    rank_map[norm] = int(rank)
+    return rank_map
+
 def enrich_seo_df_with_rank_and_ai(seo_df: pd.DataFrame, manual_query: str = "") -> Tuple[pd.DataFrame, pd.DataFrame]:
     ai_df = pd.DataFrame(columns=["Note"])
+    if seo_df is None or seo_df.empty:
+        return seo_df, ai_df
+
+    query = clean(manual_query or "")
+    if not query:
+        for q in seo_df.get("__fkw", []):
+            if clean(str(q)) and str(q).lower() != "not available":
+                query = clean(str(q))
+                break
+
+    if query:
+        data = dataforseo_serp_cached(query, device="mobile")
+        if not (isinstance(data, dict) and data.get("_error")):
+            rank_map = _dataforseo_rank_map(data)
+            depth = int(DATAFORSEO_DEPTH) if str(DATAFORSEO_DEPTH).isdigit() else 50
+            updated = []
+            for _, r in seo_df.iterrows():
+                page_url = str(r.get("__url", "")).strip()
+                if not page_url or page_url == "Not applicable":
+                    updated.append("Not applicable")
+                    continue
+                norm = normalize_url_for_match(page_url)
+                rank = rank_map.get(norm)
+                if rank:
+                    updated.append(str(rank))
+                else:
+                    updated.append(f"Not in top {depth}")
+            seo_df = seo_df.copy()
+            seo_df["UAE Rank (Mobile)"] = updated
     return seo_df, ai_df
 
 
