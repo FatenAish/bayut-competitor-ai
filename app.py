@@ -32,315 +32,281 @@ st.set_page_config(page_title="Bayut Competitor Gap Analysis", layout="wide")
 # NEW DESIGN (Tailwind/shadcn-inspired theme from your React CSS)
 # =====================================================
 st.markdown(
-    f"""
-    <style>
-      :root {{
-        --bayut: {BAYUT_GREEN};
-        --bg: {PAGE_BG};
-        --card: {CARD_BG};
-        --border: {BORDER};
-        --muted: {MUTED};
-        --text: {TEXT_DARK};
-        --shadow: 0 12px 32px rgba(2, 6, 23, 0.08);
-      }}
+    """
+<style>
+/* ------------------------------
+   Theme tokens (same spirit as src/index.css)
+--------------------------------*/
+:root{
+  --bayut-primary: 163 82% 30%;
+  --bayut-primary-light: 163 72% 40%;
+  --bayut-primary-dark: 163 90% 22%;
+  --bayut-glow: 163 60% 50%;
 
-      html, body, [data-testid="stAppViewContainer"] {{
-        background: var(--bg) !important;
-        color: var(--text);
-      }}
+  --background: 150 30% 98%;
+  --foreground: 220 25% 12%;
 
-      /* remove default top padding a bit */
-      .block-container {{
-        padding-top: 1.3rem;
-        max-width: 1150px;
-        position: relative;
-        z-index: 2;
-      }}
+  --card: 0 0% 100%;
+  --border: 150 20% 88%;
+  --muted: 150 15% 92%;
+  --muted-foreground: 220 10% 45%;
 
-      /* ---------- Background (grid + soft blobs) ---------- */
-      .bg-decor {{
-        position: fixed;
-        inset: 0;
-        z-index: 0;
-        pointer-events: none;
-      }}
-      .bg-decor::before {{
-        content: "";
-        position: absolute;
-        inset: 0;
-        background:
-          radial-gradient(900px 500px at 20% 0%, rgba(14,138,109,0.12), transparent 60%),
-          radial-gradient(700px 420px at 85% 10%, rgba(14,138,109,0.10), transparent 55%),
-          radial-gradient(900px 520px at 55% 90%, rgba(14,138,109,0.10), transparent 60%);
-        filter: blur(0px);
-      }}
-      .bg-grid {{
-        position: absolute;
-        inset: 0;
-        background-image:
-          linear-gradient(to right, rgba(15,23,42,0.06) 1px, transparent 1px),
-          linear-gradient(to bottom, rgba(15,23,42,0.06) 1px, transparent 1px);
-        background-size: 64px 64px;
-        opacity: 0.25;
-        mask-image: radial-gradient(circle at 50% 10%, rgba(0,0,0,0.95), rgba(0,0,0,0.15) 55%, rgba(0,0,0,0) 80%);
-      }}
+  --secondary: 150 25% 94%;
+  --accent: 163 60% 92%;
 
-      /* Ensure our hero sits above background */
-      .ui-layer {{
-        position: relative;
-        z-index: 2;
-      }}
+  --primary: 163 82% 30%;
+  --primary-foreground: 0 0% 100%;
 
-      /* ---------- HERO ---------- */
-      .hero-wrap {{
-        display:flex;
-        flex-direction:column;
-        align-items:center;
-        text-align:center;
-        gap: 14px;
-        padding: 10px 0 6px 0;
-      }}
-      .hero-icon {{
-        width: 76px;
-        height: 76px;
-        border-radius: 22px;
-        background: var(--bayut);
-        display:flex;
-        align-items:center;
-        justify-content:center;
-        box-shadow: 0 14px 40px rgba(14,138,109,0.28);
-      }}
-      .hero-title {{
-        font-weight: 800;
-        letter-spacing: -0.03em;
-        margin: 0;
-        line-height: 1.08;
-        font-size: 56px;
-      }}
-      .hero-title .brand {{
-        color: var(--bayut);
-      }}
-      .hero-sub {{
-        margin: 0;
-        color: #6B7280;
-        font-size: 18px;
-        max-width: 760px;
-      }}
+  --radius: 0.75rem;
 
-      .badges {{
-        display:flex;
-        justify-content:center;
-        gap: 12px;
-        margin-top: 6px;
-        flex-wrap: wrap;
-      }}
-      .badge {{
-        display:flex;
-        align-items:center;
-        gap: 10px;
-        padding: 10px 16px;
-        border-radius: 999px;
-        background: rgba(255,255,255,0.85);
-        border: 1px solid rgba(15,23,42,0.10);
-        box-shadow: 0 6px 18px rgba(2,6,23,0.06);
-        font-weight: 650;
-        color: #111827;
-      }}
-      .badge svg {{
-        width: 18px;
-        height: 18px;
-        color: var(--bayut);
-      }}
+  --gradient-hero: linear-gradient(135deg, hsl(163 82% 30%) 0%, hsl(163 60% 45%) 50%, hsl(175 70% 40%) 100%);
+  --gradient-card: linear-gradient(180deg, hsl(0 0% 100%) 0%, hsl(150 30% 98%) 100%);
+  --gradient-surface: linear-gradient(135deg, hsl(150 30% 98%) 0%, hsl(163 20% 96%) 100%);
 
-      /* ---------- MODE TOGGLE (2 big pills) ---------- */
-      .mode-row {{
-        display:flex;
-        justify-content:center;
-        gap: 18px;
-        margin-top: 18px;
-        margin-bottom: 12px;
-      }}
-      .mode-row .stButton > button {{
-        height: 56px;
-        min-width: 320px;
-        border-radius: 999px;
-        font-weight: 750;
-        font-size: 16px;
-        border: 1px solid rgba(15,23,42,0.10);
-        box-shadow: 0 6px 18px rgba(2,6,23,0.06);
-        transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
-      }}
-      .mode-row .stButton > button:hover {{
-        transform: translateY(-1px);
-        box-shadow: 0 10px 26px rgba(2,6,23,0.10);
-      }}
-      .mode-row .stButton > button.active {{
-        background: var(--bayut) !important;
-        color: white !important;
-        border-color: rgba(14,138,109,0.55) !important;
-      }}
-      .mode-row .stButton > button.inactive {{
-        background: rgba(255,255,255,0.70) !important;
-        color: #111827 !important;
-      }}
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.03);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.03);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.06), 0 4px 6px -4px rgb(0 0 0 / 0.04);
+  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.07), 0 8px 10px -6px rgb(0 0 0 / 0.04);
+  --shadow-glow: 0 0 30px -5px hsl(163 82% 30% / 0.25);
+}
 
-      .mode-help {{
-        text-align:center;
-        color:#6B7280;
-        margin-top: -2px;
-        margin-bottom: 10px;
-      }}
+/* ------------------------------
+   App background + layout
+--------------------------------*/
+html, body { background: hsl(var(--background)) !important; }
+[data-testid="stAppViewContainer"]{
+  background: var(--gradient-surface) !important;
+}
+[data-testid="stHeader"] { background: transparent !important; }
+section.main > div.block-container{
+  max-width: 1040px !important;
+  padding-top: 1.8rem !important;
+  padding-bottom: 2.8rem !important;
+}
 
-      /* ---------- FORM CARD ---------- */
-      div[data-testid="stForm"] {{
-        background: rgba(255,255,255,0.88);
-        border: 1px solid rgba(15,23,42,0.10);
-        border-radius: 26px;
-        padding: 26px 26px 18px 26px;
-        box-shadow: var(--shadow);
-        backdrop-filter: blur(6px);
-      }}
+/* Decorative background “blobs” like Index.tsx */
+.bg-decor {
+  position: fixed;
+  inset: 0;
+  z-index: -10;
+  overflow: hidden;
+}
+.bg-decor .blob{
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(60px);
+  opacity: 0.35;
+  animation: float 6s ease-in-out infinite;
+}
+.bg-decor .b1{ top:-80px; left:18%; width:520px; height:520px; background: hsl(var(--primary) / 0.25); }
+.bg-decor .b2{ bottom:-120px; right:18%; width:460px; height:460px; background: hsl(var(--primary) / 0.18); animation-delay:-3s; }
+.bg-decor .b3{ top:40%; left:-120px; width:420px; height:420px; background: hsl(163 60% 92% / 0.55); animation-delay:-1.5s; }
+@keyframes float { 0%,100%{ transform: translateY(0);} 50%{ transform: translateY(-10px);} }
 
-      .field-label {{
-        display:flex;
-        align-items:center;
-        gap: 10px;
-        font-weight: 750;
-        color: #111827;
-        margin: 6px 0 6px 2px;
-      }}
-      .field-label svg {{
-        width: 18px;
-        height: 18px;
-        color: var(--bayut);
-      }}
+/* subtle grid overlay */
+.grid-overlay{
+  position:absolute; inset:0; opacity:0.03;
+  background-image:
+    linear-gradient(hsl(var(--foreground)) 1px, transparent 1px),
+    linear-gradient(90deg, hsl(var(--foreground)) 1px, transparent 1px);
+  background-size: 60px 60px;
+}
 
-      /* Hide streamlit default labels when we use custom labels */
-      .hide-label label {{
-        display:none !important;
-      }}
+/* ------------------------------
+   Reusable classes (from your Tailwind components)
+--------------------------------*/
+.gradient-text{
+  background: var(--gradient-hero);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.card-elevated{
+  background: var(--gradient-card);
+  box-shadow: var(--shadow-lg);
+  border: 1px solid hsl(var(--border));
+  border-radius: 1.25rem;
+}
+.glow-hover{ transition: box-shadow 0.25s ease; }
+.glow-hover:hover{ box-shadow: var(--shadow-glow); }
+.pill{
+  display:inline-flex; align-items:center; gap:.5rem;
+  padding:.45rem .9rem;
+  border-radius: 9999px;
+  font-weight: 800;
+  font-size: 13px;
+  background: hsl(163 45% 95%);
+  color: hsl(var(--primary));
+  border: 1px solid hsl(var(--border));
+}
+.section-title{
+  font-weight: 800;
+  font-size: 18px;
+  position: relative;
+  display:inline-block;
+}
+.section-title:after{
+  content:"";
+  position:absolute;
+  left:0; bottom:-6px;
+  width:32px; height:3px;
+  border-radius:9999px;
+  background: hsl(var(--primary));
+}
 
-      /* Inputs */
-      div[data-testid="stTextInput"] input,
-      div[data-testid="stTextArea"] textarea {{
-        background: rgba(233,247,241,0.55) !important;
-        border: 1px solid rgba(15,23,42,0.10) !important;
-        border-radius: 14px !important;
-        padding: 14px 14px !important;
-      }}
+/* ------------------------------
+   Hero styling
+--------------------------------*/
+.hero-wrap{ padding: 1.4rem 0 0.6rem 0; text-align:center; }
+.hero-icon{
+  width:76px; height:76px; margin:0 auto 18px auto;
+  border-radius: 22px;
+  background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(var(--primary) / 0.75) 100%);
+  box-shadow: var(--shadow-md), var(--shadow-glow);
+  display:flex; align-items:center; justify-content:center;
+}
+.hero-h1{
+  font-size: 52px;
+  line-height: 1.06;
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-weight: 900;
+  letter-spacing: -0.02em;
+}
+.hero-sub{
+  margin: 10px auto 0 auto;
+  max-width: 720px;
+  color: hsl(var(--muted-foreground));
+  font-size: 16px;
+  line-height: 1.6;
+}
+.hero-badges{ margin-top: 14px; display:flex; justify-content:center; gap:10px; flex-wrap:wrap; }
+.hero-badge{
+  display:inline-flex; align-items:center; gap:8px;
+  padding: 8px 12px;
+  border-radius: 9999px;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--card));
+  box-shadow: var(--shadow-sm);
+  font-weight: 800;
+  font-size: 13px;
+  color: hsl(var(--foreground));
+}
 
-      /* Full-width primary submit inside form */
-      div[data-testid="stForm"] button[kind="primary"] {{
-        width: 100% !important;
-        height: 58px !important;
-        border-radius: 14px !important;
-        font-size: 18px !important;
-        font-weight: 800 !important;
-        background: var(--bayut) !important;
-        border: none !important;
-        margin-top: 6px;
-      }}
+/* ------------------------------
+   Streamlit widgets styling
+--------------------------------*/
+[data-testid="stTextInput"] input,
+[data-testid="stTextArea"] textarea{
+  background: hsl(var(--secondary) / 0.5) !important;
+  border: 1px solid hsl(var(--border)) !important;
+  border-radius: 14px !important;
+}
+[data-testid="stTextInput"] input:focus,
+[data-testid="stTextArea"] textarea:focus{
+  box-shadow: 0 0 0 4px hsl(var(--primary) / 0.18) !important;
+  border-color: hsl(var(--primary)) !important;
+}
 
-      /* ---------- EMPTY STATE CARD ---------- */
-      .empty-card {{
-        margin-top: 16px;
-        background: rgba(255,255,255,0.88);
-        border: 1px solid rgba(15,23,42,0.10);
-        border-radius: 26px;
-        padding: 44px 28px;
-        box-shadow: var(--shadow);
-        text-align:center;
-      }}
-      .empty-icon {{
-        width: 56px;
-        height: 56px;
-        border-radius: 16px;
-        margin: 0 auto 14px auto;
-        background: rgba(17,24,39,0.06);
-        display:flex;
-        align-items:center;
-        justify-content:center;
-      }}
-      .empty-icon svg {{
-        width: 22px;
-        height: 22px;
-        color: #6B7280;
-      }}
-      .empty-title {{
-        font-size: 28px;
-        font-weight: 850;
-        margin: 0;
-        color: #111827;
-      }}
-      .empty-sub {{
-        margin-top: 8px;
-        color: #6B7280;
-        font-size: 16px;
-        max-width: 720px;
-        margin-left:auto;
-        margin-right:auto;
-      }}
+/* Buttons (best-effort across Streamlit versions) */
+div[data-testid="stButton"] > button{
+  border-radius: 16px !important;
+  padding: 0.75rem 1rem !important;
+  font-weight: 900 !important;
+  border: 1px solid hsl(var(--border)) !important;
+  background: hsl(var(--secondary)) !important;
+  color: hsl(var(--foreground)) !important;
+  box-shadow: var(--shadow-sm) !important;
+  transition: transform .1s ease, box-shadow .25s ease, background .2s ease !important;
+}
+div[data-testid="stButton"] > button:hover{
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md), var(--shadow-glow) !important;
+  background: hsl(var(--accent)) !important;
+}
+/* Primary */
+div[data-testid="stButton"] > button[kind="primary"]{
+  background: hsl(var(--primary)) !important;
+  color: hsl(var(--primary-foreground)) !important;
+  border-color: hsl(var(--primary)) !important;
+}
 
-      /* Make tables a bit nicer */
-      .stDataFrame {{
-        background: rgba(255,255,255,0.88);
-        border-radius: 18px;
-        border: 1px solid rgba(15,23,42,0.10);
-      }}
-    </style>
-    """,
+/* ------------------------------
+   Tables (we’ll render with df.to_html(classes="data-table"))
+--------------------------------*/
+table.data-table{
+  width:100% !important;
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
+  overflow: hidden !important;
+  border-radius: 16px !important;
+  border: 1px solid hsl(var(--border)) !important;
+  background: hsl(var(--card)) !important;
+}
+table.data-table thead th{
+  background: hsl(163 45% 95%) !important;
+  color: hsl(var(--foreground)) !important;
+  font-weight: 900 !important;
+  padding: 10px 12px !important;
+  text-align: left !important;
+  border-bottom: 1px solid hsl(var(--border)) !important;
+  white-space: nowrap;
+}
+table.data-table tbody td{
+  padding: 10px 12px !important;
+  border-top: 1px solid hsl(var(--border)) !important;
+  color: hsl(var(--foreground)) !important;
+  font-size: 13px !important;
+  vertical-align: top !important;
+}
+table.data-table tbody tr:hover{
+  background: hsl(var(--muted) / 0.5) !important;
+}
+a{
+  color: hsl(var(--primary)) !important;
+  font-weight: 900 !important;
+  text-decoration: underline !important;
+}
+</style>
+""",
     unsafe_allow_html=True,
 )
+
 # Background decor layer (like your React Index.tsx)
 st.markdown(
-    """<div class="bg-decor"><div class="bg-grid"></div></div>""",
+    """
+<div class="bg-decor">
+  <div class="blob b1"></div>
+  <div class="blob b2"></div>
+  <div class="blob b3"></div>
+  <div class="grid-overlay"></div>
+</div>
+""",
     unsafe_allow_html=True,
 )
+
 # Hero (like HeroSection.tsx)
 st.markdown(
     """
 <div class="hero-wrap">
-  <div class="hero-icon" aria-hidden="true">
-    <!-- Bar chart icon -->
-    <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M4 19V5" />
-      <path d="M4 19H20" />
-      <path d="M8 17V11" />
-      <path d="M12 17V7" />
-      <path d="M16 17V9" />
-    </svg>
-  </div>
-
-  <h1 class="hero-title"><span class="brand">Bayut</span> Competitor Gap Analysis</h1>
-  <p class="hero-sub">Identifies missing sections and incomplete coverage against competitor articles.</p>
-
-  <div class="badges" aria-label="Capabilities">
-    <div class="badge">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 2l2.2 6.7H21l-5.4 3.9 2.1 6.7L12 15.8 6.3 19.3 8.4 12.6 3 8.7h6.8L12 2z"/>
-      </svg>
-      SEO Analysis
-    </div>
-    <div class="badge">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M4 19V5" />
-        <path d="M4 19H20" />
-        <path d="M7 15l3-3 3 3 5-5" />
-      </svg>
-      Content Quality
-    </div>
-    <div class="badge">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/>
-        <path d="M12 7v5l3 3"/>
-      </svg>
-      Gap Detection
-    </div>
+  <div class="hero-icon">📊</div>
+  <h1 class="hero-h1">
+    <span class="gradient-text">Bayut</span> <span>Competitor Gap Analysis</span>
+  </h1>
+  <p class="hero-sub">
+    Identifies missing sections and incomplete coverage against competitor articles.
+  </p>
+  <div class="hero-badges">
+    <span class="hero-badge">✨ SEO Analysis</span>
+    <span class="hero-badge">✨ Content Quality</span>
+    <span class="hero-badge">✨ Gap Detection</span>
   </div>
 </div>
 """,
     unsafe_allow_html=True,
 )
+
+
 # =====================================================
 # FETCH (NO MISSING COMPETITORS — ENFORCED)
 # =====================================================
@@ -2479,41 +2445,19 @@ for k, default in [
 # UI - UPDATE MODE
 # =====================================================
 if st.session_state.mode == "update":
-    with st.form("update_form", clear_on_submit=False):
-        st.markdown('<div class="field-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 1 0-7l1-1a5 5 0 0 1 7 7l-1 1"/><path d="M14 11a5 5 0 0 1 0 7l-1 1a5 5 0 0 1-7-7l1-1"/></svg> Bayut Article URL</div>', unsafe_allow_html=True)
-        bayut_url = st.text_input(
-            "",
-            placeholder="https://www.bayut.com/mybayut/...",
-            key="bayut_url",
-            label_visibility="collapsed",
-        )
+    section_header_pill("Update Mode")
 
-        st.markdown('<div class="field-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg> Competitor URLs <span style="font-weight:600;color:#6B7280;">(one per line)</span></div>', unsafe_allow_html=True)
-        competitor_text = st.text_area(
-            "",
-            placeholder="https://example.com/article\nhttps://example.com/another",
-            height=100,
-            key="competitors_text",
-            label_visibility="collapsed",
-        )
+    bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
+    competitors_text = st.text_area(
+        "Competitor URLs (one per line)",
+        height=120,
+        placeholder="https://example.com/article\nhttps://example.com/another"
+    )
+    competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
 
-        st.markdown('<div class="field-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg> Focus Keyword <span style="font-weight:600;color:#6B7280;">(optional)</span></div>', unsafe_allow_html=True)
-        focus_kw = st.text_input(
-            "",
-            placeholder="e.g., pros and cons business bay",
-            key="focus_kw_update",
-            label_visibility="collapsed",
-        )
+    manual_fkw_update = st.text_input("Optional: Focus Keyword (FKW) for analysis + UAE ranking", placeholder="e.g., pros and cons business bay")
 
-        run = st.form_submit_button("Run Analysis", type="primary")
-
-    if (st.session_state.update_df is None or st.session_state.update_df.empty) and \
-       (st.session_state.seo_update_df is None or st.session_state.seo_update_df.empty) and \
-       (st.session_state.cq_update_df is None or st.session_state.cq_update_df.empty) and \
-       (st.session_state.ai_vis_update_df is None or st.session_state.ai_vis_update_df.empty):
-        st.markdown("\n<div class=\"empty-card\">\n  <div class=\"empty-icon\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"11\" cy=\"11\" r=\"7\"/><path d=\"M21 21l-4.3-4.3\"/></svg></div>\n  <p class=\"empty-title\">No Analysis Yet</p>\n  <p class=\"empty-sub\">Enter your URLs above and run the analysis to see competitor gap insights, SEO comparison, and content quality signals.</p>\n</div>\n", unsafe_allow_html=True)
-
-
+    run = st.button("Run analysis", type="primary")
 
     if run:
         if not bayut_url.strip():
@@ -2621,41 +2565,19 @@ if st.session_state.mode == "update":
 # UI - NEW POST MODE
 # =====================================================
 else:
-    with st.form("newpost_form", clear_on_submit=False):
-        st.markdown('<div class="field-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg> New Post Title</div>', unsafe_allow_html=True)
-        new_title = st.text_input(
-            "",
-            placeholder="e.g., Pros and Cons of Living in Business Bay",
-            key="new_title",
-            label_visibility="collapsed",
-        )
+    section_header_pill("New Post Mode")
 
-        st.markdown('<div class="field-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg> Competitor URLs <span style="font-weight:600;color:#6B7280;">(one per line)</span></div>', unsafe_allow_html=True)
-        competitor_text = st.text_area(
-            "",
-            placeholder="https://example.com/article\nhttps://example.com/another",
-            height=100,
-            key="newpost_competitors_text",
-            label_visibility="collapsed",
-        )
+    new_title = st.text_input("New post title", placeholder="Pros & Cons of Living in Business Bay (2026)")
+    competitors_text = st.text_area(
+        "Competitor URLs (one per line)",
+        height=120,
+        placeholder="https://example.com/article\nhttps://example.com/another"
+    )
+    competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
 
-        st.markdown('<div class="field-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg> Focus Keyword <span style="font-weight:600;color:#6B7280;">(optional)</span></div>', unsafe_allow_html=True)
-        focus_kw = st.text_input(
-            "",
-            placeholder="e.g., pros and cons business bay",
-            key="focus_kw_new",
-            label_visibility="collapsed",
-        )
+    manual_fkw_new = st.text_input("Optional: Focus Keyword (FKW) for SEO + UAE ranking", placeholder="e.g., pros and cons business bay")
 
-        run = st.form_submit_button("Run Analysis", type="primary")
-
-    if (st.session_state.new_df is None or st.session_state.new_df.empty) and \
-       (st.session_state.seo_new_df is None or st.session_state.seo_new_df.empty) and \
-       (st.session_state.cq_new_df is None or st.session_state.cq_new_df.empty) and \
-       (st.session_state.ai_vis_new_df is None or st.session_state.ai_vis_new_df.empty):
-        st.markdown("\n<div class=\"empty-card\">\n  <div class=\"empty-icon\"><svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"11\" cy=\"11\" r=\"7\"/><path d=\"M21 21l-4.3-4.3\"/></svg></div>\n  <p class=\"empty-title\">No Analysis Yet</p>\n  <p class=\"empty-sub\">Enter your URLs above and run the analysis to see competitor gap insights, SEO comparison, and content quality signals.</p>\n</div>\n", unsafe_allow_html=True)
-
-
+    run = st.button("Generate competitor coverage", type="primary")
 
     if run:
         if not new_title.strip():
