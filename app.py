@@ -1642,8 +1642,16 @@ def _secrets_get(key: str, default=None):
     return default
 
 SERPAPI_API_KEY = _secrets_get("SERPAPI_API_KEY", None)
-DATAFORSEO_LOGIN = _secrets_get("DATAFORSEO_LOGIN", None) or _secrets_get("DATAFORSEO_EMAIL", None)
-DATAFORSEO_PASSWORD = _secrets_get("DATAFORSEO_PASSWORD", None) or _secrets_get("DATAFORSEO_API_PASSWORD", None)
+DATAFORSEO_LOGIN = (
+    _secrets_get("DATAFORSEO_LOGIN", None)
+    or _secrets_get("DATAFORSEO_EMAIL", None)
+    or _secrets_get("DATAFORSEO_USERNAME", None)
+)
+DATAFORSEO_PASSWORD = (
+    _secrets_get("DATAFORSEO_PASSWORD", None)
+    or _secrets_get("DATAFORSEO_API_PASSWORD", None)
+    or _secrets_get("DATAFORSEO_API_KEY", None)
+)
 DATAFORSEO_LOCATION_CODE = _secrets_get("DATAFORSEO_LOCATION_CODE", None)
 DATAFORSEO_LOCATION_NAME = _secrets_get("DATAFORSEO_LOCATION_NAME", "United Arab Emirates")
 DATAFORSEO_LANGUAGE_CODE = _secrets_get("DATAFORSEO_LANGUAGE_CODE", "en")
@@ -2066,7 +2074,10 @@ def enrich_seo_df_with_rank_and_ai(seo_df: pd.DataFrame, manual_query: str = "")
 
     if query:
         data = dataforseo_serp_cached(query, device="mobile")
-        if not (isinstance(data, dict) and data.get("_error")):
+        if isinstance(data, dict) and data.get("_error"):
+            seo_df = seo_df.copy()
+            seo_df["UAE Rank (Mobile)"] = f"Not available ({data.get('_error')})"
+        else:
             rank_map = _dataforseo_rank_map(data)
             depth = int(DATAFORSEO_DEPTH) if str(DATAFORSEO_DEPTH).isdigit() else 50
             updated = []
@@ -2482,19 +2493,51 @@ def normalize_url_for_match(u: str) -> str:
     except Exception:
         return (u or "").strip().lower().replace("www.", "").rstrip("/")
 
+def _dataforseo_site_result_count(data: dict, dom: str, target_norm: str) -> int:
+    if not isinstance(data, dict):
+        return 0
+    others = set()
+    tasks = data.get("tasks") or []
+    for task in tasks:
+        if task.get("status_code") != 20000:
+            continue
+        for res in task.get("result") or []:
+            for item in res.get("items") or []:
+                if item.get("type") not in {"organic", "organic_extended"}:
+                    continue
+                url = item.get("url") or ""
+                if not url:
+                    continue
+                nm = normalize_url_for_match(url)
+                if dom in nm and nm != target_norm:
+                    others.add(url)
+    return len(others)
+
 def _topic_cannibalization_label(query: str, page_url: str) -> str:
-    if not SERPAPI_API_KEY:
-        return "Not available (no SERPAPI_API_KEY)"
     dom = domain_of(page_url)
     if not dom or not query or query == "Not available":
         return "Not available"
     site_q = f"site:{dom} {query}"
+    target = normalize_url_for_match(page_url)
+
+    if DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD:
+        data = dataforseo_serp_cached(site_q, device="desktop")
+        if not (isinstance(data, dict) and data.get("_error")):
+            cnt = _dataforseo_site_result_count(data, dom, target)
+            if cnt >= 3:
+                return f"High risk (≈{cnt} other pages on same domain)"
+            if cnt >= 1:
+                return f"Medium risk (≈{cnt} other page(s) on same domain)"
+            return "Low risk"
+        return f"Not available ({data.get('_error')})" if isinstance(data, dict) else "Not available"
+
+    if not SERPAPI_API_KEY:
+        return "Not available (no DataForSEO credentials)"
     data = serpapi_serp_cached(site_q, device="desktop")
     if not data or data.get("_error"):
         return f"Not available ({data.get('_error')})" if isinstance(data, dict) else "Not available"
 
     organic = data.get("organic_results") or []
-    target = normalize_url_for_match(page_url)
     others = []
     for it in organic:
         link = it.get("link") or ""
