@@ -83,8 +83,8 @@ html, body { background: hsl(var(--background)) !important; }
 }
 [data-testid="stHeader"] { background: transparent !important; }
 section.main > div.block-container{
-  max-width: 1040px !important;
-  padding-top: 1.8rem !important;
+  max-width: 1100px !important;
+  padding-top: 1.6rem !important;
   padding-bottom: 2.8rem !important;
 }
 
@@ -109,11 +109,11 @@ section.main > div.block-container{
 
 /* subtle grid overlay */
 .grid-overlay{
-  position:absolute; inset:0; opacity:0.03;
+  position:absolute; inset:0; opacity:0.035;
   background-image:
     linear-gradient(hsl(var(--foreground)) 1px, transparent 1px),
     linear-gradient(90deg, hsl(var(--foreground)) 1px, transparent 1px);
-  background-size: 60px 60px;
+  background-size: 64px 64px;
 }
 
 /* ------------------------------
@@ -148,6 +148,7 @@ section.main > div.block-container{
   font-size: 18px;
   position: relative;
   display:inline-block;
+  margin: 20px 0 10px 0;
 }
 .section-title:after{
   content:"";
@@ -167,7 +168,13 @@ section.main > div.block-container{
   border-radius: 22px;
   background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(var(--primary) / 0.75) 100%);
   box-shadow: var(--shadow-md), var(--shadow-glow);
+  border: 1px solid hsl(var(--primary) / 0.15);
   display:flex; align-items:center; justify-content:center;
+}
+.hero-icon svg{
+  width: 34px;
+  height: 34px;
+  color: white;
 }
 .hero-h1{
   font-size: 52px;
@@ -196,15 +203,22 @@ section.main > div.block-container{
   font-size: 13px;
   color: hsl(var(--foreground));
 }
+.hero-badge svg{
+  width: 16px;
+  height: 16px;
+  color: hsl(var(--primary));
+}
 
 /* ------------------------------
    Streamlit widgets styling
 --------------------------------*/
 [data-testid="stTextInput"] input,
 [data-testid="stTextArea"] textarea{
-  background: hsl(var(--secondary) / 0.5) !important;
+  background: hsl(var(--secondary) / 0.6) !important;
   border: 1px solid hsl(var(--border)) !important;
-  border-radius: 14px !important;
+  border-radius: 16px !important;
+  padding: 12px 14px !important;
+  font-size: 15px !important;
 }
 [data-testid="stTextInput"] input:focus,
 [data-testid="stTextArea"] textarea:focus{
@@ -213,9 +227,10 @@ section.main > div.block-container{
 }
 
 /* Buttons (best-effort across Streamlit versions) */
-div[data-testid="stButton"] > button{
+div[data-testid="stButton"] > button,
+div[data-testid="stFormSubmitButton"] > button{
   border-radius: 16px !important;
-  padding: 0.75rem 1rem !important;
+  padding: 0.85rem 1rem !important;
   font-weight: 900 !important;
   border: 1px solid hsl(var(--border)) !important;
   background: hsl(var(--secondary)) !important;
@@ -223,17 +238,108 @@ div[data-testid="stButton"] > button{
   box-shadow: var(--shadow-sm) !important;
   transition: transform .1s ease, box-shadow .25s ease, background .2s ease !important;
 }
-div[data-testid="stButton"] > button:hover{
+div[data-testid="stButton"] > button:hover,
+div[data-testid="stFormSubmitButton"] > button:hover{
   transform: translateY(-1px);
   box-shadow: var(--shadow-md), var(--shadow-glow) !important;
   background: hsl(var(--accent)) !important;
 }
 /* Primary */
-div[data-testid="stButton"] > button[kind="primary"]{
+div[data-testid="stButton"] > button[kind="primary"],
+div[data-testid="stFormSubmitButton"] > button[kind="primary"]{
   background: hsl(var(--primary)) !important;
   color: hsl(var(--primary-foreground)) !important;
   border-color: hsl(var(--primary)) !important;
 }
+div[data-testid="stButton"] > button[kind="primary"]:hover,
+div[data-testid="stFormSubmitButton"] > button[kind="primary"]:hover{
+  background: hsl(var(--primary-dark)) !important;
+}
+
+/* Mode toggle */
+.mode-toggle{
+  display:flex;
+  justify-content:center;
+  margin: 8px 0 2px 0;
+}
+.mode-hint{
+  text-align:center;
+  color: hsl(var(--muted-foreground));
+  font-size: 14px;
+  margin: 6px 0 24px 0;
+}
+
+/* Form card */
+div[data-testid="stForm"]{
+  background: hsl(var(--card)) !important;
+  border: 1px solid hsl(var(--border)) !important;
+  border-radius: 20px !important;
+  padding: 22px 22px 6px 22px !important;
+  box-shadow: var(--shadow-lg) !important;
+  margin: 0 0 24px 0 !important;
+}
+div[data-testid="stForm"] form{
+  padding: 0 !important;
+}
+
+/* Field labels */
+.field-label{
+  display:flex; align-items:center; gap:8px;
+  font-size: 14px; font-weight: 800;
+  color: hsl(var(--foreground));
+  margin: 2px 0 6px 0;
+}
+.field-label .label-meta{
+  font-size: 12px;
+  font-weight: 600;
+  color: hsl(var(--muted-foreground));
+  margin-left: 6px;
+}
+.field-label .label-icon{
+  display:inline-flex; align-items:center; justify-content:center;
+  width: 20px; height: 20px;
+  color: hsl(var(--primary));
+}
+.field-label .label-icon svg{
+  width: 18px; height: 18px;
+}
+
+/* Empty state card */
+.empty-card{
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: 20px;
+  box-shadow: var(--shadow-lg);
+  padding: 34px 20px;
+  text-align: center;
+  margin-top: 24px;
+}
+.empty-icon{
+  width: 58px;
+  height: 58px;
+  margin: 0 auto 14px auto;
+  border-radius: 18px;
+  background: hsl(var(--secondary));
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  color: hsl(var(--muted-foreground));
+}
+.empty-icon svg{
+  width: 26px;
+  height: 26px;
+}
+.empty-title{
+  font-weight: 900;
+  font-size: 20px;
+  color: hsl(var(--foreground));
+}
+.empty-body{
+  margin-top: 6px;
+  color: hsl(var(--muted-foreground));
+  font-size: 14px;
+}
+
 
 /* ------------------------------
    Tables (we’ll render with df.to_html(classes="data-table"))
@@ -293,7 +399,11 @@ st.markdown(
 st.markdown(
     """
 <div class="hero-wrap">
-  <div class="hero-icon">📊</div>
+  <div class="hero-icon">
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M4 20V10M10 20V4M16 20V14M3 20H21" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </div>
   <h1 class="hero-h1">
     <span class="gradient-text">Bayut</span> <span>Competitor Gap Analysis</span>
   </h1>
@@ -301,9 +411,24 @@ st.markdown(
     Identifies missing sections and incomplete coverage against competitor articles.
   </p>
   <div class="hero-badges">
-    <span class="hero-badge">✨ SEO Analysis</span>
-    <span class="hero-badge">✨ Content Quality</span>
-    <span class="hero-badge">✨ Gap Detection</span>
+    <span class="hero-badge">
+      <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M12 3l1.8 4.7L18 9l-4.2 1.3L12 15l-1.8-4.7L6 9l4.2-1.3L12 3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+      </svg>
+      SEO Analysis
+    </span>
+    <span class="hero-badge">
+      <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M12 3l1.8 4.7L18 9l-4.2 1.3L12 15l-1.8-4.7L6 9l4.2-1.3L12 3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+      </svg>
+      Content Quality
+    </span>
+    <span class="hero-badge">
+      <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M12 3l1.8 4.7L18 9l-4.2 1.3L12 15l-1.8-4.7L6 9l4.2-1.3L12 3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+      </svg>
+      Gap Detection
+    </span>
   </div>
 </div>
 """,
@@ -2392,8 +2517,59 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
     html = df.to_html(index=False, escape=False, classes="data-table")
     st.markdown(html, unsafe_allow_html=True)
 
+ICON_LINK = """
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <path d="M10 13a5 5 0 0 1 0-7l1.6-1.6a5 5 0 0 1 7.1 7.1L17 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M14 11a5 5 0 0 1 0 7l-1.6 1.6a5 5 0 0 1-7.1-7.1L7 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+"""
+
+ICON_LIST = """
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <path d="M8 6h12M8 12h12M8 18h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="4" cy="6" r="1.5" fill="currentColor"/>
+  <circle cx="4" cy="12" r="1.5" fill="currentColor"/>
+  <circle cx="4" cy="18" r="1.5" fill="currentColor"/>
+</svg>
+"""
+
+ICON_SEARCH = """
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <circle cx="11" cy="11" r="6" stroke="currentColor" stroke-width="2"/>
+  <path d="M20 20l-3.6-3.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+</svg>
+"""
+
+ICON_DOC = """
+<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M14 2v6h6" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M9 12h6M9 16h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+</svg>
+"""
+
+def render_field_label(title: str, meta: str = "", icon_svg: str = ""):
+    meta_html = f"<span class='label-meta'>{html_lib.escape(meta)}</span>" if meta else ""
+    icon_html = f"<span class='label-icon'>{icon_svg}</span>" if icon_svg else ""
+    st.markdown(
+        f"<div class='field-label'>{icon_html}<span>{html_lib.escape(title)}</span>{meta_html}</div>",
+        unsafe_allow_html=True,
+    )
+
+def render_empty_state(title: str, body: str):
+    st.markdown(
+        f"""
+<div class="empty-card">
+  <div class="empty-icon">{ICON_SEARCH}</div>
+  <div class="empty-title">{html_lib.escape(title)}</div>
+  <div class="empty-body">{html_lib.escape(body)}</div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
 def section_header_pill(title: str):
-    st.markdown(f"<div class='pill' style='margin: 12px 0 10px 0;'>{html_lib.escape(title)}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='section-title'>{html_lib.escape(title)}</div>", unsafe_allow_html=True)
 
 
 # =====================================================
@@ -2402,7 +2578,7 @@ def section_header_pill(title: str):
 if "mode" not in st.session_state:
     st.session_state.mode = "update"  # "update" or "new"
 
-st.markdown("<div style='display:flex;justify-content:center;margin: 6px 0 2px 0;'>", unsafe_allow_html=True)
+st.markdown("<div class='mode-toggle'>", unsafe_allow_html=True)
 outer_l, outer_m, outer_r = st.columns([1, 2.2, 1])
 with outer_m:
     b1, b2 = st.columns(2)
@@ -2423,6 +2599,13 @@ with outer_m:
         ):
             st.session_state.mode = "new"
 st.markdown("</div>", unsafe_allow_html=True)
+
+mode_hint = (
+    "Compare an existing Bayut article against competitors to find gaps."
+    if st.session_state.mode == "update"
+    else "Use competitor coverage to shape a new Bayut post outline."
+)
+st.markdown(f"<div class='mode-hint'>{html_lib.escape(mode_hint)}</div>", unsafe_allow_html=True)
 
 show_internal_fetch = st.sidebar.checkbox("Admin: show internal fetch log", value=False)
 
@@ -2449,19 +2632,29 @@ for k, default in [
 # UI - UPDATE MODE
 # =====================================================
 if st.session_state.mode == "update":
-    section_header_pill("Update Mode")
+    with st.form("update_form"):
+        render_field_label("Bayut Article URL", icon_svg=ICON_LINK)
+        bayut_url = st.text_input(
+            "Bayut Article URL",
+            placeholder="https://www.bayut.com/mybayut/...",
+            label_visibility="collapsed",
+        )
+        render_field_label("Competitor URLs", meta="(one per line)", icon_svg=ICON_LIST)
+        competitors_text = st.text_area(
+            "Competitor URLs",
+            height=130,
+            placeholder="https://example.com/article\nhttps://example.com/another",
+            label_visibility="collapsed",
+        )
+        render_field_label("Focus Keyword", meta="(optional)", icon_svg=ICON_SEARCH)
+        manual_fkw_update = st.text_input(
+            "Focus Keyword",
+            placeholder="e.g., pros and cons business bay",
+            label_visibility="collapsed",
+        )
+        run = st.form_submit_button("Run Analysis", type="primary", use_container_width=True)
 
-    bayut_url = st.text_input("Bayut article URL", placeholder="https://www.bayut.com/mybayut/...")
-    competitors_text = st.text_area(
-        "Competitor URLs (one per line)",
-        height=120,
-        placeholder="https://example.com/article\nhttps://example.com/another"
-    )
     competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
-
-    manual_fkw_update = st.text_input("Optional: Focus Keyword (FKW) for analysis + UAE ranking", placeholder="e.g., pros and cons business bay")
-
-    run = st.button("Run analysis", type="primary")
 
     if run:
         if not bayut_url.strip():
@@ -2540,48 +2733,74 @@ if st.session_state.mode == "update":
         for u, s in st.session_state.update_fetch:
             st.sidebar.write(u, "—", s)
 
-    section_header_pill("Gaps Table")
-    if st.session_state.update_df is None or st.session_state.update_df.empty:
-        st.info("Run analysis to see results.")
-    else:
-        render_table(st.session_state.update_df)
+    has_update_results = any(
+        df is not None and not df.empty
+        for df in [
+            st.session_state.update_df,
+            st.session_state.cq_update_df,
+            st.session_state.seo_update_df,
+            st.session_state.ai_vis_update_df,
+        ]
+    )
 
-    section_header_pill("Content Quality")
-    if st.session_state.cq_update_df is None or st.session_state.cq_update_df.empty:
-        st.info("Run analysis to see Content Quality signals.")
+    if not has_update_results:
+        render_empty_state(
+            "No Analysis Yet",
+            "Enter your URLs above and run the analysis to see competitor gap insights, SEO comparison, and content quality signals.",
+        )
     else:
-        render_table(st.session_state.cq_update_df, drop_internal_url=True)
+        section_header_pill("Gaps Table")
+        if st.session_state.update_df is None or st.session_state.update_df.empty:
+            st.info("No gaps detected yet. Add more competitors or refine URLs.")
+        else:
+            render_table(st.session_state.update_df)
 
-    section_header_pill("SEO Analysis")
-    if st.session_state.seo_update_df is None or st.session_state.seo_update_df.empty:
-        st.info("Run analysis to see SEO comparison.")
-    else:
-        render_table(st.session_state.seo_update_df, drop_internal_url=True)
+        section_header_pill("Content Quality")
+        if st.session_state.cq_update_df is None or st.session_state.cq_update_df.empty:
+            st.info("Run analysis to see Content Quality signals.")
+        else:
+            render_table(st.session_state.cq_update_df, drop_internal_url=True)
 
-    section_header_pill("AI Visibility")
-    if st.session_state.ai_vis_update_df is None or st.session_state.ai_vis_update_df.empty:
-        st.info("Run analysis to see AI visibility signals.")
-    else:
-        render_table(st.session_state.ai_vis_update_df, drop_internal_url=True)
+        section_header_pill("SEO Analysis")
+        if st.session_state.seo_update_df is None or st.session_state.seo_update_df.empty:
+            st.info("Run analysis to see SEO comparison.")
+        else:
+            render_table(st.session_state.seo_update_df, drop_internal_url=True)
+
+        section_header_pill("AI Visibility")
+        if st.session_state.ai_vis_update_df is None or st.session_state.ai_vis_update_df.empty:
+            st.info("Run analysis to see AI visibility signals.")
+        else:
+            render_table(st.session_state.ai_vis_update_df, drop_internal_url=True)
 
 
 # =====================================================
 # UI - NEW POST MODE
 # =====================================================
 else:
-    section_header_pill("New Post Mode")
+    with st.form("new_post_form"):
+        render_field_label("New Post Title", icon_svg=ICON_DOC)
+        new_title = st.text_input(
+            "New Post Title",
+            placeholder="Pros & Cons of Living in Business Bay (2026)",
+            label_visibility="collapsed",
+        )
+        render_field_label("Competitor URLs", meta="(one per line)", icon_svg=ICON_LIST)
+        competitors_text = st.text_area(
+            "Competitor URLs",
+            height=130,
+            placeholder="https://example.com/article\nhttps://example.com/another",
+            label_visibility="collapsed",
+        )
+        render_field_label("Focus Keyword", meta="(optional)", icon_svg=ICON_SEARCH)
+        manual_fkw_new = st.text_input(
+            "Focus Keyword",
+            placeholder="e.g., pros and cons business bay",
+            label_visibility="collapsed",
+        )
+        run = st.form_submit_button("Generate Coverage", type="primary", use_container_width=True)
 
-    new_title = st.text_input("New post title", placeholder="Pros & Cons of Living in Business Bay (2026)")
-    competitors_text = st.text_area(
-        "Competitor URLs (one per line)",
-        height=120,
-        placeholder="https://example.com/article\nhttps://example.com/another"
-    )
     competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
-
-    manual_fkw_new = st.text_input("Optional: Focus Keyword (FKW) for SEO + UAE ranking", placeholder="e.g., pros and cons business bay")
-
-    run = st.button("Generate competitor coverage", type="primary")
 
     if run:
         if not new_title.strip():
@@ -2645,29 +2864,45 @@ else:
         for u, s in st.session_state.new_fetch:
             st.sidebar.write(u, "—", s)
 
-    section_header_pill("Competitor Coverage")
-    if st.session_state.new_df is None or st.session_state.new_df.empty:
-        st.info("Generate competitor coverage to see results.")
-    else:
-        render_table(st.session_state.new_df)
+    has_new_results = any(
+        df is not None and not df.empty
+        for df in [
+            st.session_state.new_df,
+            st.session_state.cq_new_df,
+            st.session_state.seo_new_df,
+            st.session_state.ai_vis_new_df,
+        ]
+    )
 
-    section_header_pill("Content Quality")
-    if st.session_state.cq_new_df is None or st.session_state.cq_new_df.empty:
-        st.info("Generate competitor coverage to see Content Quality signals.")
+    if not has_new_results:
+        render_empty_state(
+            "No Analysis Yet",
+            "Enter your competitor URLs above and generate coverage to see insights.",
+        )
     else:
-        render_table(st.session_state.cq_new_df, drop_internal_url=True)
+        section_header_pill("Competitor Coverage")
+        if st.session_state.new_df is None or st.session_state.new_df.empty:
+            st.info("Generate competitor coverage to see results.")
+        else:
+            render_table(st.session_state.new_df)
 
-    section_header_pill("SEO Analysis")
-    if st.session_state.seo_new_df is None or st.session_state.seo_new_df.empty:
-        st.info("Generate competitor coverage to see SEO comparison.")
-    else:
-        render_table(st.session_state.seo_new_df, drop_internal_url=True)
+        section_header_pill("Content Quality")
+        if st.session_state.cq_new_df is None or st.session_state.cq_new_df.empty:
+            st.info("Generate competitor coverage to see Content Quality signals.")
+        else:
+            render_table(st.session_state.cq_new_df, drop_internal_url=True)
 
-    section_header_pill("AI Visibility")
-    if st.session_state.ai_vis_new_df is None or st.session_state.ai_vis_new_df.empty:
-        st.info("Generate competitor coverage to see AI visibility signals.")
-    else:
-        render_table(st.session_state.ai_vis_new_df, drop_internal_url=True)
+        section_header_pill("SEO Analysis")
+        if st.session_state.seo_new_df is None or st.session_state.seo_new_df.empty:
+            st.info("Generate competitor coverage to see SEO comparison.")
+        else:
+            render_table(st.session_state.seo_new_df, drop_internal_url=True)
+
+        section_header_pill("AI Visibility")
+        if st.session_state.ai_vis_new_df is None or st.session_state.ai_vis_new_df.empty:
+            st.info("Generate competitor coverage to see AI visibility signals.")
+        else:
+            render_table(st.session_state.ai_vis_new_df, drop_internal_url=True)
 
 if (st.session_state.seo_update_df is not None and not st.session_state.seo_update_df.empty) or \
    (st.session_state.seo_new_df is not None and not st.session_state.seo_new_df.empty):
