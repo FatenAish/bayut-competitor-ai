@@ -29,373 +29,262 @@ st.set_page_config(page_title="Bayut Competitor Gap Analysis", layout="wide")
 
 
 # =====================================================
-# STYLE (LIGHT GREEN BACKGROUND + CENTERED MODE BUTTONS)
+# NEW STYLE (Tailwind/shadcn-inspired theme from your index.css)
 # =====================================================
-BAYUT_GREEN = "#0E8A6D"
-LIGHT_GREEN = "#E9F7F1"
-LIGHT_GREEN_2 = "#DFF3EA"
-TEXT_DARK = "#1F2937"
-PAGE_BG = "#F3FBF7"  # lighter green background
-
 st.markdown(
-    f"""
-    <style>
-      html, body, [data-testid="stAppViewContainer"] {{
-        background: {PAGE_BG} !important;
-      }}
-      [data-testid="stHeader"] {{
-        background: rgba(0,0,0,0) !important;
-      }}
-      section.main > div.block-container {{
-        max-width: 1180px !important;
-        padding-top: 1.6rem !important;
-        padding-bottom: 2.4rem !important;
-      }}
-      .hero {{
-        text-align:center;
-        margin-top: 0.6rem;
-        margin-bottom: 1.2rem;
-      }}
-      .hero h1 {{
-        font-size: 52px;
-        line-height: 1.08;
-        margin: 0;
-        color: {TEXT_DARK};
-        font-weight: 800;
-        letter-spacing: -0.02em;
-      }}
-      .hero .bayut {{
-        color: {BAYUT_GREEN};
-      }}
-      .hero p {{
-        margin: 10px 0 0 0;
-        color: #6B7280;
-        font-size: 16px;
-      }}
-      .section-pill {{
-        background: {LIGHT_GREEN};
-        border: 1px solid {LIGHT_GREEN_2};
-        padding: 10px 14px;
-        border-radius: 14px;
-        font-weight: 900;
-        color: {TEXT_DARK};
-        display: inline-block;
-      }}
-      /* tighter + closer to table */
-      .section-pill-tight {{
-        margin: 6px 0 4px 0;
-      }}
-      .stTextInput input, .stTextArea textarea {{
-        background: {LIGHT_GREEN} !important;
-        border: 1px solid {LIGHT_GREEN_2} !important;
-        border-radius: 12px !important;
-      }}
-      .stButton button {{
-        border-radius: 14px !important;
-        padding: 0.65rem 1rem !important;
-        font-weight: 900 !important;
-      }}
-      .mode-wrap {{
-        display:flex;
-        justify-content:center;
-        margin: 10px 0 6px 0;
-      }}
-      .mode-note {{
-        text-align:center;
-        color:#6B7280;
-        font-size: 13px;
-        margin-top: -2px;
-        margin-bottom: 6px;
-      }}
-      table {{
-        width: 100% !important;
-        border-collapse: separate !important;
-        border-spacing: 0 !important;
-        overflow: hidden !important;
-        border-radius: 14px !important;
-        border: 1px solid #E5E7EB !important;
-        background: white !important;
-        margin-top: 0 !important;
-      }}
-      thead th {{
-        background: {LIGHT_GREEN} !important;
-        text-align: center !important;
-        font-weight: 900 !important;
-        color: {TEXT_DARK} !important;
-        padding: 6px 14px !important;      /* smaller */
-        border-bottom: 1px solid #E5E7EB !important;
-      }}
-      tbody td {{
-        vertical-align: top !important;
-        padding: 6px 6px !important;       /* smaller */
-        border-bottom: 1px solid #F1F5F9 !important;
-        color: {TEXT_DARK} !important;
-        font-size: 12px !important;        /* smaller */
-      }}
-      tbody tr:last-child td {{
-        border-bottom: 0 !important;
-      }}
-      a {{
-        color: {BAYUT_GREEN} !important;
-        font-weight: 900 !important;
-        text-decoration: underline !important;
-      }}
-      code {{
-        background: rgba(0,0,0,0.04);
-        padding: 2px 6px;
-        border-radius: 8px;
-      }}
-      .details-link summary {{
-        cursor: pointer;
-        color: {BAYUT_GREEN};
-        text-decoration: underline;
-        font-weight: 900;
-        list-style: none;
-      }}
-      .details-link summary::-webkit-details-marker {{
-        display: none;
-      }}
-      .details-box {{
-        margin-top: 6px;
-        padding: 8px 10px;
-        background: #F9FAFB;
-        border: 1px solid #E5E7EB;
-        border-radius: 10px;
-        color: {TEXT_DARK};
-      }}
-      .ai-summary {{
-        background: white;
-        border: 1px solid #E5E7EB;
-        border-radius: 14px;
-        padding: 14px 14px;
-        margin: 6px 0 10px 0;
-      }}
-      .muted {{
-        color:#6B7280;
-        font-size: 13px;
-      }}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+    """
+<style>
+/* ------------------------------
+   Theme tokens (same spirit as src/index.css)
+--------------------------------*/
+:root{
+  --bayut-primary: 163 82% 30%;
+  --bayut-primary-light: 163 72% 40%;
+  --bayut-primary-dark: 163 90% 22%;
+  --bayut-glow: 163 60% 50%;
 
-st.markdown(
-    f"""
-    <div class="hero">
-      <h1><span class="bayut">Bayut</span> Competitor Gap Analysis</h1>
-      <p>Identifies missing sections and incomplete coverage against competitor articles.</p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+  --background: 150 30% 98%;
+  --foreground: 220 25% 12%;
 
+  --card: 0 0% 100%;
+  --border: 150 20% 88%;
+  --muted: 150 15% 92%;
+  --muted-foreground: 220 10% 45%;
 
-# =====================================================
-# FETCH (NO MISSING COMPETITORS — ENFORCED)
-# =====================================================
-DEFAULT_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
+  --secondary: 150 25% 94%;
+  --accent: 163 60% 92%;
+
+  --primary: 163 82% 30%;
+  --primary-foreground: 0 0% 100%;
+
+  --radius: 0.75rem;
+
+  --gradient-hero: linear-gradient(135deg, hsl(163 82% 30%) 0%, hsl(163 60% 45%) 50%, hsl(175 70% 40%) 100%);
+  --gradient-card: linear-gradient(180deg, hsl(0 0% 100%) 0%, hsl(150 30% 98%) 100%);
+  --gradient-surface: linear-gradient(135deg, hsl(150 30% 98%) 0%, hsl(163 20% 96%) 100%);
+
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.03);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.03);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.06), 0 4px 6px -4px rgb(0 0 0 / 0.04);
+  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.07), 0 8px 10px -6px rgb(0 0 0 / 0.04);
+  --shadow-glow: 0 0 30px -5px hsl(163 82% 30% / 0.25);
 }
 
-IGNORE_TAGS = {"nav", "footer", "header", "aside", "script", "style", "noscript"}
+/* ------------------------------
+   App background + layout
+--------------------------------*/
+html, body { background: hsl(var(--background)) !important; }
+[data-testid="stAppViewContainer"]{
+  background: var(--gradient-surface) !important;
+}
+[data-testid="stHeader"] { background: transparent !important; }
+section.main > div.block-container{
+  max-width: 1040px !important;
+  padding-top: 1.8rem !important;
+  padding-bottom: 2.8rem !important;
+}
 
+/* Decorative background “blobs” like Index.tsx */
+.bg-decor {
+  position: fixed;
+  inset: 0;
+  z-index: -10;
+  overflow: hidden;
+}
+.bg-decor .blob{
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(60px);
+  opacity: 0.35;
+  animation: float 6s ease-in-out infinite;
+}
+.bg-decor .b1{ top:-80px; left:18%; width:520px; height:520px; background: hsl(var(--primary) / 0.25); }
+.bg-decor .b2{ bottom:-120px; right:18%; width:460px; height:460px; background: hsl(var(--primary) / 0.18); animation-delay:-3s; }
+.bg-decor .b3{ top:40%; left:-120px; width:420px; height:420px; background: hsl(163 60% 92% / 0.55); animation-delay:-1.5s; }
+@keyframes float { 0%,100%{ transform: translateY(0);} 50%{ transform: translateY(-10px);} }
 
-def clean(text: str) -> str:
-    return re.sub(r"\s+", " ", (text or "")).strip()
+/* subtle grid overlay */
+.grid-overlay{
+  position:absolute; inset:0; opacity:0.03;
+  background-image:
+    linear-gradient(hsl(var(--foreground)) 1px, transparent 1px),
+    linear-gradient(90deg, hsl(var(--foreground)) 1px, transparent 1px);
+  background-size: 60px 60px;
+}
 
+/* ------------------------------
+   Reusable classes (from your Tailwind components)
+--------------------------------*/
+.gradient-text{
+  background: var(--gradient-hero);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.card-elevated{
+  background: var(--gradient-card);
+  box-shadow: var(--shadow-lg);
+  border: 1px solid hsl(var(--border));
+  border-radius: 1.25rem;
+}
+.glow-hover{ transition: box-shadow 0.25s ease; }
+.glow-hover:hover{ box-shadow: var(--shadow-glow); }
+.pill{
+  display:inline-flex; align-items:center; gap:.5rem;
+  padding:.45rem .9rem;
+  border-radius: 9999px;
+  font-weight: 700;
+  font-size: 13px;
+  background: hsl(163 45% 95%);
+  color: hsl(var(--primary));
+  border: 1px solid hsl(var(--border));
+}
+.section-title{
+  font-weight: 800;
+  font-size: 18px;
+  position: relative;
+  display:inline-block;
+}
+.section-title:after{
+  content:"";
+  position:absolute;
+  left:0; bottom:-6px;
+  width:32px; height:3px;
+  border-radius:9999px;
+  background: hsl(var(--primary));
+}
 
-def looks_blocked(text: str) -> bool:
-    t = (text or "").lower()
-    return any(x in t for x in [
-        "just a moment", "checking your browser", "verify you are human",
-        "cloudflare", "access denied", "captcha", "forbidden", "service unavailable"
-    ])
+/* ------------------------------
+   Hero styling
+--------------------------------*/
+.hero-wrap{ padding: 1.4rem 0 0.6rem 0; text-align:center; }
+.hero-icon{
+  width:76px; height:76px; margin:0 auto 18px auto;
+  border-radius: 22px;
+  background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(var(--primary) / 0.75) 100%);
+  box-shadow: var(--shadow-md), var(--shadow-glow);
+  display:flex; align-items:center; justify-content:center;
+}
+.hero-h1{
+  font-size: 52px;
+  line-height: 1.06;
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-weight: 900;
+  letter-spacing: -0.02em;
+}
+.hero-sub{
+  margin: 10px auto 0 auto;
+  max-width: 720px;
+  color: hsl(var(--muted-foreground));
+  font-size: 16px;
+  line-height: 1.6;
+}
+.hero-badges{ margin-top: 14px; display:flex; justify-content:center; gap:10px; flex-wrap:wrap; }
+.hero-badge{
+  display:inline-flex; align-items:center; gap:8px;
+  padding: 8px 12px;
+  border-radius: 9999px;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--card));
+  box-shadow: var(--shadow-sm);
+  font-weight: 700;
+  font-size: 13px;
+  color: hsl(var(--foreground));
+}
 
+/* ------------------------------
+   Streamlit widgets styling
+--------------------------------*/
+/* Inputs */
+[data-testid="stTextInput"] input,
+[data-testid="stTextArea"] textarea{
+  background: hsl(var(--secondary) / 0.5) !important;
+  border: 1px solid hsl(var(--border)) !important;
+  border-radius: 14px !important;
+}
+[data-testid="stTextInput"] input:focus,
+[data-testid="stTextArea"] textarea:focus{
+  box-shadow: 0 0 0 4px hsl(var(--primary) / 0.18) !important;
+  border-color: hsl(var(--primary)) !important;
+}
 
-@dataclass
-class FetchResult:
-    ok: bool
-    source: Optional[str]
-    status: Optional[int]
-    html: str
-    text: str
-    reason: Optional[str]
+/* Buttons (best-effort across Streamlit versions) */
+div[data-testid="stButton"] > button{
+  border-radius: 16px !important;
+  padding: 0.75rem 1rem !important;
+  font-weight: 800 !important;
+  border: 1px solid hsl(var(--border)) !important;
+  background: hsl(var(--secondary)) !important;
+  color: hsl(var(--foreground)) !important;
+  box-shadow: var(--shadow-sm) !important;
+  transition: transform .1s ease, box-shadow .25s ease, background .2s ease !important;
+}
+div[data-testid="stButton"] > button:hover{
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md), var(--shadow-glow) !important;
+  background: hsl(var(--accent)) !important;
+}
+div[data-testid="stButton"] > button[kind="primary"],
+div[data-testid="baseButton-primary"] > button{
+  background: hsl(var(--primary)) !important;
+  color: hsl(var(--primary-foreground)) !important;
+  border-color: hsl(var(--primary)) !important;
+}
 
-
-class FetchAgent:
-    """
-    Deterministic resolver:
-    - direct HTML
-    - optional JS render (Playwright)
-    - Jina reader
-    - Textise
-    If all fail => app forces manual paste (hard gate).
-    """
-
-    def __init__(self, default_headers: dict, ignore_tags: set, clean_fn, looks_blocked_fn):
-        self.default_headers = default_headers
-        self.ignore_tags = ignore_tags
-        self.clean = clean_fn
-        self.looks_blocked = looks_blocked_fn
-
-        self.user_agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36",
-        ]
-
-    def _http_get(self, url: str, timeout: int = 25, tries: int = 3) -> Tuple[int, str]:
-        last_code, last_text = 0, ""
-        for i in range(tries):
-            headers = dict(self.default_headers)
-            headers["User-Agent"] = random.choice(self.user_agents)
-            try:
-                r = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
-                last_code, last_text = r.status_code, (r.text or "")
-
-                if r.status_code in (429, 500, 502, 503, 504):
-                    time.sleep(1.2 * (i + 1))
-                    continue
-
-                return last_code, last_text
-            except Exception as e:
-                last_code, last_text = 0, str(e)
-                time.sleep(1.2 * (i + 1))
-        return last_code, last_text
-
-    def _jina_url(self, url: str) -> str:
-        if url.startswith("https://"):
-            return "https://r.jina.ai/https://" + url[len("https://"):]
-        if url.startswith("http://"):
-            return "https://r.jina.ai/http://" + url[len("http://"):]
-        return "https://r.jina.ai/https://" + url
-
-    def _textise_url(self, url: str) -> str:
-        return f"https://textise.org/showtext.aspx?strURL={quote_plus(url)}"
-
-    def _validate_text(self, text: str, min_len: int) -> bool:
-        t = self.clean(text)
-        if len(t) < min_len:
-            return False
-        if self.looks_blocked(t):
-            return False
-        return True
-
-    def _extract_article_text_from_html(self, html: str) -> str:
-        soup = BeautifulSoup(html, "html.parser")
-        for t in soup.find_all(list(self.ignore_tags)):
-            t.decompose()
-        article = soup.find("article") or soup
-        return self.clean(article.get_text(" "))
-
-    def _fetch_playwright_html(self, url: str, timeout_ms: int = 25000) -> Tuple[bool, str]:
-        if not PLAYWRIGHT_OK:
-            return False, ""
-        try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
-                ctx = browser.new_context(user_agent=random.choice(self.user_agents))
-                page = ctx.new_page()
-                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-                page.wait_for_timeout(1400)
-                html = page.content()
-                browser.close()
-            return True, html
-        except Exception:
-            return False, ""
-
-    def resolve(self, url: str) -> FetchResult:
-        url = (url or "").strip()
-        if not url:
-            return FetchResult(False, None, None, "", "", "empty_url")
-
-        # 1) direct HTML
-        code, html = self._http_get(url)
-        if code == 200 and html:
-            text = self._extract_article_text_from_html(html)
-            if self._validate_text(text, min_len=500):
-                return FetchResult(True, "direct", code, html, text, None)
-
-        # 2) JS-rendered HTML
-        ok, html2 = self._fetch_playwright_html(url)
-        if ok and html2:
-            text2 = self._extract_article_text_from_html(html2)
-            if self._validate_text(text2, min_len=500):
-                return FetchResult(True, "playwright", 200, html2, text2, None)
-
-        # 3) Jina reader
-        jurl = self._jina_url(url)
-        code3, txt3 = self._http_get(jurl)
-        if code3 == 200 and txt3:
-            text3 = self.clean(txt3)
-            if self._validate_text(text3, min_len=500):
-                return FetchResult(True, "jina", code3, "", text3, None)
-
-        # 4) Textise
-        turl = self._textise_url(url)
-        code4, html4 = self._http_get(turl)
-        if code4 == 200 and html4:
-            soup = BeautifulSoup(html4, "html.parser")
-            text4 = self.clean(soup.get_text(" "))
-            if self._validate_text(text4, min_len=350):
-                return FetchResult(True, "textise", code4, "", text4, None)
-
-        return FetchResult(False, None, code or None, "", "", "blocked_or_no_content")
-
-
-agent = FetchAgent(
-    default_headers=DEFAULT_HEADERS,
-    ignore_tags=IGNORE_TAGS,
-    clean_fn=clean,
-    looks_blocked_fn=looks_blocked,
+/* ------------------------------
+   Tables (we’ll render with df.to_html(classes="data-table"))
+--------------------------------*/
+table.data-table{
+  width:100% !important;
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
+  overflow: hidden !important;
+  border-radius: 16px !important;
+  border: 1px solid hsl(var(--border)) !important;
+  background: hsl(var(--card)) !important;
+}
+table.data-table thead th{
+  background: hsl(163 45% 95%) !important;
+  color: hsl(var(--foreground)) !important;
+  font-weight: 800 !important;
+  padding: 10px 12px !important;
+  text-align: left !important;
+  border-bottom: 1px solid hsl(var(--border)) !important;
+  white-space: nowrap;
+}
+table.data-table tbody td{
+  padding: 10px 12px !important;
+  border-top: 1px solid hsl(var(--border)) !important;
+  color: hsl(var(--foreground)) !important;
+  font-size: 13px !important;
+  vertical-align: top !important;
+}
+table.data-table tbody tr:hover{
+  background: hsl(var(--muted) / 0.5) !important;
+}
+a{
+  color: hsl(var(--primary)) !important;
+  font-weight: 800 !important;
+  text-decoration: underline !important;
+}
+</style>
+""",
+    unsafe_allow_html=True,
 )
 
-
-def _safe_key(prefix: str, url: str) -> str:
-    h = hashlib.md5((url or "").encode("utf-8")).hexdigest()
-    return f"{prefix}__{h}"
-
-
-def resolve_all_or_require_manual(agent: FetchAgent, urls: List[str], st_key_prefix: str) -> Dict[str, FetchResult]:
-    results: Dict[str, FetchResult] = {}
-    failed: List[str] = []
-
-    for u in urls:
-        r = agent.resolve(u)
-        results[u] = r
-        if not r.ok:
-            failed.append(u)
-        time.sleep(0.25)
-
-    if not failed:
-        return results
-
-    st.error("Some URLs could not be fetched automatically. Paste the article HTML/text for EACH failed URL to continue. (No missing URLs.)")
-
-    for u in failed:
-        with st.expander(f"Manual fallback required: {u}", expanded=True):
-            pasted = st.text_area(
-                "Paste the full article HTML OR readable article text:",
-                key=_safe_key(st_key_prefix + "__paste", u),
-                height=220,
-            )
-            if pasted and len(pasted.strip()) > 400:
-                results[u] = FetchResult(True, "manual", 200, pasted.strip(), pasted.strip(), None)
-
-    still_failed = [u for u in failed if not results[u].ok]
-    if still_failed:
-        st.stop()
-
-    return results
-
+# Background decor layer (like your React Index.tsx)
+st.markdown(
+    """
+<div class="bg-decor">
+  <div class="blob b1"></div>
+  <div class="blob b2"></div>
+  <div class="blob b3"></div>
+  <div class="grid-overlay"></div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
 
 # =====================================================
 # HEADING TREE + FILTERS
