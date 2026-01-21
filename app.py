@@ -390,12 +390,129 @@ NOISE_PATTERNS = [
     r"\bshare\b", r"\bshare this\b", r"\bfollow us\b", r"\blike\b", r"\bsubscribe\b",
     r"\bnewsletter\b", r"\bsign up\b", r"\blogin\b", r"\bregister\b",
     r"\brelated (posts|articles)\b", r"\byou may also like\b", r"\brecommended\b",
-    r"\bpopular posts\b", r"\bmore articles\b", r"\blatest (blogs|blog|podcasts|podcast|insights)\b",
+    r"\bpopular posts?\b", r"\bmore articles\b", r"\blatest (blogs|blog|podcasts|podcast|insights)\b",
     r"\breal estate insights\b",
+    r"\bfeatured posts?\b", r"\brecent posts?\b", r"\blatest posts?\b", r"\brelated articles?\b",
+    r"\bleave a comment\b", r"\bcomments?\b",
     r"\btable of contents\b", r"\bcontents\b", r"\bback to top\b", r"\bread more\b",
-    r"\bnext\b", r"\bprevious\b", r"\bcomments\b",
+    r"\bnext\b", r"\bprevious\b",
     r"\bplease stand by\b", r"\bloading\b", r"\bjust a moment\b",
 ]
+
+NOISE_EXACT_HEADERS = {
+    "blog categories",
+    "categories",
+    "category",
+    "featured post",
+    "featured posts",
+    "recent post",
+    "recent posts",
+    "latest post",
+    "latest posts",
+    "popular post",
+    "popular posts",
+    "related post",
+    "related posts",
+    "related article",
+    "related articles",
+    "tag",
+    "tags",
+    "tag cloud",
+    "leave a comment",
+    "comment",
+    "comments",
+}
+
+NOISY_CONTAINER_HINTS = [
+    "sidebar", "widget", "related", "comment", "comments", "respond", "author", "bio",
+    "share", "social", "newsletter", "subscribe", "signup", "sign-up", "login", "register",
+    "breadcrumb", "breadcrumbs", "nav", "menu", "pagination", "pager",
+    "tag-cloud", "tags-list", "post-tags", "post-categories", "category-list", "categories-list",
+    "post-list", "postlist", "recent-post", "popular-post", "featured-post", "latest-post",
+    "recent-entries", "advert", "ads", "sponsored", "promo", "cta",
+]
+
+NOISY_ROLE_HINTS = {"navigation", "complementary", "contentinfo", "search", "banner"}
+
+def _tag_attr_tokens(tag) -> List[str]:
+    if not tag or not getattr(tag, "attrs", None):
+        return []
+    tokens = []
+    if tag.get("id"):
+        tokens.append(str(tag.get("id")))
+    cls = tag.get("class") or []
+    if isinstance(cls, str):
+        cls = [cls]
+    tokens.extend(cls)
+    role = tag.get("role")
+    if role:
+        tokens.append(str(role))
+    return [str(t).lower() for t in tokens if t]
+
+def _is_noisy_container(tag) -> bool:
+    if not tag or not getattr(tag, "name", None):
+        return False
+    if tag.name in {"nav", "footer", "header", "aside", "form"}:
+        return True
+    role = (tag.get("role") or "").lower()
+    if role in NOISY_ROLE_HINTS:
+        return True
+    attr_blob = " ".join(_tag_attr_tokens(tag))
+    return any(h in attr_blob for h in NOISY_CONTAINER_HINTS)
+
+def _heading_has_noisy_parent(h) -> bool:
+    if not h or not getattr(h, "parents", None):
+        return False
+    for p in [h] + list(h.parents):
+        if _is_noisy_container(p):
+            return True
+    return False
+
+def _select_content_root(soup):
+    article = soup.find("article")
+    if article and not _is_noisy_container(article):
+        if len(clean(article.get_text(" "))) >= 400:
+            return article
+
+    main = soup.find("main")
+    if main and not _is_noisy_container(main):
+        if len(clean(main.get_text(" "))) >= 400:
+            return main
+
+    best = None
+    best_score = 0.0
+    for tag in soup.find_all(["article", "main", "section", "div"]):
+        if _is_noisy_container(tag):
+            continue
+        p_text = " ".join([p.get_text(" ") for p in tag.find_all("p")])
+        p_len = len(clean(p_text))
+        if p_len < 160:
+            continue
+        total_len = len(clean(tag.get_text(" ")))
+        if total_len <= 0:
+            continue
+        ratio = p_len / max(total_len, 1)
+        score = p_len * (0.75 + (0.6 * ratio))
+        if score > best_score:
+            best_score = score
+            best = tag
+    return best or soup
+
+def _looks_like_widget_section(header: str, p_texts: List[str], li_texts: List[str]) -> bool:
+    hn = norm_header(header or "")
+    if not hn:
+        return False
+    trigger_words = {"latest", "recent", "popular", "featured", "related"}
+    if not any(w in hn.split() for w in trigger_words):
+        return False
+    if p_texts and len(clean(" ".join(p_texts))) >= 140:
+        return False
+    if len(li_texts) < 3:
+        return False
+    short_items = [t for t in li_texts if len(t.split()) <= 8]
+    if len(short_items) / max(len(li_texts), 1) >= 0.7:
+        return True
+    return False
 
 GENERIC_SECTION_HEADERS = {"introduction", "overview"}
 
@@ -422,6 +539,8 @@ def is_noise_header(h: str) -> bool:
     if not s:
         return True
     hn = norm_header(s)
+    if hn in NOISE_EXACT_HEADERS:
+        return True
     if hn in GENERIC_SECTION_HEADERS:
         return True
     if len(hn) < 4:
@@ -443,10 +562,10 @@ def level_of(tag_name: str) -> int:
 
 def build_tree_from_html(html: str) -> List[dict]:
     soup = BeautifulSoup(html, "html.parser")
-    for t in soup.find_all(list(IGNORE_TAGS)):
+    for t in soup.find_all(list(IGNORE_TAGS) + ["form"]):
         t.decompose()
 
-    root = soup.find("article") or soup
+    root = _select_content_root(soup)
     headings = root.find_all(["h1", "h2", "h3", "h4"])
 
     nodes: List[dict] = []
@@ -467,6 +586,8 @@ def build_tree_from_html(html: str) -> List[dict]:
         header = clean(h.get_text(" "))
         if not header or len(header) < 3:
             continue
+        if _heading_has_noisy_parent(h):
+            continue
         if is_noise_header(header):
             continue
 
@@ -477,6 +598,8 @@ def build_tree_from_html(html: str) -> List[dict]:
         add_node(node)
 
         content_parts = []
+        p_texts = []
+        li_texts = []
         for sib in h.find_all_next():
             if sib == h:
                 continue
@@ -486,6 +609,13 @@ def build_tree_from_html(html: str) -> List[dict]:
                 txt = clean(sib.get_text(" "))
                 if txt:
                     content_parts.append(txt)
+                    if sib.name == "p":
+                        p_texts.append(txt)
+                    elif sib.name == "li":
+                        li_texts.append(txt)
+
+        if _looks_like_widget_section(header, p_texts, li_texts):
+            continue
 
         node["content"] = clean(" ".join(content_parts))
 
