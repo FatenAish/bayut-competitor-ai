@@ -399,6 +399,35 @@ NOISE_PATTERNS = [
 
 GENERIC_SECTION_HEADERS = {"introduction", "overview"}
 
+# Common CMS/widget headings that should never become "content gaps"
+NOISE_HEADERS_EXACT = {
+    "blog categories",
+    "categories",
+    "category",
+    "tags",
+    "tag",
+    "featured posts",
+    "recent posts",
+    "latest posts",
+    "popular posts",
+    "related posts",
+    "leave a comment",
+    "comments",
+    "post a comment",
+    "share",
+    "share this",
+    "table of contents",
+}
+
+# Container noise tokens (class/id/aria-label/etc.) that indicate sidebar/widget/non-article blocks
+NOISE_CONTAINER_TOKENS = {
+    "sidebar", "widget", "widgets", "comment", "comments", "respond", "reply",
+    "related", "recommend", "popular", "recent", "featured", "category", "categories",
+    "tag", "tags", "newsletter", "subscribe", "signup", "sign-up", "login", "register",
+    "breadcrumb", "breadcrumbs", "nav", "menu", "footer", "header", "share", "social",
+    "search", "filter", "pagination",
+}
+
 STOP = {
     "the","and","for","with","that","this","from","you","your","are","was","were","will","have","has","had",
     "but","not","can","may","more","most","into","than","then","they","them","their","our","out","about",
@@ -417,11 +446,47 @@ def norm_header(h: str) -> str:
     h = re.sub(r"\s+", " ", h).strip()
     return h
 
+def _attrs_blob(tag) -> str:
+    if not tag or not getattr(tag, "attrs", None):
+        return ""
+    parts = []
+    for k in ("id", "class", "role", "aria-label", "data-testid", "data-widget", "data-component"):
+        v = tag.attrs.get(k)
+        if not v:
+            continue
+        if isinstance(v, (list, tuple)):
+            parts.append(" ".join([str(x) for x in v if x]))
+        else:
+            parts.append(str(v))
+    return " ".join(parts).lower()
+
+def is_noise_container(tag) -> bool:
+    """
+    Returns True when a heading lives inside a container that looks like
+    navigation/sidebar/widgets/comments/etc.
+    """
+    if not tag:
+        return False
+    try:
+        for p in [tag] + list(tag.parents):
+            if getattr(p, "name", None) in IGNORE_TAGS:
+                return True
+            blob = _attrs_blob(p)
+            if not blob:
+                continue
+            if any(tok in blob for tok in NOISE_CONTAINER_TOKENS):
+                return True
+    except Exception:
+        return False
+    return False
+
 def is_noise_header(h: str) -> bool:
     s = clean(h)
     if not s:
         return True
     hn = norm_header(s)
+    if hn in NOISE_HEADERS_EXACT:
+        return True
     if hn in GENERIC_SECTION_HEADERS:
         return True
     if len(hn) < 4:
@@ -441,12 +506,72 @@ def level_of(tag_name: str) -> int:
     except Exception:
         return 9
 
+def _count_words_in_tag(tag) -> int:
+    if not tag:
+        return 0
+    try:
+        txt = clean(tag.get_text(" "))
+    except Exception:
+        return 0
+    if not txt:
+        return 0
+    return len(re.findall(r"\b\w+\b", txt))
+
+def pick_main_root(soup: BeautifulSoup):
+    """
+    Heuristic main-content detection.
+    Many competitor sites do not wrap articles in <article>, so using soup as root
+    causes sidebar/widget headings to be treated as "content gaps".
+    """
+    if soup is None:
+        return None
+
+    body = soup.find("body") or soup
+
+    # Remove global noise early
+    for t in body.find_all(list(IGNORE_TAGS) + ["form"]):
+        t.decompose()
+
+    # Strong candidates first
+    preferred = (
+        body.find("article")
+        or body.find("main")
+        or body.find(attrs={"role": re.compile(r"\bmain\b", re.I)})
+        or body.find(id=re.compile(r"\b(content|main|post|article)\b", re.I))
+        or body.find(class_=re.compile(r"\b(entry-content|post-content|article-content|content-area|post-body)\b", re.I))
+    )
+    if preferred and not is_noise_container(preferred):
+        return preferred
+
+    # Score candidates by "content density"
+    best = None
+    best_score = 0
+    candidates = body.find_all(["article", "main", "section", "div"], limit=2500)
+    for c in candidates:
+        if is_noise_container(c):
+            continue
+        p_cnt = len(c.find_all("p"))
+        h_cnt = len(c.find_all(["h1", "h2", "h3", "h4"]))
+        if p_cnt < 2 and h_cnt < 2:
+            continue
+        words = _count_words_in_tag(c)
+        if words < 220:
+            continue
+        # Prefer containers with paragraphs/headings; penalize very deep wrappers
+        depth = sum(1 for _ in c.parents)
+        score = (words * 1.0) + (p_cnt * 25) + (h_cnt * 45) - (depth * 6)
+        if score > best_score:
+            best_score = score
+            best = c
+
+    return best or body
+
 def build_tree_from_html(html: str) -> List[dict]:
     soup = BeautifulSoup(html, "html.parser")
     for t in soup.find_all(list(IGNORE_TAGS)):
         t.decompose()
 
-    root = soup.find("article") or soup
+    root = pick_main_root(soup) or (soup.find("article") or soup.find("main") or soup)
     headings = root.find_all(["h1", "h2", "h3", "h4"])
 
     nodes: List[dict] = []
@@ -463,12 +588,20 @@ def build_tree_from_html(html: str) -> List[dict]:
             nodes.append(node)
         stack.append(node)
 
+    # Keep only non-noise headings and avoid headings living inside obvious widget/sidebar/comment containers.
+    filtered_headings = []
     for h in headings:
+        if is_noise_container(h):
+            continue
         header = clean(h.get_text(" "))
         if not header or len(header) < 3:
             continue
         if is_noise_header(header):
             continue
+        filtered_headings.append(h)
+
+    for i, h in enumerate(filtered_headings):
+        next_heading = filtered_headings[i + 1] if i + 1 < len(filtered_headings) else None
 
         lvl = level_of(h.name)
         pop_to_level(lvl)
@@ -477,14 +610,27 @@ def build_tree_from_html(html: str) -> List[dict]:
         add_node(node)
 
         content_parts = []
-        for sib in h.find_all_next():
-            if sib == h:
+        # Only collect text within the chosen root, and stop at the next kept heading.
+        for el in h.next_elements:
+            if el is h:
                 continue
-            if getattr(sib, "name", None) in ["h1", "h2", "h3", "h4"]:
+            if next_heading is not None and el is next_heading:
                 break
-            if getattr(sib, "name", None) in ["p", "li"]:
-                txt = clean(sib.get_text(" "))
-                if txt:
+            if getattr(el, "name", None) in ["h1", "h2", "h3", "h4"]:
+                # If an intermediate heading exists but was filtered out (noise), keep going.
+                continue
+            # Stop if we leave the root container
+            if hasattr(el, "parents"):
+                try:
+                    if el is not root and root not in el.parents:
+                        break
+                except Exception:
+                    pass
+            if getattr(el, "name", None) in ["p", "li"]:
+                if is_noise_container(el):
+                    continue
+                txt = clean(el.get_text(" "))
+                if txt and not looks_blocked(txt):
                     content_parts.append(txt)
 
         node["content"] = clean(" ".join(content_parts))
