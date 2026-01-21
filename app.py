@@ -26,7 +26,11 @@ except Exception:
 # PAGE CONFIG (MUST BE FIRST STREAMLIT CALL)
 # =====================================================
 st.set_page_config(page_title="Bayut Competitor Gap Analysis", layout="wide")
-
+BAYUT_GREEN = "#0E8A6D"
+BAYUT_GREEN_2 = "#26B89F"
+INK = "#111827"
+MUTED = "#6B7280"
+PAGE_BG = "#F3FBF7"
 
 # =====================================================
 # NEW DESIGN (Tailwind/shadcn-inspired theme from your React CSS)
