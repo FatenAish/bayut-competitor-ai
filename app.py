@@ -211,11 +211,14 @@ section.main > div.block-container{
 }
 .hero-sub{
   margin: 10px auto 0 auto;
-  max-width: 640px;
+  max-width: 560px;
+  width: 100%;
   color: hsl(var(--muted-foreground));
   font-size: 16px;
   line-height: 1.6;
-  text-align: center;
+  text-align: center !important;
+  margin-left: auto;
+  margin-right: auto;
 }
 .hero-badges{ margin-top: 14px; display:flex; justify-content:center; gap:10px; flex-wrap:wrap; }
 .hero-badge{
