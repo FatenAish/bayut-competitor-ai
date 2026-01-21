@@ -1319,11 +1319,7 @@ def missing_faqs_row(
     comp_qs = extract_faq_questions(comp_fr, comp_nodes)
     comp_qs = [q for q in comp_qs if q and len(q) > 5]
     if not comp_qs:
-        return {
-            "Headers": "FAQs",
-            "Description": "FAQ section present, but topics could not be parsed for comparison.",
-            "Source": source_link(comp_url),
-        }
+        return None
 
     bayut_has = page_has_real_faq(bayut_fr, bayut_nodes)
     bayut_qs = []
@@ -1339,26 +1335,19 @@ def missing_faqs_row(
 
     bayut_set = {q_key(q) for q in bayut_qs if q}
 
-    if not bayut_has:
-        topics = faq_topics_from_questions(comp_qs, limit=8)
-        topic_list = format_gap_list(topics, limit=6)
-        topic_text = f" Missing topics include: {topic_list}." if topic_list else ""
-        return {"Headers": "FAQs", "Description": "FAQ section missing." + topic_text, "Source": source_link(comp_url)}
-
-    if bayut_has and not bayut_qs:
-        topics = faq_topics_from_questions(comp_qs, limit=8)
-        topic_list = format_gap_list(topics, limit=6)
-        topic_text = f" Competitor topics include: {topic_list}." if topic_list else ""
-        return {"Headers": "FAQs", "Description": "Bayut FAQ questions could not be parsed for comparison." + topic_text, "Source": source_link(comp_url)}
-
     missing_qs = [q for q in comp_qs if q_key(q) not in bayut_set]
     if not missing_qs:
         return None
 
-    topics = faq_topics_from_questions(missing_qs, limit=8)
-    topic_list = format_gap_list(topics, limit=6)
-    topic_text = f" Missing FAQ topics: {topic_list}." if topic_list else " Missing FAQ topics found in competitor section."
-    return {"Headers": "FAQs", "Description": topic_text.strip(), "Source": source_link(comp_url)}
+    def as_question_list(items: List[str]) -> str:
+        lis = "".join(f"<li>{html_lib.escape(clean(i))}</li>" for i in items if clean(i))
+        return f"<ul>{lis}</ul>" if lis else ""
+
+    return {
+        "Headers": "FAQs",
+        "Description": as_question_list(missing_qs),
+        "Source": source_link(comp_url),
+    }
 
 
 # =====================================================
