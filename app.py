@@ -421,6 +421,8 @@ def is_noise_header(h: str) -> bool:
     s = clean(h)
     if not s:
         return True
+    if header_is_faq(s):
+        return False
     hn = norm_header(s)
     if hn in GENERIC_SECTION_HEADERS:
         return True
@@ -668,6 +670,24 @@ def flatten(nodes: List[dict]) -> List[dict]:
 def strip_label(h: str) -> str:
     return clean(re.sub(r"\s*:\s*$", "", (h or "").strip()))
 
+def format_gap_list(items: List[str], limit: int = 6) -> str:
+    cleaned = []
+    seen = set()
+    for item in items or []:
+        it = clean(item)
+        if not it:
+            continue
+        k = norm_header(it)
+        if k in seen:
+            continue
+        seen.add(k)
+        cleaned.append(it)
+    if not cleaned:
+        return ""
+    if limit <= 0 or len(cleaned) <= limit:
+        return ", ".join(cleaned)
+    return ", ".join(cleaned[:limit]) + f", and {len(cleaned) - limit} more"
+
 def headings_blob(nodes: List[dict]) -> str:
     hs = []
     for x in flatten(nodes):
@@ -700,7 +720,15 @@ FAQ_TITLES = {
 
 def header_is_faq(header: str) -> bool:
     nh = norm_header(header)
-    return nh in FAQ_TITLES
+    if not nh:
+        return False
+    if nh in FAQ_TITLES:
+        return True
+    if "faq" in nh:
+        return True
+    if "frequently asked" in nh:
+        return True
+    return False
 
 def _looks_like_question(s: str) -> bool:
     s = clean(s)
@@ -758,10 +786,105 @@ def _has_faq_schema(html: str) -> bool:
         return False
     return False
 
+def _faq_questions_from_schema(html: str) -> List[str]:
+    if not html:
+        return []
+    qs: List[str] = []
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        scripts = soup.find_all("script", attrs={"type": re.compile(r"ld\+json", re.I)})
+        for s in scripts:
+            raw = (s.string or s.get_text(" ") or "").strip()
+            if not raw:
+                continue
+            try:
+                j = json.loads(raw)
+            except Exception:
+                continue
+
+            def add_q(q: str):
+                qn = normalize_question(q)
+                if not qn or len(qn) < 6 or len(qn) > 180:
+                    return
+                qs.append(qn)
+
+            def walk(x):
+                if isinstance(x, dict):
+                    t = x.get("@type") or x.get("type")
+                    t_list = []
+                    if isinstance(t, list):
+                        t_list = [str(z).lower() for z in t]
+                    elif isinstance(t, str):
+                        t_list = [t.lower()]
+
+                    if any("question" == z or z.endswith("question") for z in t_list):
+                        name = x.get("name") or x.get("text") or ""
+                        if name:
+                            add_q(name)
+
+                    for v in x.values():
+                        walk(v)
+                elif isinstance(x, list):
+                    for v in x:
+                        walk(v)
+
+            walk(j)
+    except Exception:
+        return []
+
+    seen = set()
+    out = []
+    for q in qs:
+        k = norm_header(q)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        out.append(q)
+    return out
+
+def _faq_questions_from_html(html: str) -> List[str]:
+    if not html:
+        return []
+    soup = BeautifulSoup(html, "html.parser")
+    for t in soup.find_all(list(IGNORE_TAGS)):
+        t.decompose()
+
+    qs: List[str] = []
+    qs.extend(_faq_questions_from_schema(html))
+
+    candidates = []
+    for tag in soup.find_all(True):
+        id_attr = (tag.get("id") or "").lower()
+        cls_attr = " ".join(tag.get("class", []) or []).lower()
+        if re.search(r"\bfaq\b|\bfaqs\b|\baccordion\b|\bquestions\b", id_attr + " " + cls_attr):
+            candidates.append(tag)
+
+    for h in soup.find_all(["h1", "h2", "h3", "h4"]):
+        if header_is_faq(h.get_text(" ")):
+            candidates.append(h.parent or h)
+
+    for c in candidates[:10]:
+        for el in c.find_all(["summary", "button", "h3", "h4", "h5", "strong", "p", "li", "dt"]):
+            txt = clean(el.get_text(" "))
+            if not txt or len(txt) < 6 or len(txt) > 180:
+                continue
+            if _looks_like_question(txt):
+                qs.append(normalize_question(txt))
+
+    seen = set()
+    out = []
+    for q in qs:
+        k = norm_header(q)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        out.append(q)
+    return out
+
 def _faq_heading_nodes(nodes: List[dict]) -> List[dict]:
     out = []
     for x in flatten(nodes):
-        if x.get("level") in (2, 3) and header_is_faq(x.get("header", "")):
+        if x.get("level") in (2, 3, 4) and header_is_faq(x.get("header", "")):
             out.append(x)
     return out
 
@@ -774,22 +897,42 @@ def _question_heading_children(node: dict) -> List[str]:
     return qs
 
 def page_has_real_faq(fr: FetchResult, nodes: List[dict]) -> bool:
+    if fr and fr.html:
+        if _has_faq_schema(fr.html):
+            return True
+        if len(_faq_questions_from_html(fr.html)) >= 2:
+            return True
+
     faq_nodes = _faq_heading_nodes(nodes)
     if not faq_nodes:
         return False
 
-    if fr and fr.html:
-        if _has_faq_schema(fr.html):
-            return True
-        for fn in faq_nodes:
-            if len(_question_heading_children(fn)) >= 3:
-                return True
-        return False
-
     for fn in faq_nodes:
-        if len(_question_heading_children(fn)) >= 3:
+        if len(extract_questions_from_node(fn)) >= 2:
             return True
-    return False
+        txt = clean(fn.get("content", ""))
+        if txt and txt.count("?") >= 2:
+            return True
+
+    # FAQ header present is a strong signal even if questions were not parsed
+    return True
+
+def extract_faq_questions(fr: FetchResult, nodes: List[dict]) -> List[str]:
+    qs: List[str] = []
+    if fr and fr.html:
+        qs.extend(_faq_questions_from_html(fr.html))
+    for fn in _faq_heading_nodes(nodes):
+        qs.extend(extract_questions_from_node(fn))
+
+    seen = set()
+    out = []
+    for q in qs:
+        k = norm_header(q)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        out.append(q)
+    return out
 
 def extract_questions_from_node(node: dict) -> List[str]:
     qs: List[str] = []
@@ -865,19 +1008,12 @@ def missing_faqs_row(
     if not page_has_real_faq(comp_fr, comp_nodes):
         return None
 
-    comp_faq_nodes = _faq_heading_nodes(comp_nodes)
-    comp_qs = []
-    for fn in comp_faq_nodes:
-        comp_qs.extend(extract_questions_from_node(fn))
+    comp_qs = extract_faq_questions(comp_fr, comp_nodes)
     comp_qs = [q for q in comp_qs if q and len(q) > 5]
-    if len(comp_qs) < 3:
-        return None
-
     bayut_has = page_has_real_faq(bayut_fr, bayut_nodes)
     bayut_qs = []
     if bayut_has:
-        for fn in _faq_heading_nodes(bayut_nodes):
-            bayut_qs.extend(extract_questions_from_node(fn))
+        bayut_qs = extract_faq_questions(bayut_fr, bayut_nodes)
     bayut_qs = [q for q in bayut_qs if q and len(q) > 5]
 
     def q_key(q: str) -> str:
@@ -889,10 +1025,12 @@ def missing_faqs_row(
     bayut_set = {q_key(q) for q in bayut_qs if q}
 
     if not bayut_qs:
-        topics = faq_subjects_from_questions(comp_qs, limit=10)
+        topics = faq_subjects_from_questions(comp_qs, limit=8)
+        topic_list = format_gap_list(topics, limit=6)
+        topic_text = f" Missing topics include: {topic_list}." if topic_list else ""
         return {
             "Headers": "FAQs",
-            "Description": "Competitor has a real FAQ section covering topics such as: " + ", ".join(topics) + ".",
+            "Description": "FAQ section missing." + topic_text,
             "Source": source_link(comp_url),
         }
 
@@ -900,10 +1038,12 @@ def missing_faqs_row(
     if not missing_qs:
         return None
 
-    topics = faq_subjects_from_questions(missing_qs, limit=10)
+    topics = faq_subjects_from_questions(missing_qs, limit=8)
+    topic_list = format_gap_list(topics, limit=6)
+    topic_text = f" Missing FAQ topics: {topic_list}." if topic_list else " Missing FAQ topics found in competitor section."
     return {
         "Headers": "FAQs",
-        "Description": "Missing FAQ topics: " + ", ".join(topics) + ".",
+        "Description": topic_text.strip(),
         "Source": source_link(comp_url),
     }
 
@@ -1003,17 +1143,6 @@ def theme_flags(text: str) -> set:
     return flags
 
 def summarize_missing_section_action(header: str, subheaders: Optional[List[str]], comp_content: str) -> str:
-    hn = norm_header(header)
-
-    if ("importance" in hn and "pros" in hn and "cons" in hn) or ("consider" in hn and "pros" in hn and "cons" in hn):
-        return "Competitor includes decision framing on how to weigh pros vs cons before concluding."
-
-    if "comparison" in hn or "compare" in hn or "vs" in hn or "versus" in hn:
-        if subheaders:
-            hint = ", ".join(subheaders[:3])
-            return f"Competitor includes a comparison section and breaks it into alternatives such as: {hint}."
-        return "Competitor includes a comparison section explaining alternatives and how they differ."
-
     themes = list(theme_flags(comp_content))
     human_map = {
         "transport": "commute & connectivity",
@@ -1025,10 +1154,19 @@ def summarize_missing_section_action(header: str, subheaders: Optional[List[str]
         "decision_frame": "decision framing",
         "comparison": "comparison context",
     }
-    picks = [human_map.get(x, x) for x in themes][:3]
+    picks = [human_map.get(x, x) for x in themes]
+    parts = []
+    if subheaders:
+        sub_list = format_gap_list(subheaders, limit=6)
+        if sub_list:
+            parts.append(f"Missing subtopics: {sub_list}.")
     if picks:
-        return f"Competitor covers this as a dedicated section with practical details (e.g., {', '.join(picks)})."
-    return "Competitor covers this as a dedicated section with extra context and practical specifics."
+        theme_list = format_gap_list(picks, limit=4)
+        if theme_list:
+            parts.append(f"Missing coverage on: {theme_list}.")
+    if not parts:
+        parts.append("Missing this section.")
+    return " ".join(parts)
 
 def summarize_content_gap_action(header: str, comp_content: str, bayut_content: str) -> str:
     comp_flags = theme_flags(comp_content)
@@ -1045,10 +1183,11 @@ def summarize_content_gap_action(header: str, comp_content: str, bayut_content: 
         "decision_frame": "decision framing",
         "comparison": "comparison context",
     }
-    missing_human = [human_map.get(x, x) for x in missing][:3]
-    if missing_human:
-        return "Competitor goes deeper on: " + ", ".join(missing_human) + "."
-    return "Competitor provides more depth and practical specifics than Bayut under the same header."
+    missing_human = [human_map.get(x, x) for x in missing]
+    missing_list = format_gap_list(missing_human, limit=4)
+    if missing_list:
+        return "Missing depth on: " + missing_list + "."
+    return "Missing depth and practical specifics in this section."
 
 
 # =====================================================
@@ -1060,10 +1199,69 @@ def update_mode_rows_header_first(
     comp_nodes: List[dict],
     comp_fr: FetchResult,
     comp_url: str,
-    max_missing_headers: int = 7,
-    max_missing_parts: int = 5
+    max_missing_headers: Optional[int] = None
 ) -> List[dict]:
-    rows: List[dict] = []
+    rows_map: Dict[str, dict] = {}
+    source = source_link(comp_url)
+
+    def add_row(header: str, parts: List[str]):
+        if not header or not parts:
+            return
+        key = norm_header(header) + "||" + norm_header(re.sub(r"<[^>]+>", "", source))
+        if key not in rows_map:
+            rows_map[key] = {"Headers": header, "DescriptionParts": [], "Source": source}
+        for p in parts:
+            p = clean(p)
+            if not p:
+                continue
+            if not p.endswith("."):
+                p = p + "."
+            if p not in rows_map[key]["DescriptionParts"]:
+                rows_map[key]["DescriptionParts"].append(p)
+
+    def children_map(h3_list: List[dict]) -> Dict[str, List[dict]]:
+        cmap: Dict[str, List[dict]] = {}
+        for h3 in h3_list:
+            parent = h3.get("parent_h2") or ""
+            pk = norm_header(parent)
+            if not pk:
+                continue
+            cmap.setdefault(pk, []).append(h3)
+        return cmap
+
+    def child_headers(cmap: Dict[str, List[dict]], parent_header: str) -> List[str]:
+        pk = norm_header(parent_header)
+        return [c.get("header", "") for c in cmap.get(pk, [])]
+
+    def combined_h2_content(h2_header: str, h2_list: List[dict], cmap: Dict[str, List[dict]]) -> str:
+        pk = norm_header(h2_header)
+        h2_content = ""
+        for h2 in h2_list:
+            if norm_header(h2.get("header", "")) == pk:
+                h2_content = h2.get("content", "")
+                break
+        child_content = " ".join(c.get("content", "") for c in cmap.get(pk, []))
+        return clean(" ".join([h2_content, child_content]))
+
+    def missing_children(comp_children: List[str], bayut_children: List[str]) -> List[str]:
+        missing = []
+        for ch in comp_children:
+            if not any(header_similarity(ch, bh) >= 0.73 for bh in bayut_children):
+                missing.append(ch)
+        return missing
+
+    def depth_gap_summary(comp_text: str, bayut_text: str) -> str:
+        c_txt = clean(comp_text or "")
+        b_txt = clean(bayut_text or "")
+        if len(c_txt) < 140:
+            return ""
+        if len(c_txt) < (1.30 * max(len(b_txt), 1)):
+            return ""
+        comp_flags = theme_flags(c_txt)
+        bayut_flags = theme_flags(b_txt)
+        if len(comp_flags - bayut_flags) < 1 and len(c_txt) < 650:
+            return ""
+        return summarize_content_gap_action("", c_txt, b_txt)
 
     bayut_secs = section_nodes(bayut_nodes, levels=(2, 3))
     comp_secs = section_nodes(comp_nodes, levels=(2, 3))
@@ -1073,104 +1271,56 @@ def update_mode_rows_header_first(
     comp_h2 = [s for s in comp_secs if s["level"] == 2]
     comp_h3 = [s for s in comp_secs if s["level"] == 3]
 
-    comp_h2_ranked = []
-    for h2 in comp_h2:
-        child_count = sum(
-            1 for h3 in comp_h3
-            if norm_header(h3.get("parent_h2") or "") == norm_header(h2["header"])
-        )
-        score = len(clean(h2.get("content", ""))) + (child_count * 120)
-        comp_h2_ranked.append((score, h2))
-    comp_h2_ranked.sort(key=lambda x: x[0], reverse=True)
+    bayut_children_map = children_map(bayut_h3)
+    comp_children_map = children_map(comp_h3)
 
-    missing_h2_norms = set()
+    for cs in comp_h2:
+        comp_header = cs.get("header", "")
+        comp_children = child_headers(comp_children_map, comp_header)
+        comp_text = combined_h2_content(comp_header, comp_h2, comp_children_map) or cs.get("content", "")
 
-    missing_rows = []
-    for _, cs in comp_h2_ranked:
-        m = find_best_bayut_match(cs["header"], bayut_h2, min_score=0.73)
+        m = find_best_bayut_match(comp_header, bayut_h2, min_score=0.73)
+        if not m:
+            desc = summarize_missing_section_action(comp_header, comp_children, comp_text)
+            add_row(comp_header, [desc])
+            continue
+
+        bayut_header = m["bayut_section"]["header"]
+        bayut_children = child_headers(bayut_children_map, bayut_header)
+        missing_sub = missing_children(comp_children, bayut_children)
+
+        parts = []
+        if missing_sub:
+            sub_list = format_gap_list(missing_sub, limit=6)
+            if sub_list:
+                parts.append(f"Missing subtopics: {sub_list}.")
+
+        bayut_text = combined_h2_content(bayut_header, bayut_h2, bayut_children_map)
+        depth_note = depth_gap_summary(comp_text, bayut_text)
+        if depth_note:
+            parts.append(depth_note)
+
+        if parts:
+            add_row(comp_header, parts)
+
+    comp_h2_norms = {norm_header(h.get("header", "")) for h in comp_h2}
+    for cs in comp_h3:
+        parent = cs.get("parent_h2") or ""
+        if parent and norm_header(parent) in comp_h2_norms:
+            continue
+        m = find_best_bayut_match(cs["header"], bayut_h3 + bayut_h2, min_score=0.73)
         if m:
             continue
+        desc = summarize_missing_section_action(cs["header"], None, cs.get("content", ""))
+        add_row(cs["header"], [desc])
 
-        missing_h2_norms.add(norm_header(cs["header"]))
+    rows = []
+    for r in rows_map.values():
+        desc = " ".join(r.get("DescriptionParts", [])).strip()
+        rows.append({"Headers": r.get("Headers", ""), "Description": desc, "Source": r.get("Source", "")})
 
-        children = []
-        for h3 in comp_h3:
-            if norm_header(h3.get("parent_h2") or "") == norm_header(cs["header"]):
-                children.append(h3["header"])
-
-        comp_text = (cs.get("content", "") or "")
-        desc = summarize_missing_section_action(cs["header"], children, comp_text)
-
-        if children:
-            hint = ", ".join(children[:3])
-            desc = desc + f" (Breakdown: {hint}.)"
-
-        missing_rows.append({
-            "Headers": cs["header"],
-            "Description": desc,
-            "Source": source_link(comp_url),
-        })
-
-        if len(missing_rows) >= max_missing_headers:
-            break
-
-    rows.extend(missing_rows)
-
-    if len(rows) < max_missing_headers:
-        for cs in comp_h3:
-            parent = cs.get("parent_h2") or ""
-            if parent and norm_header(parent) in missing_h2_norms:
-                continue
-
-            if parent:
-                parent_match = find_best_bayut_match(parent, bayut_h2, min_score=0.73)
-                if not parent_match:
-                    continue
-
-            m = find_best_bayut_match(cs["header"], bayut_h3, min_score=0.73)
-            if m:
-                continue
-
-            label = f"{parent} → {cs['header']}" if parent else cs["header"]
-            rows.append({
-                "Headers": label,
-                "Description": summarize_missing_section_action(cs["header"], None, cs.get("content", "")),
-                "Source": source_link(comp_url),
-            })
-
-            if len(rows) >= max_missing_headers:
-                break
-
-    missing_parts_rows = []
-    for cs in comp_secs:
-        m = find_best_bayut_match(cs["header"], bayut_secs, min_score=0.73)
-        if not m:
-            continue
-
-        bs = m["bayut_section"]
-        c_txt = clean(cs.get("content", ""))
-        b_txt = clean(bs.get("content", ""))
-
-        if len(c_txt) < 140:
-            continue
-        if len(c_txt) < (1.30 * max(len(b_txt), 1)):
-            continue
-
-        comp_flags = theme_flags(c_txt)
-        bayut_flags = theme_flags(b_txt)
-        if len(comp_flags - bayut_flags) < 1 and len(c_txt) < 650:
-            continue
-
-        missing_parts_rows.append({
-            "Headers": f"{bs['header']} (missing parts)",
-            "Description": summarize_content_gap_action(bs["header"], c_txt, b_txt),
-            "Source": source_link(comp_url),
-        })
-
-        if len(missing_parts_rows) >= max_missing_parts:
-            break
-
-    rows.extend(missing_parts_rows)
+    if max_missing_headers and len(rows) > max_missing_headers:
+        rows = rows[:max_missing_headers]
 
     faq_row = missing_faqs_row(bayut_nodes, bayut_fr, comp_nodes, comp_fr, comp_url)
     if faq_row:
@@ -2117,8 +2267,6 @@ if st.session_state.mode == "update":
                 comp_nodes=comp_nodes,
                 comp_fr=comp_fr_map[comp_url],
                 comp_url=comp_url,
-                max_missing_headers=7,
-                max_missing_parts=5,
             ))
 
         st.session_state.update_fetch = internal_fetch
