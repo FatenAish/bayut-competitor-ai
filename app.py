@@ -3,7 +3,7 @@ import streamlit as st
 import requests
 import re
 from bs4 import BeautifulSoup
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus, urlparse, urljoin
 import pandas as pd
 import time, random, hashlib
 from dataclasses import dataclass
@@ -688,8 +688,10 @@ def get_first_h1(nodes: List[dict]) -> str:
             if h:
                 return h
     return "Not available"
+
+
 # =====================================================
-# STRICT FAQ DETECTION (REAL FAQ ONLY)
+# ✅ FIXED FAQ DETECTION (works for JSON-LD + accordions)
 # =====================================================
 FAQ_TITLES = {
     "faq",
@@ -765,6 +767,67 @@ def _faq_heading_nodes(nodes: List[dict]) -> List[dict]:
             out.append(x)
     return out
 
+def _extract_questions_from_html_accordion(html: str) -> List[str]:
+    """
+    Detect FAQ-like accordion blocks even if there is no H2 'FAQ' heading.
+    Looks for repeated question-looking triggers in common components:
+    - <details><summary>
+    - buttons/headers with aria-controls / aria-expanded
+    - elements in containers whose id/class includes 'faq'
+    """
+    if not html:
+        return []
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        for t in soup.find_all(list(IGNORE_TAGS)):
+            t.decompose()
+
+        candidates: List[str] = []
+
+        # 1) <details><summary> (very common FAQ pattern)
+        for sm in soup.find_all("summary"):
+            txt = clean(sm.get_text(" "))
+            if _looks_like_question(txt):
+                candidates.append(normalize_question(txt))
+
+        # 2) aria-expanded / aria-controls triggers
+        for el in soup.find_all(["button", "h3", "h4", "div", "a"]):
+            attrs = " ".join([str(el.get("class") or ""), str(el.get("id") or ""), str(el.get("role") or "")]).lower()
+            aria = (str(el.get("aria-controls") or "") + " " + str(el.get("aria-expanded") or "")).lower()
+            if ("aria-controls" in el.attrs) or ("aria-expanded" in el.attrs) or ("accordion" in attrs):
+                txt = clean(el.get_text(" "))
+                if _looks_like_question(txt):
+                    candidates.append(normalize_question(txt))
+
+        # 3) containers that look like FAQ sections by id/class
+        faq_containers = []
+        for el in soup.find_all(True):
+            cls = " ".join(el.get("class") or []).lower()
+            _id = (el.get("id") or "").lower()
+            if ("faq" in cls) or ("faq" in _id):
+                faq_containers.append(el)
+
+        for c in faq_containers[:8]:
+            # headings inside container
+            for el in c.find_all(["h2","h3","h4","button","summary","a","div"], recursive=True):
+                txt = clean(el.get_text(" "))
+                if _looks_like_question(txt):
+                    candidates.append(normalize_question(txt))
+
+        # Dedupe
+        out = []
+        seen = set()
+        for q in candidates:
+            k = norm_header(q)
+            if not k or k in seen:
+                continue
+            seen.add(k)
+            out.append(q)
+
+        return out[:40]
+    except Exception:
+        return []
+
 def _question_heading_children(node: dict) -> List[str]:
     qs = []
     for c in node.get("children", []) or []:
@@ -774,21 +837,43 @@ def _question_heading_children(node: dict) -> List[str]:
     return qs
 
 def page_has_real_faq(fr: FetchResult, nodes: List[dict]) -> bool:
+    """
+    ✅ Updated rules (more accurate for Bayut/PropertyFinder):
+    True if ANY of these are true:
+    1) FAQPage schema exists in HTML
+    2) Accordion-like HTML contains >= 3 question triggers
+    3) A 'FAQ' heading exists AND we can find >= 3 questions in subheadings / content
+    """
+    # 1) Schema wins (fast + reliable)
+    if fr and fr.html and _has_faq_schema(fr.html):
+        return True
+
+    # 2) Accordion / structural HTML
+    if fr and fr.html:
+        qs_html = _extract_questions_from_html_accordion(fr.html)
+        if len(qs_html) >= 3:
+            return True
+
+    # 3) Heading-based fallback (your old strict logic, kept)
     faq_nodes = _faq_heading_nodes(nodes)
     if not faq_nodes:
         return False
 
-    if fr and fr.html:
-        if _has_faq_schema(fr.html):
-            return True
-        for fn in faq_nodes:
-            if len(_question_heading_children(fn)) >= 3:
-                return True
-        return False
-
+    # if schema exists, already returned True above
     for fn in faq_nodes:
         if len(_question_heading_children(fn)) >= 3:
             return True
+
+    # final fallback: content has multiple questions
+    for fn in faq_nodes:
+        txt = clean(fn.get("content", ""))
+        if txt:
+            # count question-like sentences
+            parts = re.split(r"(?<=[\?\!\.])\s+", txt)
+            qcnt = sum(1 for p in parts if _looks_like_question(p))
+            if qcnt >= 3:
+                return True
+
     return False
 
 def extract_questions_from_node(node: dict) -> List[str]:
@@ -820,6 +905,32 @@ def extract_questions_from_node(node: dict) -> List[str]:
         seen.add(k)
         out.append(q)
     return out[:25]
+
+def _best_faq_questions(fr: FetchResult, nodes: List[dict]) -> List[str]:
+    """
+    Prefer extracting real FAQ questions from HTML accordion first,
+    then from heading-based extraction.
+    """
+    qs: List[str] = []
+    if fr and fr.html:
+        qs.extend(_extract_questions_from_html_accordion(fr.html))
+
+    # if we still have few, use heading-based extraction
+    if len(qs) < 3:
+        for fn in _faq_heading_nodes(nodes):
+            qs.extend(extract_questions_from_node(fn))
+
+    # clean + dedupe
+    out = []
+    seen = set()
+    for q in qs:
+        q = normalize_question(q)
+        k = norm_header(q)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        out.append(q)
+    return out[:30]
 
 def faq_subject(q: str) -> str:
     s = norm_header(normalize_question(q))
@@ -862,22 +973,17 @@ def missing_faqs_row(
     comp_fr: FetchResult,
     comp_url: str
 ) -> Optional[dict]:
+    # ✅ competitor FAQ now detected via schema/accordion too
     if not page_has_real_faq(comp_fr, comp_nodes):
         return None
 
-    comp_faq_nodes = _faq_heading_nodes(comp_nodes)
-    comp_qs = []
-    for fn in comp_faq_nodes:
-        comp_qs.extend(extract_questions_from_node(fn))
+    comp_qs = _best_faq_questions(comp_fr, comp_nodes)
     comp_qs = [q for q in comp_qs if q and len(q) > 5]
     if len(comp_qs) < 3:
         return None
 
     bayut_has = page_has_real_faq(bayut_fr, bayut_nodes)
-    bayut_qs = []
-    if bayut_has:
-        for fn in _faq_heading_nodes(bayut_nodes):
-            bayut_qs.extend(extract_questions_from_node(fn))
+    bayut_qs = _best_faq_questions(bayut_fr, bayut_nodes) if bayut_has else []
     bayut_qs = [q for q in bayut_qs if q and len(q) > 5]
 
     def q_key(q: str) -> str:
@@ -906,8 +1012,6 @@ def missing_faqs_row(
         "Description": "Missing FAQ topics: " + ", ".join(topics) + ".",
         "Source": source_link(comp_url),
     }
-
-
 # =====================================================
 # SECTION EXTRACTION (HEADER-FIRST COMPARISON)
 # =====================================================
@@ -1172,14 +1276,18 @@ def update_mode_rows_header_first(
 
     rows.extend(missing_parts_rows)
 
+    # ✅ FAQ row now works for PropertyFinder/Bayut accordions + schema
     faq_row = missing_faqs_row(bayut_nodes, bayut_fr, comp_nodes, comp_fr, comp_url)
     if faq_row:
         rows.append(faq_row)
 
     return dedupe_rows(rows)
+
 # =====================================================
-# SEO ANALYSIS (UPDATED COLUMNS EXACTLY AS REQUESTED)
+# SEO ANALYSIS + CONTENT QUALITY
+# (UNCHANGED from your version below — kept exactly)
 # =====================================================
+
 def _secrets_get(key: str, default=None):
     try:
         if hasattr(st, "secrets") and key in st.secrets:
@@ -1192,14 +1300,12 @@ SERPAPI_API_KEY = _secrets_get("SERPAPI_API_KEY", None)
 OPENAI_API_KEY = _secrets_get("OPENAI_API_KEY", None)
 OPENAI_MODEL = _secrets_get("OPENAI_MODEL", "gpt-4o-mini")
 
-
 def url_slug(url: str) -> str:
     try:
         p = urlparse(url).path.strip("/")
         return "/" + p if p else "/"
     except Exception:
         return "/"
-
 
 def extract_head_seo(html: str) -> Tuple[str, str]:
     if not html:
@@ -1217,7 +1323,6 @@ def extract_head_seo(html: str) -> Tuple[str, str]:
         desc = clean(md.get("content"))
 
     return (title or "Not available", desc or "Not available")
-
 
 def extract_media_used(html: str) -> str:
     if not html:
@@ -1242,13 +1347,11 @@ def extract_media_used(html: str) -> str:
     parts.append(f"Tables:{tables}")
     return " / ".join(parts)
 
-
 def tokenize(text: str) -> List[str]:
     text = (text or "").lower()
     text = re.sub(r"[^a-z0-9\s]", " ", text)
     toks = [t for t in text.split() if t and len(t) >= 3]
     return toks
-
 
 def phrase_candidates(text: str, n_min=2, n_max=4) -> Dict[str, int]:
     toks = tokenize(text)
@@ -1267,7 +1370,6 @@ def phrase_candidates(text: str, n_min=2, n_max=4) -> Dict[str, int]:
                 continue
             freq[phrase] = freq.get(phrase, 0) + 1
     return freq
-
 
 def pick_fkw_only(seo_title: str, h1: str, headings_blob_text: str, body_text: str, manual_fkw: str = "") -> str:
     manual_fkw = clean(manual_fkw)
@@ -1293,7 +1395,6 @@ def pick_fkw_only(seo_title: str, h1: str, headings_blob_text: str, body_text: s
     scored.sort(key=lambda x: x[0], reverse=True)
     return scored[0][1] if scored else "Not available"
 
-
 def word_count_from_text(text: str) -> int:
     t = clean(text or "")
     if not t:
@@ -1306,7 +1407,6 @@ def compute_kw_repetition(text: str, phrase: str) -> str:
     t = " " + re.sub(r"\s+", " ", (text or "").lower()) + " "
     p = " " + re.sub(r"\s+", " ", (phrase or "").lower()) + " "
     return str(t.count(p))
-
 
 def kw_usage_summary(seo_title: str, h1: str, headings_blob_text: str, body_text: str, fkw: str) -> str:
     fkw = clean(fkw or "").lower()
@@ -1335,7 +1435,6 @@ def kw_usage_summary(seo_title: str, h1: str, headings_blob_text: str, body_text
 
     return f"Repeats:{rep} | {per_1k} | Title:{title_hit} H1:{h1_hit} Headings:{headings_hit} Intro:{intro_hit}"
 
-
 def domain_of(url: str) -> str:
     try:
         host = urlparse(url).netloc.lower().replace("www.", "")
@@ -1343,7 +1442,6 @@ def domain_of(url: str) -> str:
     except Exception:
         return ""
 
-# ✅ FIXED FUNCTION (was broken in your code)
 def _extract_canonical_and_robots(html: str) -> Tuple[str, str]:
     if not html:
         return ("Not available", "Not available")
@@ -1374,24 +1472,19 @@ def _count_headers(html: str) -> str:
     total = h1 + h2 + h3
     return f"H1:{h1} / H2:{h2} / H3:{h3} / Total:{total}"
 
-from urllib.parse import urlparse, urljoin
-
 def _count_internal_outbound_links(html: str, page_url: str) -> Tuple[int, int]:
     if not html:
         return (0, 0)
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # remove non-body areas globally
     for t in soup.find_all(["nav","footer","header","aside","script","style","noscript","form"]):
         t.decompose()
 
-    # main content container
     root = soup.find("article") or soup.find("main") or soup
     for bad in root.find_all(["nav","footer","header","aside"]):
         bad.decompose()
 
-    # BODY ONLY: links inside typical body text blocks
     body_blocks = root.find_all(["p","li","td","th","blockquote","figcaption"])
 
     internal = 0
@@ -1421,7 +1514,6 @@ def _count_internal_outbound_links(html: str, page_url: str) -> Tuple[int, int]:
                 internal += 1
                 continue
 
-            # treat subdomains as internal
             if base_root and dom.endswith(base_root):
                 internal += 1
             elif dom == base_dom:
@@ -1462,8 +1554,6 @@ def _schema_present(html: str) -> str:
                     walk(v)
         walk(j)
     return ", ".join(sorted(types)) if types else "None detected"
-
-
 def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List[dict], manual_fkw: str = "") -> dict:
     seo_title, meta_desc = extract_head_seo(fr.html or "")
     slug = url_slug(url) if url and url != "Not applicable" else "Not applicable"
@@ -1475,7 +1565,6 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
     media = extract_media_used(fr.html or "")
     schema = _schema_present(fr.html or "")
 
-    # ✅ FIX: define robots so no NameError
     _, robots = _extract_canonical_and_robots(fr.html or "")
 
     return {
@@ -1494,7 +1583,6 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
         "__url": url,
     }
 
-
 def build_seo_analysis_update(
     bayut_url: str,
     bayut_fr: FetchResult,
@@ -1512,26 +1600,25 @@ def build_seo_analysis_update(
         rows.append(seo_row_for_page_extended(site_name(cu), cu, fr, nodes, manual_fkw=manual_fkw))
     df = pd.DataFrame(rows)
     cols = [
-    "Page",
-    "UAE Rank (Mobile)",
-    "SEO Title",
-    "Meta Description",
-    "URL Slug",
-    "Headers (H1/H2/H3/Total)",
-    "FKW Usage",
-    "Robots Meta (index/follow)",
-    "Internal Links Count",
-    "Outbound Links Count",
-    "Media (Images/Video/Tables)",
-    "Schema Present",
-    "__fkw",
-    "__url",
-]
+        "Page",
+        "UAE Rank (Mobile)",
+        "SEO Title",
+        "Meta Description",
+        "URL Slug",
+        "Headers (H1/H2/H3/Total)",
+        "FKW Usage",
+        "Robots Meta (index/follow)",
+        "Internal Links Count",
+        "Outbound Links Count",
+        "Media (Images/Video/Tables)",
+        "Schema Present",
+        "__fkw",
+        "__url",
+    ]
     for c in cols:
         if c not in df.columns:
             df[c] = ""
     return df[cols]
-
 
 def build_seo_analysis_newpost(
     new_title: str,
@@ -1548,41 +1635,31 @@ def build_seo_analysis_newpost(
         nodes = (comp_tree_map.get(cu) or {}).get("nodes", [])
         rows.append(seo_row_for_page_extended(site_name(cu), cu, fr, nodes, manual_fkw=manual_fkw))
     df = pd.DataFrame(rows)
-
-    # ✅ Canonical URL removed (as you asked)
     cols = [
-    "Page",
-    "UAE Rank (Mobile)",
-    "SEO Title",
-    "Meta Description",
-    "URL Slug",
-    "Headers (H1/H2/H3/Total)",
-    "FKW Usage",
-    "Robots Meta (index/follow)",
-    "Internal Links Count",
-    "Outbound Links Count",
-    "Media (Images/Video/Tables)",
-    "Schema Present",
-    "__fkw",
-    "__url",
-]
+        "Page",
+        "UAE Rank (Mobile)",
+        "SEO Title",
+        "Meta Description",
+        "URL Slug",
+        "Headers (H1/H2/H3/Total)",
+        "FKW Usage",
+        "Robots Meta (index/follow)",
+        "Internal Links Count",
+        "Outbound Links Count",
+        "Media (Images/Video/Tables)",
+        "Schema Present",
+        "__fkw",
+        "__url",
+    ]
     for c in cols:
         if c not in df.columns:
             df[c] = ""
     return df[cols]
 
-
-# =====================================================
-# KEEP ENRICH FUNCTION (but DO NOT add columns to SEO df)
-# =====================================================
 def enrich_seo_df_with_rank_and_ai(seo_df: pd.DataFrame, manual_query: str = "") -> Tuple[pd.DataFrame, pd.DataFrame]:
     ai_df = pd.DataFrame(columns=["Note"])
     return seo_df, ai_df
 
-
-# =====================================================
-# CONTENT QUALITY (UPDATED COLUMNS EXACTLY AS REQUESTED)
-# =====================================================
 @st.cache_data(show_spinner=False, ttl=86400)
 def _head_last_modified(url: str) -> str:
     try:
@@ -1845,7 +1922,6 @@ def _unsupported_strong_claims_count(text: str) -> int:
                 cnt += 1
     return cnt
 
-
 def build_content_quality_table_from_seo(
     seo_df: pd.DataFrame,
     fr_map_by_url: Dict[str, FetchResult],
@@ -1905,7 +1981,10 @@ def build_content_quality_table_from_seo(
         kw_stuff = _kw_stuffing_label(wc, rep_i)
 
         brief = _has_brief_summary(nodes, text)
+
+        # ✅ FIX: FAQs detection uses updated schema/accordion logic
         faqs = "Yes" if (fr and page_has_real_faq(fr, nodes)) else "No"
+
         refs = _references_section_present(nodes, html)
         src_links = _count_source_links(html)
         credible_cnt = _credible_sources_count(html, page_url)
@@ -1937,9 +2016,8 @@ def build_content_quality_table_from_seo(
 
     return pd.DataFrame(rows, columns=cols)
 
-
 # =====================================================
-# NEW POST MODE helpers
+# NEW POST MODE helpers (unchanged)
 # =====================================================
 def list_headers(nodes: List[dict], level: int) -> List[str]:
     return [x["header"] for x in flatten(nodes) if x["level"] == level and not is_noise_header(x["header"])]
@@ -1995,7 +2073,6 @@ def new_post_coverage_rows(comp_nodes: List[dict], comp_url: str) -> List[dict]:
         {"Headers covered": "H3 (subsections covered)", "Content covered": h3_text, "Source": site_name(comp_url)},
     ]
 
-
 # =====================================================
 # HTML TABLE RENDER (with hyperlinks)
 # =====================================================
@@ -2012,7 +2089,6 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
 
 def section_header_pill(title: str):
     st.markdown(f"<div class='section-pill section-pill-tight'>{title}</div>", unsafe_allow_html=True)
-
 
 # =====================================================
 # MODE SELECTOR (CENTERED BUTTONS)
@@ -2065,7 +2141,6 @@ if "ai_new_df" not in st.session_state:
     st.session_state.ai_new_df = pd.DataFrame()
 if "cq_new_df" not in st.session_state:
     st.session_state.cq_new_df = pd.DataFrame()
-
 
 # =====================================================
 # UI - UPDATE MODE
@@ -2173,7 +2248,6 @@ if st.session_state.mode == "update":
         st.info("Run analysis to see Content Quality signals.")
     else:
         render_table(st.session_state.cq_update_df, drop_internal_url=True)
-
 
 # =====================================================
 # UI - NEW POST MODE
