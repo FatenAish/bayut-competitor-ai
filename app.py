@@ -1,4 +1,5 @@
 import base64
+import os
 import html as html_lib
 import streamlit as st
 import requests
@@ -207,6 +208,8 @@ DEFAULT_HEADERS = {
 
 IGNORE_TAGS = {"nav", "footer", "header", "aside", "script", "style", "noscript"}
 MEDIA_IGNORE_TAGS = {"nav", "footer", "script", "style", "noscript", "form", "aside"}
+CACHE_DIR = os.path.join(os.getcwd(), ".fetch_cache")
+CACHE_TTL_HOURS = 720
 
 
 def clean(text: str) -> str:
@@ -233,6 +236,51 @@ class FetchResult:
     html: str
     text: str
     reason: Optional[str]
+
+
+def _cache_path(url: str) -> str:
+    h = hashlib.md5((url or "").encode("utf-8")).hexdigest()
+    return os.path.join(CACHE_DIR, f"{h}.json")
+
+
+def _load_cached_fetch(url: str, max_age_hours: int = CACHE_TTL_HOURS) -> Optional[FetchResult]:
+    try:
+        path = _cache_path(url)
+        if not os.path.exists(path):
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        ts = float(data.get("ts", 0))
+        if max_age_hours and ts and (time.time() - ts) > (max_age_hours * 3600):
+            return None
+        html = data.get("html", "") or ""
+        text = data.get("text", "") or ""
+        if not html and not text:
+            return None
+        status = data.get("status")
+        return FetchResult(True, "cache", status, html, text, None)
+    except Exception:
+        return None
+
+
+def _save_cached_fetch(url: str, fr: FetchResult) -> None:
+    try:
+        if not fr or not fr.ok:
+            return
+        if not (fr.html or fr.text):
+            return
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        data = {
+            "ts": time.time(),
+            "status": fr.status,
+            "source": fr.source,
+            "html": fr.html or "",
+            "text": fr.text or "",
+        }
+        with open(_cache_path(url), "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except Exception:
+        return
 
 
 class FetchAgent:
@@ -337,14 +385,18 @@ class FetchAgent:
         if code == 200 and html:
             text = self._extract_article_text_from_html(html)
             if self._validate_text(text, min_len=300):
-                return FetchResult(True, "direct", code, html, text, None)
+                fr = FetchResult(True, "direct", code, html, text, None)
+                _save_cached_fetch(url, fr)
+                return fr
 
         # 2) JS-rendered HTML
         ok, html2 = self._fetch_playwright_html(url)
         if ok and html2:
             text2 = self._extract_article_text_from_html(html2)
             if self._validate_text(text2, min_len=300):
-                return FetchResult(True, "playwright", 200, html2, text2, None)
+                fr = FetchResult(True, "playwright", 200, html2, text2, None)
+                _save_cached_fetch(url, fr)
+                return fr
 
         # 3) Jina reader
         jurl = self._jina_url(url)
@@ -352,7 +404,9 @@ class FetchAgent:
         if code3 == 200 and txt3:
             text3 = txt3
             if self._validate_text(text3, min_len=280):
-                return FetchResult(True, "jina", code3, "", text3, None)
+                fr = FetchResult(True, "jina", code3, "", text3, None)
+                _save_cached_fetch(url, fr)
+                return fr
 
         # 4) Textise
         turl = self._textise_url(url)
@@ -361,7 +415,13 @@ class FetchAgent:
             soup = BeautifulSoup(html4, "html.parser")
             text4 = soup.get_text("\n")
             if self._validate_text(text4, min_len=220):
-                return FetchResult(True, "textise", code4, "", text4, None)
+                fr = FetchResult(True, "textise", code4, "", text4, None)
+                _save_cached_fetch(url, fr)
+                return fr
+
+        cached = _load_cached_fetch(url)
+        if cached:
+            return cached
 
         return FetchResult(False, None, code or None, "", "", "blocked_or_no_content")
 
@@ -404,6 +464,7 @@ def resolve_all_or_require_manual(agent: FetchAgent, urls: List[str], st_key_pre
             )
             if pasted and len(pasted.strip()) > 400:
                 results[u] = FetchResult(True, "manual", 200, pasted.strip(), pasted.strip(), None)
+                _save_cached_fetch(u, results[u])
 
     still_failed = [u for u in failed if not results[u].ok]
     if still_failed:
@@ -687,6 +748,7 @@ def ensure_headings_or_require_repaste(urls: List[str], fr_map: Dict[str, FetchR
             )
             if repaste and len(repaste.strip()) > 400:
                 fr_map[u] = FetchResult(True, "manual", 200, repaste.strip(), repaste.strip(), None)
+                _save_cached_fetch(u, fr_map[u])
 
     still_bad = []
     for u in bad:
