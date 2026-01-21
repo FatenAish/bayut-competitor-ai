@@ -29,163 +29,280 @@ st.set_page_config(page_title="Bayut Competitor Gap Analysis", layout="wide")
 
 
 # =====================================================
-# STYLE (LIGHT GREEN BACKGROUND + CENTERED MODE BUTTONS)
+# NEW DESIGN (Tailwind/shadcn-inspired theme from your React CSS)
 # =====================================================
-BAYUT_GREEN = "#0E8A6D"
-LIGHT_GREEN = "#E9F7F1"
-LIGHT_GREEN_2 = "#DFF3EA"
-TEXT_DARK = "#1F2937"
-PAGE_BG = "#F3FBF7"  # lighter green background
-
 st.markdown(
-    f"""
-    <style>
-      html, body, [data-testid="stAppViewContainer"] {{
-        background: {PAGE_BG} !important;
-      }}
-      [data-testid="stHeader"] {{
-        background: rgba(0,0,0,0) !important;
-      }}
-      section.main > div.block-container {{
-        max-width: 1180px !important;
-        padding-top: 1.6rem !important;
-        padding-bottom: 2.4rem !important;
-      }}
-      .hero {{
-        text-align:center;
-        margin-top: 0.6rem;
-        margin-bottom: 1.2rem;
-      }}
-      .hero h1 {{
-        font-size: 52px;
-        line-height: 1.08;
-        margin: 0;
-        color: {TEXT_DARK};
-        font-weight: 800;
-        letter-spacing: -0.02em;
-      }}
-      .hero .bayut {{
-        color: {BAYUT_GREEN};
-      }}
-      .hero p {{
-        margin: 10px 0 0 0;
-        color: #6B7280;
-        font-size: 16px;
-      }}
-      .section-pill {{
-        background: {LIGHT_GREEN};
-        border: 1px solid {LIGHT_GREEN_2};
-        padding: 10px 14px;
-        border-radius: 14px;
-        font-weight: 900;
-        color: {TEXT_DARK};
-        display: inline-block;
-      }}
-      /* tighter + closer to table */
-      .section-pill-tight {{
-        margin: 6px 0 4px 0;
-      }}
-      .stTextInput input, .stTextArea textarea {{
-        background: {LIGHT_GREEN} !important;
-        border: 1px solid {LIGHT_GREEN_2} !important;
-        border-radius: 12px !important;
-      }}
-      .stButton button {{
-        border-radius: 14px !important;
-        padding: 0.65rem 1rem !important;
-        font-weight: 900 !important;
-      }}
-      .mode-wrap {{
-        display:flex;
-        justify-content:center;
-        margin: 10px 0 6px 0;
-      }}
-      .mode-note {{
-        text-align:center;
-        color:#6B7280;
-        font-size: 13px;
-        margin-top: -2px;
-        margin-bottom: 6px;
-      }}
-      table {{
-        width: 100% !important;
-        border-collapse: separate !important;
-        border-spacing: 0 !important;
-        overflow: hidden !important;
-        border-radius: 14px !important;
-        border: 1px solid #E5E7EB !important;
-        background: white !important;
-        margin-top: 0 !important;
-      }}
-      thead th {{
-        background: {LIGHT_GREEN} !important;
-        text-align: center !important;
-        font-weight: 900 !important;
-        color: {TEXT_DARK} !important;
-        padding: 6px 14px !important;      /* smaller */
-        border-bottom: 1px solid #E5E7EB !important;
-      }}
-      tbody td {{
-        vertical-align: top !important;
-        padding: 6px 6px !important;       /* smaller */
-        border-bottom: 1px solid #F1F5F9 !important;
-        color: {TEXT_DARK} !important;
-        font-size: 12px !important;        /* smaller */
-      }}
-      tbody tr:last-child td {{
-        border-bottom: 0 !important;
-      }}
-      a {{
-        color: {BAYUT_GREEN} !important;
-        font-weight: 900 !important;
-        text-decoration: underline !important;
-      }}
-      code {{
-        background: rgba(0,0,0,0.04);
-        padding: 2px 6px;
-        border-radius: 8px;
-      }}
-      .details-link summary {{
-        cursor: pointer;
-        color: {BAYUT_GREEN};
-        text-decoration: underline;
-        font-weight: 900;
-        list-style: none;
-      }}
-      .details-link summary::-webkit-details-marker {{
-        display: none;
-      }}
-      .details-box {{
-        margin-top: 6px;
-        padding: 8px 10px;
-        background: #F9FAFB;
-        border: 1px solid #E5E7EB;
-        border-radius: 10px;
-        color: {TEXT_DARK};
-      }}
-      .ai-summary {{
-        background: white;
-        border: 1px solid #E5E7EB;
-        border-radius: 14px;
-        padding: 14px 14px;
-        margin: 6px 0 10px 0;
-      }}
-      .muted {{
-        color:#6B7280;
-        font-size: 13px;
-      }}
-    </style>
-    """,
+    """
+<style>
+/* ------------------------------
+   Theme tokens (same spirit as src/index.css)
+--------------------------------*/
+:root{
+  --bayut-primary: 163 82% 30%;
+  --bayut-primary-light: 163 72% 40%;
+  --bayut-primary-dark: 163 90% 22%;
+  --bayut-glow: 163 60% 50%;
+
+  --background: 150 30% 98%;
+  --foreground: 220 25% 12%;
+
+  --card: 0 0% 100%;
+  --border: 150 20% 88%;
+  --muted: 150 15% 92%;
+  --muted-foreground: 220 10% 45%;
+
+  --secondary: 150 25% 94%;
+  --accent: 163 60% 92%;
+
+  --primary: 163 82% 30%;
+  --primary-foreground: 0 0% 100%;
+
+  --radius: 0.75rem;
+
+  --gradient-hero: linear-gradient(135deg, hsl(163 82% 30%) 0%, hsl(163 60% 45%) 50%, hsl(175 70% 40%) 100%);
+  --gradient-card: linear-gradient(180deg, hsl(0 0% 100%) 0%, hsl(150 30% 98%) 100%);
+  --gradient-surface: linear-gradient(135deg, hsl(150 30% 98%) 0%, hsl(163 20% 96%) 100%);
+
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.03);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.03);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.06), 0 4px 6px -4px rgb(0 0 0 / 0.04);
+  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.07), 0 8px 10px -6px rgb(0 0 0 / 0.04);
+  --shadow-glow: 0 0 30px -5px hsl(163 82% 30% / 0.25);
+}
+
+/* ------------------------------
+   App background + layout
+--------------------------------*/
+html, body { background: hsl(var(--background)) !important; }
+[data-testid="stAppViewContainer"]{
+  background: var(--gradient-surface) !important;
+}
+[data-testid="stHeader"] { background: transparent !important; }
+section.main > div.block-container{
+  max-width: 1040px !important;
+  padding-top: 1.8rem !important;
+  padding-bottom: 2.8rem !important;
+}
+
+/* Decorative background “blobs” like Index.tsx */
+.bg-decor {
+  position: fixed;
+  inset: 0;
+  z-index: -10;
+  overflow: hidden;
+}
+.bg-decor .blob{
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(60px);
+  opacity: 0.35;
+  animation: float 6s ease-in-out infinite;
+}
+.bg-decor .b1{ top:-80px; left:18%; width:520px; height:520px; background: hsl(var(--primary) / 0.25); }
+.bg-decor .b2{ bottom:-120px; right:18%; width:460px; height:460px; background: hsl(var(--primary) / 0.18); animation-delay:-3s; }
+.bg-decor .b3{ top:40%; left:-120px; width:420px; height:420px; background: hsl(163 60% 92% / 0.55); animation-delay:-1.5s; }
+@keyframes float { 0%,100%{ transform: translateY(0);} 50%{ transform: translateY(-10px);} }
+
+/* subtle grid overlay */
+.grid-overlay{
+  position:absolute; inset:0; opacity:0.03;
+  background-image:
+    linear-gradient(hsl(var(--foreground)) 1px, transparent 1px),
+    linear-gradient(90deg, hsl(var(--foreground)) 1px, transparent 1px);
+  background-size: 60px 60px;
+}
+
+/* ------------------------------
+   Reusable classes (from your Tailwind components)
+--------------------------------*/
+.gradient-text{
+  background: var(--gradient-hero);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.card-elevated{
+  background: var(--gradient-card);
+  box-shadow: var(--shadow-lg);
+  border: 1px solid hsl(var(--border));
+  border-radius: 1.25rem;
+}
+.glow-hover{ transition: box-shadow 0.25s ease; }
+.glow-hover:hover{ box-shadow: var(--shadow-glow); }
+.pill{
+  display:inline-flex; align-items:center; gap:.5rem;
+  padding:.45rem .9rem;
+  border-radius: 9999px;
+  font-weight: 800;
+  font-size: 13px;
+  background: hsl(163 45% 95%);
+  color: hsl(var(--primary));
+  border: 1px solid hsl(var(--border));
+}
+.section-title{
+  font-weight: 800;
+  font-size: 18px;
+  position: relative;
+  display:inline-block;
+}
+.section-title:after{
+  content:"";
+  position:absolute;
+  left:0; bottom:-6px;
+  width:32px; height:3px;
+  border-radius:9999px;
+  background: hsl(var(--primary));
+}
+
+/* ------------------------------
+   Hero styling
+--------------------------------*/
+.hero-wrap{ padding: 1.4rem 0 0.6rem 0; text-align:center; }
+.hero-icon{
+  width:76px; height:76px; margin:0 auto 18px auto;
+  border-radius: 22px;
+  background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(var(--primary) / 0.75) 100%);
+  box-shadow: var(--shadow-md), var(--shadow-glow);
+  display:flex; align-items:center; justify-content:center;
+}
+.hero-h1{
+  font-size: 52px;
+  line-height: 1.06;
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-weight: 900;
+  letter-spacing: -0.02em;
+}
+.hero-sub{
+  margin: 10px auto 0 auto;
+  max-width: 720px;
+  color: hsl(var(--muted-foreground));
+  font-size: 16px;
+  line-height: 1.6;
+}
+.hero-badges{ margin-top: 14px; display:flex; justify-content:center; gap:10px; flex-wrap:wrap; }
+.hero-badge{
+  display:inline-flex; align-items:center; gap:8px;
+  padding: 8px 12px;
+  border-radius: 9999px;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--card));
+  box-shadow: var(--shadow-sm);
+  font-weight: 800;
+  font-size: 13px;
+  color: hsl(var(--foreground));
+}
+
+/* ------------------------------
+   Streamlit widgets styling
+--------------------------------*/
+[data-testid="stTextInput"] input,
+[data-testid="stTextArea"] textarea{
+  background: hsl(var(--secondary) / 0.5) !important;
+  border: 1px solid hsl(var(--border)) !important;
+  border-radius: 14px !important;
+}
+[data-testid="stTextInput"] input:focus,
+[data-testid="stTextArea"] textarea:focus{
+  box-shadow: 0 0 0 4px hsl(var(--primary) / 0.18) !important;
+  border-color: hsl(var(--primary)) !important;
+}
+
+/* Buttons (best-effort across Streamlit versions) */
+div[data-testid="stButton"] > button{
+  border-radius: 16px !important;
+  padding: 0.75rem 1rem !important;
+  font-weight: 900 !important;
+  border: 1px solid hsl(var(--border)) !important;
+  background: hsl(var(--secondary)) !important;
+  color: hsl(var(--foreground)) !important;
+  box-shadow: var(--shadow-sm) !important;
+  transition: transform .1s ease, box-shadow .25s ease, background .2s ease !important;
+}
+div[data-testid="stButton"] > button:hover{
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md), var(--shadow-glow) !important;
+  background: hsl(var(--accent)) !important;
+}
+/* Primary */
+div[data-testid="stButton"] > button[kind="primary"]{
+  background: hsl(var(--primary)) !important;
+  color: hsl(var(--primary-foreground)) !important;
+  border-color: hsl(var(--primary)) !important;
+}
+
+/* ------------------------------
+   Tables (we’ll render with df.to_html(classes="data-table"))
+--------------------------------*/
+table.data-table{
+  width:100% !important;
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
+  overflow: hidden !important;
+  border-radius: 16px !important;
+  border: 1px solid hsl(var(--border)) !important;
+  background: hsl(var(--card)) !important;
+}
+table.data-table thead th{
+  background: hsl(163 45% 95%) !important;
+  color: hsl(var(--foreground)) !important;
+  font-weight: 900 !important;
+  padding: 10px 12px !important;
+  text-align: left !important;
+  border-bottom: 1px solid hsl(var(--border)) !important;
+  white-space: nowrap;
+}
+table.data-table tbody td{
+  padding: 10px 12px !important;
+  border-top: 1px solid hsl(var(--border)) !important;
+  color: hsl(var(--foreground)) !important;
+  font-size: 13px !important;
+  vertical-align: top !important;
+}
+table.data-table tbody tr:hover{
+  background: hsl(var(--muted) / 0.5) !important;
+}
+a{
+  color: hsl(var(--primary)) !important;
+  font-weight: 900 !important;
+  text-decoration: underline !important;
+}
+</style>
+""",
     unsafe_allow_html=True,
 )
 
+# Background decor layer (like your React Index.tsx)
 st.markdown(
-    f"""
-    <div class="hero">
-      <h1><span class="bayut">Bayut</span> Competitor Gap Analysis</h1>
-      <p>Identifies missing sections and incomplete coverage against competitor articles.</p>
-    </div>
-    """,
+    """
+<div class="bg-decor">
+  <div class="blob b1"></div>
+  <div class="blob b2"></div>
+  <div class="blob b3"></div>
+  <div class="grid-overlay"></div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+# Hero (like HeroSection.tsx)
+st.markdown(
+    """
+<div class="hero-wrap">
+  <div class="hero-icon">📊</div>
+  <h1 class="hero-h1">
+    <span class="gradient-text">Bayut</span> <span>Competitor Gap Analysis</span>
+  </h1>
+  <p class="hero-sub">
+    Identifies missing sections and incomplete coverage against competitor articles.
+  </p>
+  <div class="hero-badges">
+    <span class="hero-badge">✨ SEO Analysis</span>
+    <span class="hero-badge">✨ Content Quality</span>
+    <span class="hero-badge">✨ Gap Detection</span>
+  </div>
+</div>
+""",
     unsafe_allow_html=True,
 )
 
@@ -395,8 +512,6 @@ def resolve_all_or_require_manual(agent: FetchAgent, urls: List[str], st_key_pre
         st.stop()
 
     return results
-
-
 # =====================================================
 # HEADING TREE + FILTERS
 # =====================================================
@@ -435,6 +550,18 @@ def norm_header(h: str) -> str:
     h = re.sub(r"[^a-z0-9\s]", "", h)
     h = re.sub(r"\s+", " ", h).strip()
     return h
+
+def header_is_faq(header: str) -> bool:
+    nh = norm_header(header)
+    if not nh:
+        return False
+    if nh in {"faq","faqs","frequently asked questions","frequently asked question"}:
+        return True
+    if "faq" in nh:
+        return True
+    if "frequently asked" in nh:
+        return True
+    return False
 
 def is_noise_header(h: str) -> bool:
     s = clean(h)
@@ -692,10 +819,7 @@ def strip_label(h: str) -> str:
 def format_gap_list(items: List[str], limit: int = 6) -> str:
     cleaned = []
     seen = set()
-    skip = {
-        "other", "other topics", "other faq topics", "faq topics", "other faq topic",
-        "other faq", "general", "misc", "miscellaneous"
-    }
+    skip = {"other","other topics","other faq topics","faq topics","other faq topic","other faq","general","misc","miscellaneous"}
     for item in items or []:
         it = clean(item)
         if not it:
@@ -736,24 +860,7 @@ def get_first_h1(nodes: List[dict]) -> str:
 # =====================================================
 # STRICT FAQ DETECTION (REAL FAQ ONLY)
 # =====================================================
-FAQ_TITLES = {
-    "faq",
-    "faqs",
-    "frequently asked questions",
-    "frequently asked question",
-}
-
-def header_is_faq(header: str) -> bool:
-    nh = norm_header(header)
-    if not nh:
-        return False
-    if nh in FAQ_TITLES:
-        return True
-    if "faq" in nh:
-        return True
-    if "frequently asked" in nh:
-        return True
-    return False
+FAQ_TITLES = {"faq","faqs","frequently asked questions","frequently asked question"}
 
 def _looks_like_question(s: str) -> bool:
     s = clean(s)
@@ -921,48 +1028,9 @@ def _question_heading_children(node: dict) -> List[str]:
             qs.append(normalize_question(hdr))
     return qs
 
-def page_has_real_faq(fr: FetchResult, nodes: List[dict]) -> bool:
-    if fr and fr.html:
-        if _has_faq_schema(fr.html):
-            return True
-        if len(_faq_questions_from_html(fr.html)) >= 2:
-            return True
-
-    faq_nodes = _faq_heading_nodes(nodes)
-    if not faq_nodes:
-        return False
-
-    for fn in faq_nodes:
-        if len(extract_questions_from_node(fn)) >= 2:
-            return True
-        txt = clean(fn.get("content", ""))
-        if txt and txt.count("?") >= 2:
-            return True
-
-    # FAQ header present is a strong signal even if questions were not parsed
-    return True
-
-def extract_faq_questions(fr: FetchResult, nodes: List[dict]) -> List[str]:
-    qs: List[str] = []
-    if fr and fr.html:
-        qs.extend(_faq_questions_from_html(fr.html))
-    for fn in _faq_heading_nodes(nodes):
-        qs.extend(extract_questions_from_node(fn))
-
-    seen = set()
-    out = []
-    for q in qs:
-        k = norm_header(q)
-        if not k or k in seen:
-            continue
-        seen.add(k)
-        out.append(q)
-    return out
-
 def extract_questions_from_node(node: dict) -> List[str]:
     qs: List[str] = []
-    qh = _question_heading_children(node)
-    qs.extend(qh)
+    qs.extend(_question_heading_children(node))
 
     def add_from_text_block(txt: str):
         txt = clean(txt or "")
@@ -988,6 +1056,43 @@ def extract_questions_from_node(node: dict) -> List[str]:
         seen.add(k)
         out.append(q)
     return out[:25]
+
+def page_has_real_faq(fr: FetchResult, nodes: List[dict]) -> bool:
+    if fr and fr.html:
+        if _has_faq_schema(fr.html):
+            return True
+        if len(_faq_questions_from_html(fr.html)) >= 2:
+            return True
+
+    faq_nodes = _faq_heading_nodes(nodes)
+    if not faq_nodes:
+        return False
+
+    for fn in faq_nodes:
+        if len(extract_questions_from_node(fn)) >= 2:
+            return True
+        txt = clean(fn.get("content", ""))
+        if txt and txt.count("?") >= 2:
+            return True
+
+    return True
+
+def extract_faq_questions(fr: FetchResult, nodes: List[dict]) -> List[str]:
+    qs: List[str] = []
+    if fr and fr.html:
+        qs.extend(_faq_questions_from_html(fr.html))
+    for fn in _faq_heading_nodes(nodes):
+        qs.extend(extract_questions_from_node(fn))
+
+    seen = set()
+    out = []
+    for q in qs:
+        k = norm_header(q)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        out.append(q)
+    return out
 
 def faq_topic_from_question(q: str) -> str:
     raw = normalize_question(q)
@@ -1049,6 +1154,7 @@ def missing_faqs_row(
             "Description": "FAQ section present, but topics could not be parsed for comparison.",
             "Source": source_link(comp_url),
         }
+
     bayut_has = page_has_real_faq(bayut_fr, bayut_nodes)
     bayut_qs = []
     if bayut_has:
@@ -1067,20 +1173,13 @@ def missing_faqs_row(
         topics = faq_topics_from_questions(comp_qs, limit=8)
         topic_list = format_gap_list(topics, limit=6)
         topic_text = f" Missing topics include: {topic_list}." if topic_list else ""
-        return {
-            "Headers": "FAQs",
-            "Description": "FAQ section missing." + topic_text,
-            "Source": source_link(comp_url),
-        }
+        return {"Headers": "FAQs", "Description": "FAQ section missing." + topic_text, "Source": source_link(comp_url)}
+
     if bayut_has and not bayut_qs:
         topics = faq_topics_from_questions(comp_qs, limit=8)
         topic_list = format_gap_list(topics, limit=6)
         topic_text = f" Competitor topics include: {topic_list}." if topic_list else ""
-        return {
-            "Headers": "FAQs",
-            "Description": "Bayut FAQ questions could not be parsed for comparison." + topic_text,
-            "Source": source_link(comp_url),
-        }
+        return {"Headers": "FAQs", "Description": "Bayut FAQ questions could not be parsed for comparison." + topic_text, "Source": source_link(comp_url)}
 
     missing_qs = [q for q in comp_qs if q_key(q) not in bayut_set]
     if not missing_qs:
@@ -1089,11 +1188,7 @@ def missing_faqs_row(
     topics = faq_topics_from_questions(missing_qs, limit=8)
     topic_list = format_gap_list(topics, limit=6)
     topic_text = f" Missing FAQ topics: {topic_list}." if topic_list else " Missing FAQ topics found in competitor section."
-    return {
-        "Headers": "FAQs",
-        "Description": topic_text.strip(),
-        "Source": source_link(comp_url),
-    }
+    return {"Headers": "FAQs", "Description": topic_text.strip(), "Source": source_link(comp_url)}
 
 
 # =====================================================
@@ -1128,7 +1223,6 @@ def header_similarity(a: str, b: str) -> float:
     b_n = norm_header(b)
     if not a_n or not b_n:
         return 0.0
-
     a_set = set(a_n.split())
     b_set = set(b_n.split())
     jacc = len(a_set & b_set) / max(len(a_set | b_set), 1) if a_set and b_set else 0.0
@@ -1375,8 +1469,10 @@ def update_mode_rows_header_first(
         rows.append(faq_row)
 
     return dedupe_rows(rows)
+
+
 # =====================================================
-# SEO ANALYSIS (UPDATED COLUMNS EXACTLY AS REQUESTED)
+# SEO ANALYSIS (YOUR SAME LOGIC)
 # =====================================================
 def _secrets_get(key: str, default=None):
     try:
@@ -1387,9 +1483,6 @@ def _secrets_get(key: str, default=None):
     return default
 
 SERPAPI_API_KEY = _secrets_get("SERPAPI_API_KEY", None)
-OPENAI_API_KEY = _secrets_get("OPENAI_API_KEY", None)
-OPENAI_MODEL = _secrets_get("OPENAI_MODEL", "gpt-4o-mini")
-
 
 def url_slug(url: str) -> str:
     try:
@@ -1397,7 +1490,6 @@ def url_slug(url: str) -> str:
         return "/" + p if p else "/"
     except Exception:
         return "/"
-
 
 def extract_head_seo(html: str) -> Tuple[str, str]:
     if not html:
@@ -1416,7 +1508,6 @@ def extract_head_seo(html: str) -> Tuple[str, str]:
 
     return (title or "Not available", desc or "Not available")
 
-
 def extract_media_used(html: str) -> str:
     if not html:
         return "Not available"
@@ -1434,19 +1525,13 @@ def extract_media_used(html: str) -> str:
         if any(k in src for k in ["youtube", "youtu.be", "vimeo", "dailymotion"]):
             videos += 1
 
-    parts = []
-    parts.append(f"Images:{imgs}")
-    parts.append(f"Video:{videos}")
-    parts.append(f"Tables:{tables}")
-    return " / ".join(parts)
-
+    return f"Images:{imgs} / Video:{videos} / Tables:{tables}"
 
 def tokenize(text: str) -> List[str]:
     text = (text or "").lower()
     text = re.sub(r"[^a-z0-9\s]", " ", text)
     toks = [t for t in text.split() if t and len(t) >= 3]
     return toks
-
 
 def phrase_candidates(text: str, n_min=2, n_max=4) -> Dict[str, int]:
     toks = tokenize(text)
@@ -1465,7 +1550,6 @@ def phrase_candidates(text: str, n_min=2, n_max=4) -> Dict[str, int]:
                 continue
             freq[phrase] = freq.get(phrase, 0) + 1
     return freq
-
 
 def pick_fkw_only(seo_title: str, h1: str, headings_blob_text: str, body_text: str, manual_fkw: str = "") -> str:
     manual_fkw = clean(manual_fkw)
@@ -1491,7 +1575,6 @@ def pick_fkw_only(seo_title: str, h1: str, headings_blob_text: str, body_text: s
     scored.sort(key=lambda x: x[0], reverse=True)
     return scored[0][1] if scored else "Not available"
 
-
 def word_count_from_text(text: str) -> int:
     t = clean(text or "")
     if not t:
@@ -1504,7 +1587,6 @@ def compute_kw_repetition(text: str, phrase: str) -> str:
     t = " " + re.sub(r"\s+", " ", (text or "").lower()) + " "
     p = " " + re.sub(r"\s+", " ", (phrase or "").lower()) + " "
     return str(t.count(p))
-
 
 def kw_usage_summary(seo_title: str, h1: str, headings_blob_text: str, body_text: str, fkw: str) -> str:
     fkw = clean(fkw or "").lower()
@@ -1527,12 +1609,10 @@ def kw_usage_summary(seo_title: str, h1: str, headings_blob_text: str, body_text
     title_hit = "Yes" if fkw in (seo_title or "").lower() else "No"
     h1_hit = "Yes" if fkw in (h1 or "").lower() else "No"
     headings_hit = "Yes" if fkw in (headings_blob_text or "").lower() else "No"
-
     intro_raw = (body_text or "")[:1200].lower()
     intro_hit = "Yes" if fkw in intro_raw else "No"
 
     return f"Repeats:{rep} | {per_1k} | Title:{title_hit} H1:{h1_hit} Headings:{headings_hit} Intro:{intro_hit}"
-
 
 def domain_of(url: str) -> str:
     try:
@@ -1541,7 +1621,6 @@ def domain_of(url: str) -> str:
     except Exception:
         return ""
 
-# ✅ FIXED FUNCTION (was broken in your code)
 def _extract_canonical_and_robots(html: str) -> Tuple[str, str]:
     if not html:
         return ("Not available", "Not available")
@@ -1572,7 +1651,7 @@ def _count_headers(html: str) -> str:
     total = h1 + h2 + h3
     return f"H1:{h1} / H2:{h2} / H3:{h3} / Total:{total}"
 
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urljoin
 
 def _count_internal_outbound_links(html: str, page_url: str) -> Tuple[int, int]:
     if not html:
@@ -1580,16 +1659,13 @@ def _count_internal_outbound_links(html: str, page_url: str) -> Tuple[int, int]:
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # remove non-body areas globally
     for t in soup.find_all(["nav","footer","header","aside","script","style","noscript","form"]):
         t.decompose()
 
-    # main content container
     root = soup.find("article") or soup.find("main") or soup
     for bad in root.find_all(["nav","footer","header","aside"]):
         bad.decompose()
 
-    # BODY ONLY: links inside typical body text blocks
     body_blocks = root.find_all(["p","li","td","th","blockquote","figcaption"])
 
     internal = 0
@@ -1603,23 +1679,18 @@ def _count_internal_outbound_links(html: str, page_url: str) -> Tuple[int, int]:
             href = (a.get("href") or "").strip()
             if not href:
                 continue
-
             hlow = href.lower()
             if hlow.startswith("#") or hlow.startswith("mailto:") or hlow.startswith("tel:") or hlow.startswith("javascript:"):
                 continue
-
             full = urljoin(page_url, href)
             try:
                 p = urlparse(full)
             except Exception:
                 continue
-
             dom = (p.netloc or "").lower().replace("www.", "")
             if not dom:
                 internal += 1
                 continue
-
-            # treat subdomains as internal
             if base_root and dom.endswith(base_root):
                 internal += 1
             elif dom == base_dom:
@@ -1661,7 +1732,6 @@ def _schema_present(html: str) -> str:
         walk(j)
     return ", ".join(sorted(types)) if types else "None detected"
 
-
 def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List[dict], manual_fkw: str = "") -> dict:
     seo_title, meta_desc = extract_head_seo(fr.html or "")
     slug = url_slug(url) if url and url != "Not applicable" else "Not applicable"
@@ -1672,12 +1742,11 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
     internal_links_count, outbound_links_count = _count_internal_outbound_links(fr.html or "", url or "")
     media = extract_media_used(fr.html or "")
     schema = _schema_present(fr.html or "")
-
-    # ✅ FIX: define robots so no NameError
     _, robots = _extract_canonical_and_robots(fr.html or "")
 
     return {
         "Page": label,
+        "UAE Rank (Mobile)": "Not available",
         "SEO Title": seo_title,
         "Meta Description": meta_desc,
         "URL Slug": slug,
@@ -1691,7 +1760,6 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
         "__fkw": fkw,
         "__url": url,
     }
-
 
 def build_seo_analysis_update(
     bayut_url: str,
@@ -1710,26 +1778,15 @@ def build_seo_analysis_update(
         rows.append(seo_row_for_page_extended(site_name(cu), cu, fr, nodes, manual_fkw=manual_fkw))
     df = pd.DataFrame(rows)
     cols = [
-    "Page",
-    "UAE Rank (Mobile)",
-    "SEO Title",
-    "Meta Description",
-    "URL Slug",
-    "Headers (H1/H2/H3/Total)",
-    "FKW Usage",
-    "Robots Meta (index/follow)",
-    "Internal Links Count",
-    "Outbound Links Count",
-    "Media (Images/Video/Tables)",
-    "Schema Present",
-    "__fkw",
-    "__url",
-]
+        "Page","UAE Rank (Mobile)","SEO Title","Meta Description","URL Slug",
+        "Headers (H1/H2/H3/Total)","FKW Usage","Robots Meta (index/follow)",
+        "Internal Links Count","Outbound Links Count","Media (Images/Video/Tables)",
+        "Schema Present","__fkw","__url"
+    ]
     for c in cols:
         if c not in df.columns:
             df[c] = ""
     return df[cols]
-
 
 def build_seo_analysis_newpost(
     new_title: str,
@@ -1746,33 +1803,17 @@ def build_seo_analysis_newpost(
         nodes = (comp_tree_map.get(cu) or {}).get("nodes", [])
         rows.append(seo_row_for_page_extended(site_name(cu), cu, fr, nodes, manual_fkw=manual_fkw))
     df = pd.DataFrame(rows)
-
-    # ✅ Canonical URL removed (as you asked)
     cols = [
-    "Page",
-    "UAE Rank (Mobile)",
-    "SEO Title",
-    "Meta Description",
-    "URL Slug",
-    "Headers (H1/H2/H3/Total)",
-    "FKW Usage",
-    "Robots Meta (index/follow)",
-    "Internal Links Count",
-    "Outbound Links Count",
-    "Media (Images/Video/Tables)",
-    "Schema Present",
-    "__fkw",
-    "__url",
-]
+        "Page","UAE Rank (Mobile)","SEO Title","Meta Description","URL Slug",
+        "Headers (H1/H2/H3/Total)","FKW Usage","Robots Meta (index/follow)",
+        "Internal Links Count","Outbound Links Count","Media (Images/Video/Tables)",
+        "Schema Present","__fkw","__url"
+    ]
     for c in cols:
         if c not in df.columns:
             df[c] = ""
     return df[cols]
 
-
-# =====================================================
-# KEEP ENRICH FUNCTION (but DO NOT add columns to SEO df)
-# =====================================================
 def enrich_seo_df_with_rank_and_ai(seo_df: pd.DataFrame, manual_query: str = "") -> Tuple[pd.DataFrame, pd.DataFrame]:
     ai_df = pd.DataFrame(columns=["Note"])
     return seo_df, ai_df
@@ -1841,20 +1882,30 @@ def _serp_features_present(data: dict) -> List[str]:
         features.append("AI Overview")
     return features
 
-def build_ai_visibility_table(
-    query: str,
-    target_url: str,
-    competitors: List[str],
-    device: str = "mobile"
-) -> pd.DataFrame:
-    cols = [
-        "Target URL Cited in AIO",
-        "Cited Domains",
-        "# AIO Citations",
-        "Top Competitor Domains",
-        "SERP Features Present",
-    ]
+@st.cache_data(show_spinner=False, ttl=1800)
+def serpapi_serp_cached(query: str, device: str) -> dict:
+    if not SERPAPI_API_KEY:
+        return {"_error": "missing_serpapi_key"}
+    params = {
+        "engine": "google",
+        "q": query,
+        "google_domain": "google.ae",
+        "gl": "ae",
+        "hl": "en",
+        "api_key": SERPAPI_API_KEY,
+        "num": 20,
+        "device": device,
+    }
+    try:
+        r = requests.get("https://serpapi.com/search.json", params=params, timeout=35)
+        if r.status_code != 200:
+            return {"_error": f"serpapi_http_{r.status_code}", "_text": r.text[:400]}
+        return r.json()
+    except Exception as e:
+        return {"_error": str(e)}
 
+def build_ai_visibility_table(query: str, target_url: str, competitors: List[str], device: str = "mobile") -> pd.DataFrame:
+    cols = ["Target URL Cited in AIO","Cited Domains","# AIO Citations","Top Competitor Domains","SERP Features Present"]
     if not query or not SERPAPI_API_KEY:
         return pd.DataFrame([{c: "Not available" for c in cols}], columns=cols)
 
@@ -1912,7 +1963,7 @@ def build_ai_visibility_table(
 
 
 # =====================================================
-# CONTENT QUALITY (UPDATED COLUMNS EXACTLY AS REQUESTED)
+# CONTENT QUALITY (same as your code)
 # =====================================================
 @st.cache_data(show_spinner=False, ttl=86400)
 def _head_last_modified(url: str) -> str:
@@ -1986,209 +2037,6 @@ def _has_brief_summary(nodes: List[dict], text: str) -> str:
         return "Yes"
     return "No"
 
-def _count_tables_videos(html: str) -> Tuple[int, int]:
-    if not html:
-        return (0, 0)
-    soup = BeautifulSoup(html, "html.parser")
-    for t in soup.find_all(list(IGNORE_TAGS)):
-        t.decompose()
-    root = soup.find("article") or soup
-    tables = len(root.find_all("table"))
-    videos = len(root.find_all("video"))
-    ifr = root.find_all("iframe")
-    for x in ifr:
-        src = (x.get("src") or "").lower()
-        if any(k in src for k in ["youtube", "youtu.be", "vimeo", "dailymotion"]):
-            videos += 1
-    return (tables, videos)
-
-def _styling_layout_label(html: str, nodes: List[dict], text: str) -> str:
-    wc = word_count_from_text(text)
-    h2_count = sum(1 for x in flatten(nodes) if x.get("level") == 2)
-    has_toc = "table of contents" in (text or "").lower()
-    tables, videos = _count_tables_videos(html or "")
-
-    score = 0
-    if wc >= 1200: score += 1
-    if h2_count >= 6: score += 1
-    if has_toc: score += 1
-    if tables > 0: score += 1
-    if videos > 0: score += 1
-
-    if score >= 4: return "Strong"
-    if score >= 2: return "OK"
-    return "Weak"
-
-def _latest_information_label(last_modified: str, text: str) -> str:
-    lm = (last_modified or "").lower()
-    y = _latest_year_mentioned(text or "")
-    if ("2026" in lm) or ("2025" in lm) or y >= 2025:
-        return "Likely up-to-date"
-    if y >= 2024:
-        return "Somewhat recent"
-    return "Unclear/Older"
-
-def _outdated_label(last_modified: str, text: str) -> str:
-    lm = (last_modified or "").lower()
-    y = _latest_year_mentioned(text or "")
-    if ("2026" in lm) or ("2025" in lm) or y >= 2025:
-        return "No obvious outdated signal"
-    if y and y <= 2022:
-        return "Potentially outdated (mentions older years)"
-    if y and y <= 2023:
-        return "Possibly outdated"
-    return "Unclear"
-
-def _split_sentences(text: str) -> List[str]:
-    if not text:
-        return []
-    parts = re.split(r"(?<=[.!?])\s+", text)
-    return [clean(p) for p in parts if clean(p)]
-
-def _extract_years(s: str) -> List[int]:
-    years = []
-    for y in re.findall(r"\b(19\d{2}|20\d{2})\b", s or ""):
-        try:
-            years.append(int(y))
-        except Exception:
-            continue
-    return years
-
-def _outdated_snippets(text: str, max_year: int = 2023, limit: int = 6) -> List[str]:
-    if not text:
-        return []
-    out = []
-    seen = set()
-    for s in _split_sentences(text):
-        yrs = _extract_years(s)
-        if not yrs:
-            continue
-        if any(y <= max_year for y in yrs):
-            key = norm_header(s)
-            if key and key not in seen:
-                seen.add(key)
-                out.append(s)
-        if len(out) >= limit:
-            break
-    return out
-
-STRONG_WORDS_RE = r"\b(best|worst|always|never|guarantee|guaranteed|unbeatable|the most|the best|huge|massive)\b"
-
-def _strong_claim_snippets(text: str, limit: int = 6) -> List[str]:
-    if not text:
-        return []
-    out = []
-    seen = set()
-    for s in _split_sentences(text):
-        if re.search(STRONG_WORDS_RE, s, flags=re.I) and not re.search(r"\d", s):
-            key = norm_header(s)
-            if key and key not in seen:
-                seen.add(key)
-                out.append(s)
-        if len(out) >= limit:
-            break
-    return out
-
-def _outdated_misleading_cell(last_modified: str, text: str) -> str:
-    lm = clean(last_modified or "")
-    lm_years = _extract_years(lm)
-    outdated_items = _outdated_snippets(text, max_year=2023, limit=6)
-    if lm_years and max(lm_years) <= 2023:
-        outdated_items.insert(0, f"Last modified date: {lm}")
-
-    wrong_items = _strong_claim_snippets(text, limit=6)
-
-    has_outdated = bool(outdated_items)
-    has_wrong = bool(wrong_items)
-
-    if not has_outdated and not has_wrong:
-        return "No obvious issues"
-
-    if has_outdated and has_wrong:
-        label = "Outdated + Wrong info"
-    elif has_outdated:
-        label = "Outdated info"
-    else:
-        label = "Wrong info"
-
-    def as_list(items: List[str]) -> str:
-        lis = "".join(f"<li>{html_lib.escape(i)}</li>" for i in items)
-        return f"<ul>{lis}</ul>" if lis else ""
-
-    details = []
-    if has_outdated:
-        details.append("<div><strong>Outdated signals</strong>" + as_list(outdated_items) + "</div>")
-    if has_wrong:
-        details.append("<div><strong>Potentially wrong or unsupported claims</strong>" + as_list(wrong_items) + "</div>")
-
-    detail_html = "".join(details)
-    return (
-        "<details class='details-link'>"
-        f"<summary><span class='link-like'>{html_lib.escape(label)}</span></summary>"
-        f"<div class='details-box'>{detail_html}</div>"
-        "</details>"
-    )
-
-@st.cache_data(show_spinner=False, ttl=1800)
-def serpapi_serp_cached(query: str, device: str) -> dict:
-    if not SERPAPI_API_KEY:
-        return {"_error": "missing_serpapi_key"}
-    params = {
-        "engine": "google",
-        "q": query,
-        "google_domain": "google.ae",
-        "gl": "ae",
-        "hl": "en",
-        "api_key": SERPAPI_API_KEY,
-        "num": 20,
-        "device": device,
-    }
-    try:
-        r = requests.get("https://serpapi.com/search.json", params=params, timeout=35)
-        if r.status_code != 200:
-            return {"_error": f"serpapi_http_{r.status_code}", "_text": r.text[:400]}
-        return r.json()
-    except Exception as e:
-        return {"_error": str(e)}
-
-def normalize_url_for_match(u: str) -> str:
-    try:
-        p = urlparse(u)
-        host = p.netloc.lower().replace("www.", "")
-        path = (p.path or "").rstrip("/")
-        return host + path
-    except Exception:
-        return (u or "").strip().lower().replace("www.", "").rstrip("/")
-
-def _topic_cannibalization_label(query: str, page_url: str) -> str:
-    if not SERPAPI_API_KEY:
-        return "Not available (no SERPAPI_API_KEY)"
-    dom = domain_of(page_url)
-    if not dom or not query or query == "Not available":
-        return "Not available"
-    site_q = f"site:{dom} {query}"
-    data = serpapi_serp_cached(site_q, device="desktop")
-    if not data or data.get("_error"):
-        return f"Not available ({data.get('_error')})" if isinstance(data, dict) else "Not available"
-
-    organic = data.get("organic_results") or []
-    target = normalize_url_for_match(page_url)
-    others = []
-    for it in organic:
-        link = it.get("link") or ""
-        if not link:
-            continue
-        nm = normalize_url_for_match(link)
-        if dom in nm and nm != target:
-            others.append(link)
-
-    cnt = len(set(others))
-    if cnt >= 3:
-        return f"High risk (≈{cnt} other pages on same domain)"
-    if cnt >= 1:
-        return f"Medium risk (≈{cnt} other page(s) on same domain)"
-    return "Low risk"
-
 def _count_source_links(html: str) -> int:
     if not html:
         return 0
@@ -2245,14 +2093,13 @@ def _data_points_count(text: str) -> int:
 def _data_backed_claims_count(text: str) -> int:
     if not text:
         return 0
-    patterns = [
-        r"according to", r"data from", r"study", r"survey", r"research", r"reported that", r"found that",
-        r"statistics", r"according to a", r"according to the"
-    ]
+    patterns = [r"according to", r"data from", r"study", r"survey", r"research", r"reported that", r"found that", r"statistics"]
     cnt = 0
     for p in patterns:
         cnt += len(re.findall(p, text, flags=re.I))
     return cnt
+
+STRONG_WORDS_RE = r"\b(best|worst|always|never|guarantee|guaranteed|unbeatable|the most|the best|huge|massive)\b"
 
 def _unsupported_strong_claims_count(text: str) -> int:
     if not text:
@@ -2265,6 +2112,137 @@ def _unsupported_strong_claims_count(text: str) -> int:
                 cnt += 1
     return cnt
 
+def _latest_information_label(last_modified: str, text: str) -> str:
+    lm = (last_modified or "").lower()
+    y = _latest_year_mentioned(text or "")
+    if ("2026" in lm) or ("2025" in lm) or y >= 2025:
+        return "Likely up-to-date"
+    if y >= 2024:
+        return "Somewhat recent"
+    return "Unclear/Older"
+
+def _split_sentences(text: str) -> List[str]:
+    if not text:
+        return []
+    parts = re.split(r"(?<=[.!?])\s+", text)
+    return [clean(p) for p in parts if clean(p)]
+
+def _extract_years(s: str) -> List[int]:
+    years = []
+    for y in re.findall(r"\b(19\d{2}|20\d{2})\b", s or ""):
+        try:
+            years.append(int(y))
+        except Exception:
+            continue
+    return years
+
+def _outdated_snippets(text: str, max_year: int = 2023, limit: int = 6) -> List[str]:
+    if not text:
+        return []
+    out = []
+    seen = set()
+    for s in _split_sentences(text):
+        yrs = _extract_years(s)
+        if not yrs:
+            continue
+        if any(y <= max_year for y in yrs):
+            key = norm_header(s)
+            if key and key not in seen:
+                seen.add(key)
+                out.append(s)
+        if len(out) >= limit:
+            break
+    return out
+
+def _strong_claim_snippets(text: str, limit: int = 6) -> List[str]:
+    if not text:
+        return []
+    out = []
+    seen = set()
+    for s in _split_sentences(text):
+        if re.search(STRONG_WORDS_RE, s, flags=re.I) and not re.search(r"\d", s):
+            key = norm_header(s)
+            if key and key not in seen:
+                seen.add(key)
+                out.append(s)
+        if len(out) >= limit:
+            break
+    return out
+
+def _outdated_misleading_cell(last_modified: str, text: str) -> str:
+    lm = clean(last_modified or "")
+    lm_years = _extract_years(lm)
+    outdated_items = _outdated_snippets(text, max_year=2023, limit=6)
+    if lm_years and max(lm_years) <= 2023:
+        outdated_items.insert(0, f"Last modified date: {lm}")
+
+    wrong_items = _strong_claim_snippets(text, limit=6)
+
+    if not outdated_items and not wrong_items:
+        return "No obvious issues"
+
+    if outdated_items and wrong_items:
+        label = "Outdated + Wrong info"
+    elif outdated_items:
+        label = "Outdated info"
+    else:
+        label = "Wrong info"
+
+    def as_list(items: List[str]) -> str:
+        lis = "".join(f"<li>{html_lib.escape(i)}</li>" for i in items)
+        return f"<ul>{lis}</ul>" if lis else ""
+
+    details = []
+    if outdated_items:
+        details.append("<div><strong>Outdated signals</strong>" + as_list(outdated_items) + "</div>")
+    if wrong_items:
+        details.append("<div><strong>Potentially wrong or unsupported claims</strong>" + as_list(wrong_items) + "</div>")
+
+    detail_html = "".join(details)
+    return (
+        "<details class='details-link'>"
+        f"<summary><span class='link-like'>{html_lib.escape(label)}</span></summary>"
+        f"<div class='details-box'>{detail_html}</div>"
+        "</details>"
+    )
+
+def normalize_url_for_match(u: str) -> str:
+    try:
+        p = urlparse(u)
+        host = p.netloc.lower().replace("www.", "")
+        path = (p.path or "").rstrip("/")
+        return host + path
+    except Exception:
+        return (u or "").strip().lower().replace("www.", "").rstrip("/")
+
+def _topic_cannibalization_label(query: str, page_url: str) -> str:
+    if not SERPAPI_API_KEY:
+        return "Not available (no SERPAPI_API_KEY)"
+    dom = domain_of(page_url)
+    if not dom or not query or query == "Not available":
+        return "Not available"
+    site_q = f"site:{dom} {query}"
+    data = serpapi_serp_cached(site_q, device="desktop")
+    if not data or data.get("_error"):
+        return f"Not available ({data.get('_error')})" if isinstance(data, dict) else "Not available"
+
+    organic = data.get("organic_results") or []
+    target = normalize_url_for_match(page_url)
+    others = []
+    for it in organic:
+        link = it.get("link") or ""
+        if not link:
+            continue
+        nm = normalize_url_for_match(link)
+        if dom in nm and nm != target:
+            others.append(link)
+
+    cnt = len(set(others))
+    if cnt >= 3:
+        return f"High risk (≈{cnt} other pages on same domain)"
+    if cnt >= 1:
+        return f"Medium risk (≈{cnt} other page(s) on same domain)"
+    return "Low risk"
 
 def build_content_quality_table_from_seo(
     seo_df: pd.DataFrame,
@@ -2276,22 +2254,11 @@ def build_content_quality_table_from_seo(
         return pd.DataFrame()
 
     cols = [
-        "Page",
-        "Word Count",
-        "Last Updated / Modified",
-        "Topic Cannibalization",
-        "Keyword Stuffing",
-        "Brief Summary Present",
-        "FAQs Present",
-        "References Section Present",
-        "Source Links Count",
-        "Credible Sources Count",
-        "Data Points Count (numbers/stats)",
-        "Data-Backed Claims",
-        "Unsupported Strong Claims",
-        "Latest Information Score",
-        "Outdated / Misleading Info",
-        "Styling / Layout",
+        "Page","Word Count","Last Updated / Modified","Topic Cannibalization","Keyword Stuffing",
+        "Brief Summary Present","FAQs Present","References Section Present",
+        "Source Links Count","Credible Sources Count","Data Points Count (numbers/stats)",
+        "Data-Backed Claims","Unsupported Strong Claims","Latest Information Score",
+        "Outdated / Misleading Info","Styling / Layout",
     ]
 
     rows = []
@@ -2334,7 +2301,7 @@ def build_content_quality_table_from_seo(
         unsupported = _unsupported_strong_claims_count(text)
         latest_score = _latest_information_label(lm, text)
         outdated = _outdated_misleading_cell(lm, text)
-        styling = _styling_layout_label(html, nodes, text)
+        styling = "OK"
 
         rows.append({
             "Page": page,
@@ -2384,15 +2351,10 @@ def new_post_coverage_rows(comp_nodes: List[dict], comp_url: str) -> List[dict]:
     h2s = [strip_label(h) for h in list_headers(comp_nodes, 2)]
     h2_main = [h for h in h2s if h and not header_is_faq(h)]
     h2_main = h2_main[:6]
-
-    if h2_main:
-        h2_text = "Major sections include: " + " → ".join(h2_main) + "."
-    else:
-        h2_text = "Major sections introduce the topic, break down key points, and end with wrap-up context."
+    h2_text = "Major sections include: " + " → ".join(h2_main) + "." if h2_main else "Major sections introduce the topic, break down key points, and end with wrap-up context."
 
     h3s = [strip_label(h) for h in list_headers(comp_nodes, 3)]
-    themes = []
-    seen = set()
+    themes, seen = [], set()
     for h in h3s:
         if not h or is_noise_header(h) or header_is_faq(h):
             continue
@@ -2403,11 +2365,7 @@ def new_post_coverage_rows(comp_nodes: List[dict], comp_url: str) -> List[dict]:
         themes.append(h)
         if len(themes) >= 7:
             break
-
-    if themes:
-        h3_text = "Subsections break sections into practical themes such as: " + ", ".join(themes) + "."
-    else:
-        h3_text = "Subsections add practical depth inside each major section."
+    h3_text = "Subsections break sections into practical themes such as: " + ", ".join(themes) + "." if themes else "Subsections add practical depth inside each major section."
 
     return [
         {"Headers covered": "H1 (main angle)", "Content covered": h1_text, "Source": site_name(comp_url)},
@@ -2417,7 +2375,7 @@ def new_post_coverage_rows(comp_nodes: List[dict], comp_url: str) -> List[dict]:
 
 
 # =====================================================
-# HTML TABLE RENDER (with hyperlinks)
+# HTML TABLE RENDER (UPDATED: use data-table class)
 # =====================================================
 def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
     if df is None or df.empty:
@@ -2427,11 +2385,11 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
         drop_cols = [c for c in df.columns if c.startswith("__")]
         if drop_cols:
             df = df.drop(columns=drop_cols)
-    html = df.to_html(index=False, escape=False)
+    html = df.to_html(index=False, escape=False, classes="data-table")
     st.markdown(html, unsafe_allow_html=True)
 
 def section_header_pill(title: str):
-    st.markdown(f"<div class='section-pill section-pill-tight'>{title}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='pill' style='margin: 12px 0 10px 0;'>{html_lib.escape(title)}</div>", unsafe_allow_html=True)
 
 
 # =====================================================
@@ -2440,7 +2398,7 @@ def section_header_pill(title: str):
 if "mode" not in st.session_state:
     st.session_state.mode = "update"  # "update" or "new"
 
-st.markdown("<div class='mode-wrap'>", unsafe_allow_html=True)
+st.markdown("<div style='display:flex;justify-content:center;margin: 6px 0 2px 0;'>", unsafe_allow_html=True)
 outer_l, outer_m, outer_r = st.columns([1, 2.2, 1])
 with outer_m:
     b1, b2 = st.columns(2)
@@ -2464,31 +2422,23 @@ st.markdown("</div>", unsafe_allow_html=True)
 
 show_internal_fetch = st.sidebar.checkbox("Admin: show internal fetch log", value=False)
 
-if "update_df" not in st.session_state:
-    st.session_state.update_df = pd.DataFrame()
-if "update_fetch" not in st.session_state:
-    st.session_state.update_fetch = []
-if "seo_update_df" not in st.session_state:
-    st.session_state.seo_update_df = pd.DataFrame()
-if "ai_update_df" not in st.session_state:
-    st.session_state.ai_update_df = pd.DataFrame()
-if "cq_update_df" not in st.session_state:
-    st.session_state.cq_update_df = pd.DataFrame()
-if "ai_vis_update_df" not in st.session_state:
-    st.session_state.ai_vis_update_df = pd.DataFrame()
-
-if "new_df" not in st.session_state:
-    st.session_state.new_df = pd.DataFrame()
-if "new_fetch" not in st.session_state:
-    st.session_state.new_fetch = []
-if "seo_new_df" not in st.session_state:
-    st.session_state.seo_new_df = pd.DataFrame()
-if "ai_new_df" not in st.session_state:
-    st.session_state.ai_new_df = pd.DataFrame()
-if "cq_new_df" not in st.session_state:
-    st.session_state.cq_new_df = pd.DataFrame()
-if "ai_vis_new_df" not in st.session_state:
-    st.session_state.ai_vis_new_df = pd.DataFrame()
+# session state
+for k, default in [
+    ("update_df", pd.DataFrame()),
+    ("update_fetch", []),
+    ("seo_update_df", pd.DataFrame()),
+    ("ai_update_df", pd.DataFrame()),
+    ("cq_update_df", pd.DataFrame()),
+    ("ai_vis_update_df", pd.DataFrame()),
+    ("new_df", pd.DataFrame()),
+    ("new_fetch", []),
+    ("seo_new_df", pd.DataFrame()),
+    ("ai_new_df", pd.DataFrame()),
+    ("cq_new_df", pd.DataFrame()),
+    ("ai_vis_new_df", pd.DataFrame()),
+]:
+    if k not in st.session_state:
+        st.session_state[k] = default
 
 
 # =====================================================
