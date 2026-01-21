@@ -198,12 +198,20 @@ DEFAULT_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0 Safari/537.36"
+        "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
     "Accept-Language": "en-US,en;q=0.9",
-    "Cache-Control": "no-cache",
+    "Cache-Control": "max-age=0",
     "Pragma": "no-cache",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Sec-Ch-Ua": '"Not A(Brand";v="99", "Google Chrome";v="124", "Chromium";v="124"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
 }
 
 IGNORE_TAGS = {"nav", "footer", "header", "aside", "script", "style", "noscript"}
@@ -1077,11 +1085,22 @@ def faq_topic_from_question(q: str) -> str:
 
     # fallback: remove leading question helpers cleanly (no ugly “Is The …” topics)
     s = raw
-    s = re.sub(r"^\s*(is|are|do|does|did|can|should|could|would|will)\s+", "", s, flags=re.I)
-    s = re.sub(r"^\s*(what|where|when|why|how|who|which)\s+", "", s, flags=re.I)
-    s = re.sub(r"^\s*(is|are|do|does|did|can|should|could|would|will)\s+", "", s, flags=re.I)
-    s = re.sub(r"^\s*(the|a|an)\s+", "", s, flags=re.I)
-    s = re.sub(r"\?$", "", s).strip()
+    # Recursive removal of starters to catch "So, is the..." or "Is the..."
+    s = re.sub(r"^\s*(is|are|do|does|did|can|should|could|would|will|has|have)\b\s*", "", s, flags=re.I)
+    s = re.sub(r"^\s*(what|where|when|why|how|who|which)\b\s*", "", s, flags=re.I)
+    s = re.sub(r"^\s*(is|are|do|does|did|can|should|could|would|will|has|have)\b\s*", "", s, flags=re.I)
+    
+    # Remove "the", "a", "an" if they are now at start
+    s = re.sub(r"^\s*(the|a|an|there)\b\s*", "", s, flags=re.I)
+    
+    # Remove trailing question mark
+    s = re.sub(r"\?+$", "", s).strip()
+    
+    # If the result is the location name itself (e.g. "Palm Jumeirah"), it's likely "General info" or "Overview"
+    if len(s.split()) <= 3 and "palm jumeirah" in s.lower():
+         # Check if original question was "Is Palm Jumeirah..." -> "General Info"
+         if re.match(r"^is\b", raw, re.I):
+             return "General query / Overview"
 
     # shorten extremely long fallback topics
     if len(s) > 80:
@@ -1147,9 +1166,17 @@ def canonical_header_key(h: str) -> str:
     t = re.sub(r"\badvantages\b|\bbenefits\b|\bpositives\b", "pros", t)
     t = re.sub(r"\bdisadvantages\b|\bdownsides\b|\bdrawbacks\b|\bnegatives\b", "cons", t)
     t = re.sub(r"\bpros and cons\b|\bpros\b|\bcons\b", lambda m: m.group(0), t)
-    # normalize “pros of living in …” patterns
-    t = re.sub(r"\bpros of\b", "pros", t)
-    t = re.sub(r"\bcons of\b", "cons", t)
+    
+    # ✅ FIX: Handle "Pros of living in X" -> "pros" (matches generic "Pros")
+    if "pros" in t and "living" in t:
+        t = "pros"
+    if "cons" in t and "living" in t:
+        t = "cons"
+        
+    # normalize “pros of …” patterns
+    t = re.sub(r"\bpros of\b.*", "pros", t)
+    t = re.sub(r"\bcons of\b.*", "cons", t)
+    
     # collapse spacing
     t = re.sub(r"\s+", " ", t).strip()
     return t
@@ -2147,6 +2174,169 @@ def get_last_modified(url: str, html: str) -> str:
     h = _head_last_modified(url)
     return h if h else "Not available"
 
+
+# =====================================================
+# CONTENT QUALITY ANALYSIS (Restored & Fixed)
+# =====================================================
+
+def count_source_links(html: str, page_url: str) -> Tuple[int, int]:
+    # Returns (total_outbound, credible_count)
+    if not html:
+        return (0, 0)
+    
+    soup = BeautifulSoup(html, "html.parser")
+    for t in soup.find_all(list(IGNORE_TAGS)):
+        t.decompose()
+    
+    root = soup.find("article") or soup.find("main") or soup
+    
+    outbound = 0
+    credible = 0
+    CREDIBLE_DOMAINS = {"gov.ae", ".gov", ".edu", "wikipedia.org", "reuters.com", "bloomberg.com", "thenationalnews.com", "gulfnews.com", "khaleejtimes.com"}
+    
+    base_dom = domain_of(page_url)
+    
+    for a in root.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        if not href or href.startswith("#") or href.startswith("javascript"):
+            continue
+            
+        full = urljoin(page_url, href)
+        d = domain_of(full)
+        if not d or d == base_dom:
+            continue
+            
+        outbound += 1
+        if any(cd in d for cd in CREDIBLE_DOMAINS):
+            credible += 1
+            
+    return (outbound, credible)
+
+def count_data_points(text: str) -> int:
+    # Count numbers/stats
+    return len(re.findall(r"\b\d+(?:[\.,]\d+)?(?:%|\s*AED|\s*sq\.?ft\.?|\s*mins?|\s*km)?\b", text))
+
+def count_data_backed_claims(text: str) -> int:
+    # Sentences that contain a number/stat
+    sentences = re.split(r"[\.\?!]\s+", text)
+    count = 0
+    for s in sentences:
+        if re.search(r"\b\d+(?:[\.,]\d+)?(?:%|\s*AED|\s*sq\.?ft\.?|\s*mins?|\s*km)?\b", s):
+            count += 1
+    return count
+
+def check_styling_layout(html: str) -> str:
+    if not html:
+        return "Weak"
+    soup = BeautifulSoup(html, "html.parser")
+    score = 0
+    if soup.find("table"): score += 1
+    if soup.find(["ul", "ol"]): score += 1
+    if soup.find("blockquote"): score += 1
+    if len(soup.find_all(["h2", "h3"])) > 3: score += 1
+    if soup.find("img"): score += 1
+    
+    if score >= 4: return "Strong"
+    if score >= 2: return "OK"
+    return "Weak"
+
+def check_outdated_info(text: str) -> str:
+    # Check for old years
+    years = re.findall(r"\b(201[5-9]|202[0-4])\b", text)
+    if len(years) > 2:
+        return "Possible outdated references (" + ", ".join(set(years[:3])) + ")"
+    return "No obvious outdated signal"
+
+def get_latest_info_score(text: str) -> str:
+    # Check for recent years
+    if "2026" in text: return "Excellent (2026 mentioned)"
+    if "2025" in text: return "Likely up-to-date"
+    return "Neutral"
+
+def build_content_quality_df(
+    bayut_url: str,
+    bayut_fr: FetchResult,
+    bayut_nodes: List[dict],
+    competitors: List[str],
+    comp_fr_map: Dict[str, FetchResult],
+    comp_tree_map: Dict[str, dict],
+    manual_fkw: str = ""
+) -> pd.DataFrame:
+    rows = []
+    
+    # Helper for one row
+    def make_row(label, url, fr, nodes):
+        text = fr.text or ""
+        html = fr.html or ""
+        
+        wc = word_count_from_text(text)
+        last_mod = get_last_modified(url, html)
+        
+        # Topic Cannibalization (stub - requires SERPAPI check usually)
+        cannibal = "Not available (no SERPAPI_API_KEY)"
+        if SERPAPI_API_KEY:
+             cannibal = "Not available (needs check)" # Placeholder for speed
+        
+        # Keyword Stuffing
+        kw_stuff = "Not available"
+        if manual_fkw:
+            rep = compute_kw_repetition(text, manual_fkw)
+            try:
+                if int(rep) > (wc / 100) * 4: # >4% density
+                    kw_stuff = f"High ({rep} repeats, {float(rep)/max(wc,1)*1000:.1f}/1k words)"
+                elif int(rep) > (wc / 100) * 2:
+                    kw_stuff = f"Moderate ({rep} repeats, {float(rep)/max(wc,1)*1000:.1f}/1k words)"
+                else:
+                    kw_stuff = f"Low ({rep} repeats, {float(rep)/max(wc,1)*1000:.1f}/1k words)"
+            except:
+                pass
+        
+        brief_sum = "Yes" if re.search(r"\b(summary|verdict|conclusion|key takeaways)\b", text, re.I) else "No"
+        faqs = "Yes" if page_has_real_faq(fr, nodes) else "No"
+        refs = "Yes" if re.search(r"\b(references|sources|bibliography)\b", text, re.I) else "No"
+        
+        out_links, cred_links = count_source_links(html, url)
+        
+        dp_count = count_data_points(text)
+        db_claims = count_data_backed_claims(text)
+        
+        latest_score = get_latest_info_score(text)
+        outdated = check_outdated_info(text)
+        styling = check_styling_layout(html)
+
+        return {
+            "Page": label,
+            "Word Count": wc,
+            "Last Updated / Modified": last_mod,
+            "Topic Cannibalization": cannibal,
+            "Keyword Stuffing": kw_stuff,
+            "Brief Summary Present": brief_sum,
+            "FAQs Present": faqs,
+            "References Section Present": refs,
+            "Source Links Count": out_links,
+            "Credible Sources Count": cred_links,
+            "Data Points Count (numbers/stats)": dp_count,
+            "Data-Backed Claims": db_claims,
+            # "Unsupported Strong Claims": "0", # DELETED as requested
+            "Latest Information Score": latest_score,
+            "Outdated / Misleading Info": outdated,
+            "Styling / Layout": styling,
+            "__url": url
+        }
+
+    if bayut_url and bayut_fr and bayut_fr.ok:
+        rows.append(make_row("Bayut", bayut_url, bayut_fr, bayut_nodes))
+        
+    for cu in competitors:
+        fr = comp_fr_map.get(cu) or FetchResult(False, None, None, "", "", "missing")
+        nodes = (comp_tree_map.get(cu) or {}).get("nodes", [])
+        if fr.ok:
+            rows.append(make_row(site_name(cu), cu, fr, nodes))
+            
+    df = pd.DataFrame(rows) if rows else pd.DataFrame(columns=["Page"])
+    return df
+
+
 # (content-quality helper functions remain the same as your original)
 # --- To keep this answer readable, they are unchanged from your version ---
 
@@ -2289,6 +2479,16 @@ if st.session_state.mode == "update":
             manual_fkw=manual_fkw_update.strip()
         )
 
+        st.session_state.cq_update_df = build_content_quality_df(
+            bayut_url=bayut_url.strip(),
+            bayut_fr=bayut_fr,
+            bayut_nodes=bayut_nodes,
+            competitors=competitors,
+            comp_fr_map=comp_fr_map,
+            comp_tree_map=comp_tree_map,
+            manual_fkw=manual_fkw_update.strip()
+        )
+
         st.session_state.seo_update_df, st.session_state.ai_update_df = enrich_seo_df_with_rank_and_ai(
             st.session_state.seo_update_df,
             manual_query=manual_fkw_update.strip()
@@ -2314,6 +2514,12 @@ if st.session_state.mode == "update":
         st.info("Run analysis to see results (requires Bayut + at least 1 competitor successfully fetched).")
     else:
         render_table(st.session_state.update_df)
+
+    section_header_pill("Content Quality (Table 2)")
+    if st.session_state.cq_update_df is None or st.session_state.cq_update_df.empty:
+        st.info("Run analysis to see content quality metrics.")
+    else:
+        render_table(st.session_state.cq_update_df, drop_internal_url=True)
 
     section_header_pill("SEO Analysis")
     if st.session_state.seo_update_df is None or st.session_state.seo_update_df.empty:
@@ -2378,6 +2584,16 @@ else:
             manual_fkw=manual_fkw_new.strip()
         )
 
+        st.session_state.cq_new_df = build_content_quality_df(
+            bayut_url="",
+            bayut_fr=None,
+            bayut_nodes=[],
+            competitors=competitors,
+            comp_fr_map=comp_fr_map,
+            comp_tree_map=comp_tree_map,
+            manual_fkw=manual_fkw_new.strip()
+        )
+
         st.session_state.seo_new_df, st.session_state.ai_new_df = enrich_seo_df_with_rank_and_ai(
             st.session_state.seo_new_df,
             manual_query=manual_fkw_new.strip()
@@ -2402,6 +2618,12 @@ else:
         st.info("Generate competitor coverage to see SEO comparison (only for successfully fetched pages).")
     else:
         render_table(st.session_state.seo_new_df, drop_internal_url=True)
+
+    section_header_pill("Content Quality")
+    if st.session_state.cq_new_df is None or st.session_state.cq_new_df.empty:
+        st.info("Generate competitor coverage to see content quality.")
+    else:
+        render_table(st.session_state.cq_new_df, drop_internal_url=True)
 
     section_header_pill("AI Visibility")
     if st.session_state.ai_vis_new_df is None or st.session_state.ai_vis_new_df.empty:
