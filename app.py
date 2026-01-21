@@ -700,7 +700,16 @@ FAQ_TITLES = {
 
 def header_is_faq(header: str) -> bool:
     nh = norm_header(header)
-    return nh in FAQ_TITLES
+    if not nh:
+        return False
+    if nh in FAQ_TITLES:
+        return True
+    # allow variants like: "FAQs:", "FAQ (2026)", "Frequently Asked Questions (FAQs)"
+    if nh.startswith("faq") or nh.startswith("faqs"):
+        return True
+    if "frequently asked" in nh:
+        return True
+    return False
 
 def _looks_like_question(s: str) -> bool:
     s = clean(s)
@@ -758,6 +767,145 @@ def _has_faq_schema(html: str) -> bool:
         return False
     return False
 
+def _extract_faq_questions_from_jsonld(html: str) -> List[str]:
+    if not html:
+        return []
+    soup = BeautifulSoup(html, "html.parser")
+    scripts = soup.find_all("script", attrs={"type": re.compile(r"ld\+json", re.I)})
+    out: List[str] = []
+
+    def walk_for_faq(x) -> List[dict]:
+        found = []
+        if isinstance(x, dict):
+            t = x.get("@type") or x.get("type")
+            # FAQPage can be nested or appear in list
+            is_faq = False
+            if isinstance(t, str) and t.lower() == "faqpage":
+                is_faq = True
+            if isinstance(t, list) and any(str(z).lower() == "faqpage" for z in t):
+                is_faq = True
+            if is_faq:
+                found.append(x)
+            for v in x.values():
+                found.extend(walk_for_faq(v))
+        elif isinstance(x, list):
+            for v in x:
+                found.extend(walk_for_faq(v))
+        return found
+
+    for s in scripts:
+        raw = (s.string or s.get_text(" ") or "").strip()
+        if not raw:
+            continue
+        try:
+            j = json.loads(raw)
+        except Exception:
+            continue
+
+        faq_objs = walk_for_faq(j)
+        for fo in faq_objs:
+            ents = fo.get("mainEntity") or fo.get("main_entity") or []
+            if isinstance(ents, dict):
+                ents = [ents]
+            if not isinstance(ents, list):
+                continue
+            for e in ents:
+                if not isinstance(e, dict):
+                    continue
+                q = e.get("name") or e.get("question") or ""
+                q = clean(str(q))
+                if q and _looks_like_question(q):
+                    out.append(normalize_question(q))
+
+    # de-dupe
+    seen = set()
+    ded = []
+    for q in out:
+        k = norm_header(q)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        ded.append(q)
+    return ded[:50]
+
+def _extract_faq_questions_from_html_heuristic(html: str) -> List[str]:
+    """
+    Heuristic for FAQ sections where questions are NOT headings.
+    Common patterns: accordions (button/summary), divs with class/id containing faq, etc.
+    """
+    if not html:
+        return []
+    soup = BeautifulSoup(html, "html.parser")
+    for t in soup.find_all(list(IGNORE_TAGS)):
+        t.decompose()
+
+    root = soup.find("article") or soup.find("main") or soup
+
+    def text_candidates(el) -> List[str]:
+        cands = []
+        # tags frequently used as accordion/question labels
+        for tag in el.find_all(["h2", "h3", "h4", "button", "summary", "strong"], limit=200):
+            txt = clean(tag.get_text(" "))
+            if txt and len(txt) <= 180:
+                cands.append(txt)
+        # some sites store Qs in list items / paragraphs
+        for tag in el.find_all(["p", "li"], limit=250):
+            txt = clean(tag.get_text(" "))
+            if txt and len(txt) <= 220:
+                cands.append(txt)
+        return cands
+
+    def split_questions(txt: str) -> List[str]:
+        txt = clean(txt or "")
+        if not txt:
+            return []
+        parts = re.split(r"[\n\r]+|(?<=[\.\?\!])\s+", txt)
+        out = []
+        for p in parts[:60]:
+            p = clean(p)
+            if not p or len(p) > 180:
+                continue
+            if _looks_like_question(p):
+                out.append(normalize_question(p))
+        return out
+
+    containers = []
+    # 1) explicit faq-ish containers
+    for el in root.find_all(True, limit=800):
+        cls = " ".join(el.get("class") or [])
+        _id = el.get("id") or ""
+        key = (cls + " " + _id).lower()
+        if not key:
+            continue
+        if re.search(r"\bfaq\b|\bfaqs\b|frequently\s+asked|accordion|question", key):
+            containers.append(el)
+    # 2) around FAQ headings (if present)
+    for h in root.find_all(["h1", "h2", "h3", "h4"]):
+        ht = clean(h.get_text(" "))
+        if ht and header_is_faq(ht):
+            # include a small window after the heading
+            containers.append(h.parent if h.parent else h)
+
+    # cap to avoid pathological pages
+    if len(containers) > 25:
+        containers = containers[:25]
+
+    qs: List[str] = []
+    for c in containers:
+        for cand in text_candidates(c):
+            qs.extend(split_questions(cand))
+
+    # de-dupe
+    seen = set()
+    ded = []
+    for q in qs:
+        k = norm_header(q)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        ded.append(q)
+    return ded[:50]
+
 def _faq_heading_nodes(nodes: List[dict]) -> List[dict]:
     out = []
     for x in flatten(nodes):
@@ -774,22 +922,62 @@ def _question_heading_children(node: dict) -> List[str]:
     return qs
 
 def page_has_real_faq(fr: FetchResult, nodes: List[dict]) -> bool:
-    faq_nodes = _faq_heading_nodes(nodes)
-    if not faq_nodes:
-        return False
+    # Accept any of these as a "real" FAQ:
+    # - JSON-LD FAQPage schema
+    # - a clear FAQ heading with multiple question-like items
+    # - accordion-style question blocks in HTML
+    if fr and fr.html and _has_faq_schema(fr.html):
+        return True
+
+    qs: List[str] = []
+    faq_nodes = _faq_heading_nodes(nodes or [])
+    for fn in faq_nodes:
+        qs.extend(_question_heading_children(fn))
+        if len(qs) < 3:
+            qs.extend(extract_questions_from_node(fn))
+
+    if fr and fr.html and len(qs) < 3:
+        # capture sites where questions are buttons/accordion items (not headings)
+        qs.extend(_extract_faq_questions_from_jsonld(fr.html))
+        qs.extend(_extract_faq_questions_from_html_heuristic(fr.html))
+
+    # de-dupe
+    seen = set()
+    ded = []
+    for q in qs:
+        k = norm_header(q)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        ded.append(q)
+
+    return len(ded) >= 3
+
+def extract_faq_questions(fr: FetchResult, nodes: List[dict]) -> List[str]:
+    """
+    Used for both Content Quality + missing FAQ gaps.
+    Returns normalized question strings (best effort).
+    """
+    qs: List[str] = []
+    if fr and fr.html:
+        qs.extend(_extract_faq_questions_from_jsonld(fr.html))
+
+    for fn in _faq_heading_nodes(nodes or []):
+        qs.extend(extract_questions_from_node(fn))
 
     if fr and fr.html:
-        if _has_faq_schema(fr.html):
-            return True
-        for fn in faq_nodes:
-            if len(_question_heading_children(fn)) >= 3:
-                return True
-        return False
+        qs.extend(_extract_faq_questions_from_html_heuristic(fr.html))
 
-    for fn in faq_nodes:
-        if len(_question_heading_children(fn)) >= 3:
-            return True
-    return False
+    seen = set()
+    out = []
+    for q in qs:
+        q = normalize_question(q)
+        k = norm_header(q)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        out.append(q)
+    return out[:50]
 
 def extract_questions_from_node(node: dict) -> List[str]:
     qs: List[str] = []
@@ -862,22 +1050,12 @@ def missing_faqs_row(
     comp_fr: FetchResult,
     comp_url: str
 ) -> Optional[dict]:
-    if not page_has_real_faq(comp_fr, comp_nodes):
-        return None
-
-    comp_faq_nodes = _faq_heading_nodes(comp_nodes)
-    comp_qs = []
-    for fn in comp_faq_nodes:
-        comp_qs.extend(extract_questions_from_node(fn))
+    comp_qs = extract_faq_questions(comp_fr, comp_nodes)
     comp_qs = [q for q in comp_qs if q and len(q) > 5]
     if len(comp_qs) < 3:
         return None
 
-    bayut_has = page_has_real_faq(bayut_fr, bayut_nodes)
-    bayut_qs = []
-    if bayut_has:
-        for fn in _faq_heading_nodes(bayut_nodes):
-            bayut_qs.extend(extract_questions_from_node(fn))
+    bayut_qs = extract_faq_questions(bayut_fr, bayut_nodes)
     bayut_qs = [q for q in bayut_qs if q and len(q) > 5]
 
     def q_key(q: str) -> str:
@@ -906,6 +1084,40 @@ def missing_faqs_row(
         "Description": "Missing FAQ topics: " + ", ".join(topics) + ".",
         "Source": source_link(comp_url),
     }
+
+
+# =====================================================
+# CONCLUSION DETECTION (to avoid arbitrary drops by ranking caps)
+# =====================================================
+CONCLUSION_TITLES = {
+    "conclusion",
+    "conclusions",
+    "final thoughts",
+    "final thought",
+    "final word",
+    "final words",
+    "in summary",
+    "summary",
+    "wrapping up",
+    "wrap up",
+    "closing thoughts",
+    "takeaways",
+    "key takeaways",
+}
+
+def header_is_conclusion(header: str) -> bool:
+    nh = norm_header(header)
+    if not nh:
+        return False
+    if nh in CONCLUSION_TITLES:
+        return True
+    if nh.startswith("conclusion"):
+        return True
+    if ("final" in nh and ("thought" in nh or "word" in nh)):
+        return True
+    if "in summary" in nh or nh.startswith("summary"):
+        return True
+    return False
 
 
 # =====================================================
@@ -1115,6 +1327,19 @@ def update_mode_rows_header_first(
             break
 
     rows.extend(missing_rows)
+
+    # Ensure "Conclusion" isn't arbitrarily dropped due to ranking/caps.
+    # This makes results consistent across competitors.
+    for cs in comp_h2:
+        if not header_is_conclusion(cs.get("header", "")):
+            continue
+        if find_best_bayut_match(cs["header"], bayut_h2, min_score=0.73):
+            continue
+        rows.append({
+            "Headers": cs["header"],
+            "Description": summarize_missing_section_action(cs["header"], None, cs.get("content", "")),
+            "Source": source_link(comp_url),
+        })
 
     if len(rows) < max_missing_headers:
         for cs in comp_h3:
