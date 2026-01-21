@@ -422,6 +422,8 @@ def is_noise_header(h: str) -> bool:
     if not s:
         return True
     hn = norm_header(s)
+    if header_is_faq(s):
+        return False
     if hn in GENERIC_SECTION_HEADERS:
         return True
     if len(hn) < 4:
@@ -700,7 +702,12 @@ FAQ_TITLES = {
 
 def header_is_faq(header: str) -> bool:
     nh = norm_header(header)
-    return nh in FAQ_TITLES
+    if not nh:
+        return False
+    if nh in FAQ_TITLES:
+        return True
+    tokens = nh.split()
+    return ("faq" in tokens) or ("faqs" in tokens)
 
 def _looks_like_question(s: str) -> bool:
     s = clean(s)
@@ -758,36 +765,119 @@ def _has_faq_schema(html: str) -> bool:
         return False
     return False
 
+def _faq_questions_from_schema(html: str) -> List[str]:
+    if not html:
+        return []
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        scripts = soup.find_all("script", attrs={"type": re.compile(r"ld\+json", re.I)})
+    except Exception:
+        return []
+
+    questions: List[str] = []
+
+    def add_question(q: str) -> None:
+        qn = normalize_question(q)
+        if not qn or len(qn) < 5:
+            return
+        questions.append(qn)
+
+    def coerce_question(val) -> str:
+        if isinstance(val, str):
+            return val
+        if isinstance(val, dict):
+            for k in ("text", "name", "headline"):
+                v = val.get(k)
+                if v:
+                    return v
+        return ""
+
+    def extract_from_main_entity(entity) -> None:
+        if isinstance(entity, dict):
+            items = [entity]
+        elif isinstance(entity, list):
+            items = entity
+        else:
+            return
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            q = item.get("name") or item.get("headline") or item.get("question")
+            q = coerce_question(q)
+            if q:
+                add_question(q)
+
+    def walk(x) -> None:
+        if isinstance(x, dict):
+            t = x.get("@type") or x.get("type")
+            types: List[str] = []
+            if isinstance(t, list):
+                types = [str(z).lower() for z in t]
+            elif t:
+                types = [str(t).lower()]
+            if "faqpage" in types:
+                extract_from_main_entity(x.get("mainEntity") or x.get("main_entity"))
+            if "question" in types:
+                q = x.get("name") or x.get("headline") or x.get("question")
+                q = coerce_question(q)
+                if q:
+                    add_question(q)
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    for s in scripts:
+        raw = (s.string or s.get_text(" ") or "").strip()
+        if not raw:
+            continue
+        try:
+            j = json.loads(raw)
+        except Exception:
+            continue
+        walk(j)
+
+    seen = set()
+    out = []
+    for q in questions:
+        k = norm_header(q)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        out.append(q)
+    return out[:40]
+
 def _faq_heading_nodes(nodes: List[dict]) -> List[dict]:
     out = []
     for x in flatten(nodes):
-        if x.get("level") in (2, 3) and header_is_faq(x.get("header", "")):
+        if x.get("level") in (1, 2, 3, 4) and header_is_faq(x.get("header", "")):
             out.append(x)
     return out
 
 def _question_heading_children(node: dict) -> List[str]:
     qs = []
-    for c in node.get("children", []) or []:
-        hdr = clean(c.get("header", ""))
-        if hdr and _looks_like_question(hdr):
-            qs.append(normalize_question(hdr))
+    def walk(n: dict) -> None:
+        for c in n.get("children", []) or []:
+            hdr = clean(c.get("header", ""))
+            if hdr and _looks_like_question(hdr):
+                qs.append(normalize_question(hdr))
+            walk(c)
+    walk(node)
     return qs
 
 def page_has_real_faq(fr: FetchResult, nodes: List[dict]) -> bool:
+    if fr and fr.html:
+        if _faq_questions_from_schema(fr.html):
+            return True
+        if _has_faq_schema(fr.html):
+            return True
     faq_nodes = _faq_heading_nodes(nodes)
     if not faq_nodes:
         return False
 
-    if fr and fr.html:
-        if _has_faq_schema(fr.html):
-            return True
-        for fn in faq_nodes:
-            if len(_question_heading_children(fn)) >= 3:
-                return True
-        return False
-
     for fn in faq_nodes:
-        if len(_question_heading_children(fn)) >= 3:
+        if len(extract_questions_from_node(fn)) >= 2:
             return True
     return False
 
@@ -820,6 +910,26 @@ def extract_questions_from_node(node: dict) -> List[str]:
         seen.add(k)
         out.append(q)
     return out[:25]
+
+def _collect_faq_questions(fr: FetchResult, nodes: List[dict]) -> List[str]:
+    qs: List[str] = []
+    if fr and fr.html:
+        qs.extend(_faq_questions_from_schema(fr.html))
+    for fn in _faq_heading_nodes(nodes):
+        qs.extend(extract_questions_from_node(fn))
+
+    seen = set()
+    out = []
+    for q in qs:
+        qn = normalize_question(q)
+        if not qn or len(qn) < 5:
+            continue
+        k = norm_header(qn)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(qn)
+    return out[:40]
 
 def faq_subject(q: str) -> str:
     s = norm_header(normalize_question(q))
@@ -862,23 +972,13 @@ def missing_faqs_row(
     comp_fr: FetchResult,
     comp_url: str
 ) -> Optional[dict]:
-    if not page_has_real_faq(comp_fr, comp_nodes):
+    comp_has = page_has_real_faq(comp_fr, comp_nodes)
+    if not comp_has:
         return None
 
-    comp_faq_nodes = _faq_heading_nodes(comp_nodes)
-    comp_qs = []
-    for fn in comp_faq_nodes:
-        comp_qs.extend(extract_questions_from_node(fn))
-    comp_qs = [q for q in comp_qs if q and len(q) > 5]
-    if len(comp_qs) < 3:
-        return None
-
+    comp_qs = _collect_faq_questions(comp_fr, comp_nodes)
     bayut_has = page_has_real_faq(bayut_fr, bayut_nodes)
-    bayut_qs = []
-    if bayut_has:
-        for fn in _faq_heading_nodes(bayut_nodes):
-            bayut_qs.extend(extract_questions_from_node(fn))
-    bayut_qs = [q for q in bayut_qs if q and len(q) > 5]
+    bayut_qs = _collect_faq_questions(bayut_fr, bayut_nodes) if bayut_has else []
 
     def q_key(q: str) -> str:
         q2 = normalize_question(q)
@@ -888,13 +988,19 @@ def missing_faqs_row(
 
     bayut_set = {q_key(q) for q in bayut_qs if q}
 
-    if not bayut_qs:
-        topics = faq_subjects_from_questions(comp_qs, limit=10)
+    if not bayut_has or len(bayut_qs) < 2:
+        topics = faq_subjects_from_questions(comp_qs, limit=10) if comp_qs else []
+        desc = "Competitor has a real FAQ section."
+        if topics:
+            desc = "Competitor has a real FAQ section covering topics such as: " + ", ".join(topics) + "."
         return {
             "Headers": "FAQs",
-            "Description": "Competitor has a real FAQ section covering topics such as: " + ", ".join(topics) + ".",
+            "Description": desc,
             "Source": source_link(comp_url),
         }
+
+    if len(comp_qs) < 2:
+        return None
 
     missing_qs = [q for q in comp_qs if q_key(q) not in bayut_set]
     if not missing_qs:
@@ -906,6 +1012,74 @@ def missing_faqs_row(
         "Description": "Missing FAQ topics: " + ", ".join(topics) + ".",
         "Source": source_link(comp_url),
     }
+
+CONCLUSION_TITLES = {
+    "conclusion",
+    "conclusions",
+    "final thoughts",
+    "final thought",
+    "closing thoughts",
+    "closing thought",
+    "closing remarks",
+    "wrap up",
+    "wrapup",
+    "final word",
+    "final words",
+    "closing",
+    "in conclusion",
+}
+
+def header_is_conclusion(header: str) -> bool:
+    hn = norm_header(header)
+    if not hn:
+        return False
+    if "conclusion" in hn:
+        return True
+    if hn in CONCLUSION_TITLES:
+        return True
+    for phrase in ["final thoughts", "closing thoughts", "closing remarks", "wrap up", "wrapup", "final word"]:
+        if phrase in hn:
+            return True
+    return False
+
+def _ensure_conclusion_row(
+    rows: List[dict],
+    bayut_secs: List[dict],
+    comp_secs: List[dict],
+    comp_url: str,
+    max_missing_headers: int
+) -> List[dict]:
+    if any(header_is_conclusion(r.get("Headers", "")) for r in rows):
+        return rows
+
+    candidates = [s for s in comp_secs if header_is_conclusion(s.get("header", ""))]
+    if not candidates:
+        return rows
+
+    candidates.sort(
+        key=lambda s: (0 if s.get("level") == 2 else 1, -len(clean(s.get("content", ""))))
+    )
+    candidate = candidates[0]
+
+    if find_best_bayut_match(candidate["header"], bayut_secs, min_score=0.73):
+        return rows
+
+    existing = {norm_header(r.get("Headers", "")) for r in rows}
+    parent = candidate.get("parent_h2") or ""
+    if parent and norm_header(parent) in existing:
+        return rows
+
+    new_row = {
+        "Headers": candidate["header"],
+        "Description": summarize_missing_section_action(candidate["header"], None, candidate.get("content", "")),
+        "Source": source_link(comp_url),
+    }
+
+    if len(rows) >= max_missing_headers:
+        rows = rows[:max_missing_headers - 1] + [new_row]
+    else:
+        rows.append(new_row)
+    return rows
 
 
 # =====================================================
@@ -1140,6 +1314,14 @@ def update_mode_rows_header_first(
 
             if len(rows) >= max_missing_headers:
                 break
+
+    rows = _ensure_conclusion_row(
+        rows=rows,
+        bayut_secs=bayut_secs,
+        comp_secs=comp_secs,
+        comp_url=comp_url,
+        max_missing_headers=max_missing_headers
+    )
 
     missing_parts_rows = []
     for cs in comp_secs:
