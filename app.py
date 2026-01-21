@@ -180,12 +180,12 @@ section.main > div.block-container{
 .hero-wrap:before{
   content:"";
   position:absolute;
-  top:-140px;
+  top:-180px;
   left:50%;
   transform: translateX(-50%);
-  width: 900px;
-  height: 460px;
-  background: radial-gradient(circle at center, hsl(163 60% 85% / 0.55), transparent 65%);
+  width: 1000px;
+  height: 520px;
+  background: radial-gradient(circle at center, hsl(163 70% 82% / 0.65), transparent 62%);
   z-index: -1;
 }
 .hero-icon{
@@ -202,7 +202,7 @@ section.main > div.block-container{
   color: white;
 }
 .hero-h1{
-  font-size: 52px;
+  font-size: 60px;
   line-height: 1.06;
   margin: 0;
   color: hsl(var(--foreground));
@@ -2425,9 +2425,8 @@ def build_content_quality_table_from_seo(
 
     cols = [
         "Page","Word Count","Last Updated / Modified","Topic Cannibalization","Keyword Stuffing",
-        "Brief Summary Present","FAQs Present","References Section Present",
-        "Source Links Count","Credible Sources Count","Data Points Count (numbers/stats)",
-        "Data-Backed Claims","Unsupported Strong Claims","Latest Information Score",
+        "Brief Summary","FAQs","References Section",
+        "Source Links Count","Data-Backed Claims","Latest Information Score",
         "Outdated / Misleading Info","Styling / Layout",
     ]
 
@@ -2465,10 +2464,7 @@ def build_content_quality_table_from_seo(
         faqs = "Yes" if (fr and page_has_real_faq(fr, nodes)) else "No"
         refs = _references_section_present(nodes, html)
         src_links = _count_source_links(html)
-        credible_cnt = _credible_sources_count(html, page_url)
-        data_points = _data_points_count(text)
         data_backed = _data_backed_claims_count(text)
-        unsupported = _unsupported_strong_claims_count(text)
         latest_score = _latest_information_label(lm, text)
         outdated = _outdated_misleading_cell(lm, text)
         styling = "OK"
@@ -2479,14 +2475,11 @@ def build_content_quality_table_from_seo(
             "Last Updated / Modified": lm,
             "Topic Cannibalization": topic_cann,
             "Keyword Stuffing": kw_stuff,
-            "Brief Summary Present": brief,
-            "FAQs Present": faqs,
-            "References Section Present": refs,
+            "Brief Summary": brief,
+            "FAQs": faqs,
+            "References Section": refs,
             "Source Links Count": str(src_links),
-            "Credible Sources Count": str(credible_cnt),
-            "Data Points Count (numbers/stats)": str(data_points),
             "Data-Backed Claims": str(data_backed),
-            "Unsupported Strong Claims": str(unsupported),
             "Latest Information Score": latest_score,
             "Outdated / Misleading Info": outdated,
             "Styling / Layout": styling,
