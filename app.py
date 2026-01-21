@@ -1,4 +1,5 @@
 import base64
+import html as html_lib
 import streamlit as st
 import requests
 import re
@@ -143,6 +144,24 @@ st.markdown(
         background: rgba(0,0,0,0.04);
         padding: 2px 6px;
         border-radius: 8px;
+      }}
+      .details-link summary {{
+        cursor: pointer;
+        color: {BAYUT_GREEN};
+        text-decoration: underline;
+        font-weight: 900;
+        list-style: none;
+      }}
+      .details-link summary::-webkit-details-marker {{
+        display: none;
+      }}
+      .details-box {{
+        margin-top: 6px;
+        padding: 8px 10px;
+        background: #F9FAFB;
+        border: 1px solid #E5E7EB;
+        border-radius: 10px;
+        color: {TEXT_DARK};
       }}
       .ai-summary {{
         background: white;
@@ -673,11 +692,17 @@ def strip_label(h: str) -> str:
 def format_gap_list(items: List[str], limit: int = 6) -> str:
     cleaned = []
     seen = set()
+    skip = {
+        "other", "other topics", "other faq topics", "faq topics", "other faq topic",
+        "other faq", "general", "misc", "miscellaneous"
+    }
     for item in items or []:
         it = clean(item)
         if not it:
             continue
         k = norm_header(it)
+        if k in skip:
+            continue
         if k in seen:
             continue
         seen.add(k)
@@ -964,31 +989,39 @@ def extract_questions_from_node(node: dict) -> List[str]:
         out.append(q)
     return out[:25]
 
-def faq_subject(q: str) -> str:
-    s = norm_header(normalize_question(q))
-    if any(k in s for k in ["how much", "cost", "price", "pricing", "fees", "budget"]):
-        return "Pricing / cost"
-    if any(k in s for k in ["where", "located", "location", "distance", "near", "how to get", "map"]):
-        return "Location / nearby"
-    if any(k in s for k in ["who is it for", "who should", "is it for", "suitable", "best for"]):
-        return "Who it suits"
-    if any(k in s for k in ["pros", "cons", "advantages", "disadvantages", "worth it"]):
-        return "Decision help (pros/cons)"
-    if any(k in s for k in ["safe", "safety", "secure"]):
-        return "Safety"
-    if any(k in s for k in ["school", "education", "kids", "family"]):
-        return "Family / education"
-    if any(k in s for k in ["transport", "metro", "bus", "commute", "traffic", "parking"]):
-        return "Transport / traffic / parking"
-    if any(k in s for k in ["restaurants", "cafes", "nightlife", "things to do", "attractions", "lifestyle"]):
-        return "Lifestyle / things to do"
-    return "Other FAQ topics"
+def faq_topic_from_question(q: str) -> str:
+    raw = normalize_question(q)
+    if not raw:
+        return ""
+    topic = re.sub(
+        r"^(what|where|when|why|how|who|which|can|is|are|do|does|did|should|could|would|will)\b",
+        "",
+        raw,
+        flags=re.I,
+    )
+    topic = re.sub(
+        r"^(is|are|do|does|did|can|should|could|would|will|has|have|had|there|it|this|that)\b",
+        "",
+        topic,
+        flags=re.I,
+    )
+    topic = re.sub(r"^\s*(the|a|an)\b", "", topic, flags=re.I).strip()
+    topic = re.sub(r"\?$", "", topic).strip()
+    if len(topic) < 4:
+        topic = raw.strip("?").strip()
+    if len(topic) > 140:
+        topic = topic[:140].rstrip()
+    if not topic:
+        return ""
+    return topic[:1].upper() + topic[1:]
 
-def faq_subjects_from_questions(questions: List[str], limit: int = 10) -> List[str]:
+def faq_topics_from_questions(questions: List[str], limit: int = 10) -> List[str]:
     out: List[str] = []
     seen = set()
     for q in questions:
-        subj = faq_subject(q)
+        subj = faq_topic_from_question(q)
+        if not subj:
+            continue
         k = norm_header(subj)
         if k in seen:
             continue
@@ -1010,6 +1043,12 @@ def missing_faqs_row(
 
     comp_qs = extract_faq_questions(comp_fr, comp_nodes)
     comp_qs = [q for q in comp_qs if q and len(q) > 5]
+    if not comp_qs:
+        return {
+            "Headers": "FAQs",
+            "Description": "FAQ section present, but topics could not be parsed for comparison.",
+            "Source": source_link(comp_url),
+        }
     bayut_has = page_has_real_faq(bayut_fr, bayut_nodes)
     bayut_qs = []
     if bayut_has:
@@ -1024,8 +1063,8 @@ def missing_faqs_row(
 
     bayut_set = {q_key(q) for q in bayut_qs if q}
 
-    if not bayut_qs:
-        topics = faq_subjects_from_questions(comp_qs, limit=8)
+    if not bayut_has:
+        topics = faq_topics_from_questions(comp_qs, limit=8)
         topic_list = format_gap_list(topics, limit=6)
         topic_text = f" Missing topics include: {topic_list}." if topic_list else ""
         return {
@@ -1033,12 +1072,21 @@ def missing_faqs_row(
             "Description": "FAQ section missing." + topic_text,
             "Source": source_link(comp_url),
         }
+    if bayut_has and not bayut_qs:
+        topics = faq_topics_from_questions(comp_qs, limit=8)
+        topic_list = format_gap_list(topics, limit=6)
+        topic_text = f" Competitor topics include: {topic_list}." if topic_list else ""
+        return {
+            "Headers": "FAQs",
+            "Description": "Bayut FAQ questions could not be parsed for comparison." + topic_text,
+            "Source": source_link(comp_url),
+        }
 
     missing_qs = [q for q in comp_qs if q_key(q) not in bayut_set]
     if not missing_qs:
         return None
 
-    topics = faq_subjects_from_questions(missing_qs, limit=8)
+    topics = faq_topics_from_questions(missing_qs, limit=8)
     topic_list = format_gap_list(topics, limit=6)
     topic_text = f" Missing FAQ topics: {topic_list}." if topic_list else " Missing FAQ topics found in competitor section."
     return {
@@ -1731,6 +1779,139 @@ def enrich_seo_df_with_rank_and_ai(seo_df: pd.DataFrame, manual_query: str = "")
 
 
 # =====================================================
+# AI VISIBILITY (AIO) TABLE
+# =====================================================
+AI_OVERVIEW_KEYS = {"ai_overview", "ai_overviews", "ai overview", "ai overviews"}
+URL_RE = re.compile(r"https?://[^\s\"'>\)]+")
+
+def _find_ai_overview_block(data):
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if any(key in k.lower() for key in AI_OVERVIEW_KEYS):
+                return v
+        for v in data.values():
+            found = _find_ai_overview_block(v)
+            if found is not None:
+                return found
+    elif isinstance(data, list):
+        for v in data:
+            found = _find_ai_overview_block(v)
+            if found is not None:
+                return found
+    return None
+
+def _collect_urls(obj) -> List[str]:
+    urls: List[str] = []
+    if isinstance(obj, str):
+        urls.extend(URL_RE.findall(obj))
+    elif isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(v, str) and k.lower() in {"link", "source", "url"}:
+                urls.extend(URL_RE.findall(v) or [v])
+            else:
+                urls.extend(_collect_urls(v))
+    elif isinstance(obj, list):
+        for v in obj:
+            urls.extend(_collect_urls(v))
+    return urls
+
+def _serp_features_present(data: dict) -> List[str]:
+    if not isinstance(data, dict):
+        return []
+    features = []
+    feature_map = {
+        "ai_overview": "AI Overview",
+        "answer_box": "Answer box",
+        "featured_snippet": "Featured snippet",
+        "knowledge_graph": "Knowledge panel",
+        "related_questions": "People also ask",
+        "local_results": "Local pack",
+        "top_stories": "Top stories",
+        "news_results": "News results",
+        "images_results": "Image pack",
+        "image_results": "Image pack",
+        "video_results": "Video results",
+        "shopping_results": "Shopping results",
+        "recipes_results": "Recipes",
+    }
+    for k, label in feature_map.items():
+        if data.get(k):
+            features.append(label)
+    if _find_ai_overview_block(data) is not None and "AI Overview" not in features:
+        features.append("AI Overview")
+    return features
+
+def build_ai_visibility_table(
+    query: str,
+    target_url: str,
+    competitors: List[str],
+    device: str = "mobile"
+) -> pd.DataFrame:
+    cols = [
+        "Target URL Cited in AIO",
+        "Cited Domains",
+        "# AIO Citations",
+        "Top Competitor Domains",
+        "SERP Features Present",
+    ]
+
+    if not query or not SERPAPI_API_KEY:
+        return pd.DataFrame([{c: "Not available" for c in cols}], columns=cols)
+
+    data = serpapi_serp_cached(query, device=device)
+    if not data or (isinstance(data, dict) and data.get("_error")):
+        return pd.DataFrame([{c: "Not available" for c in cols}], columns=cols)
+
+    ai_block = _find_ai_overview_block(data)
+    cited_urls = _collect_urls(ai_block) if ai_block is not None else []
+    cited_urls = list(dict.fromkeys([u for u in cited_urls if u.startswith("http")]))
+    cited_domains = []
+    for u in cited_urls:
+        d = domain_of(u)
+        if d and d not in cited_domains:
+            cited_domains.append(d)
+
+    target_dom = domain_of(target_url) if target_url and target_url != "Not applicable" else ""
+    if ai_block is None:
+        target_cited = "Not available"
+        cited_domains_txt = "Not available"
+        cited_count = "Not available"
+    else:
+        if not target_dom:
+            target_cited = "Not applicable"
+        else:
+            target_cited = "Yes" if target_dom in cited_domains else "No"
+        cited_domains_txt = format_gap_list(cited_domains, limit=6) if cited_domains else "None detected"
+        cited_count = str(len(cited_urls))
+
+    top_comp_domains = []
+    organic = data.get("organic_results") or []
+    for it in organic:
+        link = it.get("link") or ""
+        dom = domain_of(link)
+        if not dom:
+            continue
+        if target_dom and dom == target_dom:
+            continue
+        if dom not in top_comp_domains:
+            top_comp_domains.append(dom)
+        if len(top_comp_domains) >= 6:
+            break
+
+    serp_features = _serp_features_present(data)
+    serp_features_txt = format_gap_list(serp_features, limit=6) if serp_features else "None detected"
+
+    row = {
+        "Target URL Cited in AIO": target_cited,
+        "Cited Domains": cited_domains_txt or "Not available",
+        "# AIO Citations": cited_count,
+        "Top Competitor Domains": format_gap_list(top_comp_domains, limit=6) if top_comp_domains else "Not available",
+        "SERP Features Present": serp_features_txt,
+    }
+    return pd.DataFrame([row], columns=cols)
+
+
+# =====================================================
 # CONTENT QUALITY (UPDATED COLUMNS EXACTLY AS REQUESTED)
 # =====================================================
 @st.cache_data(show_spinner=False, ttl=86400)
@@ -1857,6 +2038,96 @@ def _outdated_label(last_modified: str, text: str) -> str:
     if y and y <= 2023:
         return "Possibly outdated"
     return "Unclear"
+
+def _split_sentences(text: str) -> List[str]:
+    if not text:
+        return []
+    parts = re.split(r"(?<=[.!?])\s+", text)
+    return [clean(p) for p in parts if clean(p)]
+
+def _extract_years(s: str) -> List[int]:
+    years = []
+    for y in re.findall(r"\b(19\d{2}|20\d{2})\b", s or ""):
+        try:
+            years.append(int(y))
+        except Exception:
+            continue
+    return years
+
+def _outdated_snippets(text: str, max_year: int = 2023, limit: int = 6) -> List[str]:
+    if not text:
+        return []
+    out = []
+    seen = set()
+    for s in _split_sentences(text):
+        yrs = _extract_years(s)
+        if not yrs:
+            continue
+        if any(y <= max_year for y in yrs):
+            key = norm_header(s)
+            if key and key not in seen:
+                seen.add(key)
+                out.append(s)
+        if len(out) >= limit:
+            break
+    return out
+
+STRONG_WORDS_RE = r"\b(best|worst|always|never|guarantee|guaranteed|unbeatable|the most|the best|huge|massive)\b"
+
+def _strong_claim_snippets(text: str, limit: int = 6) -> List[str]:
+    if not text:
+        return []
+    out = []
+    seen = set()
+    for s in _split_sentences(text):
+        if re.search(STRONG_WORDS_RE, s, flags=re.I) and not re.search(r"\d", s):
+            key = norm_header(s)
+            if key and key not in seen:
+                seen.add(key)
+                out.append(s)
+        if len(out) >= limit:
+            break
+    return out
+
+def _outdated_misleading_cell(last_modified: str, text: str) -> str:
+    lm = clean(last_modified or "")
+    lm_years = _extract_years(lm)
+    outdated_items = _outdated_snippets(text, max_year=2023, limit=6)
+    if lm_years and max(lm_years) <= 2023:
+        outdated_items.insert(0, f"Last modified date: {lm}")
+
+    wrong_items = _strong_claim_snippets(text, limit=6)
+
+    has_outdated = bool(outdated_items)
+    has_wrong = bool(wrong_items)
+
+    if not has_outdated and not has_wrong:
+        return "No obvious issues"
+
+    if has_outdated and has_wrong:
+        label = "Outdated + Wrong info"
+    elif has_outdated:
+        label = "Outdated info"
+    else:
+        label = "Wrong info"
+
+    def as_list(items: List[str]) -> str:
+        lis = "".join(f"<li>{html_lib.escape(i)}</li>" for i in items)
+        return f"<ul>{lis}</ul>" if lis else ""
+
+    details = []
+    if has_outdated:
+        details.append("<div><strong>Outdated signals</strong>" + as_list(outdated_items) + "</div>")
+    if has_wrong:
+        details.append("<div><strong>Potentially wrong or unsupported claims</strong>" + as_list(wrong_items) + "</div>")
+
+    detail_html = "".join(details)
+    return (
+        "<details class='details-link'>"
+        f"<summary><span class='link-like'>{html_lib.escape(label)}</span></summary>"
+        f"<div class='details-box'>{detail_html}</div>"
+        "</details>"
+    )
 
 @st.cache_data(show_spinner=False, ttl=1800)
 def serpapi_serp_cached(query: str, device: str) -> dict:
@@ -1986,11 +2257,10 @@ def _data_backed_claims_count(text: str) -> int:
 def _unsupported_strong_claims_count(text: str) -> int:
     if not text:
         return 0
-    strong_words = r"\b(best|worst|always|never|guarantee|guaranteed|unbeatable|the most|the best|huge|massive)\b"
     sentences = re.split(r"(?<=[.!?])\s+", text)
     cnt = 0
     for s in sentences:
-        if re.search(strong_words, s, flags=re.I):
+        if re.search(STRONG_WORDS_RE, s, flags=re.I):
             if not re.search(r"\d", s):
                 cnt += 1
     return cnt
@@ -2063,7 +2333,7 @@ def build_content_quality_table_from_seo(
         data_backed = _data_backed_claims_count(text)
         unsupported = _unsupported_strong_claims_count(text)
         latest_score = _latest_information_label(lm, text)
-        outdated = _outdated_label(lm, text)
+        outdated = _outdated_misleading_cell(lm, text)
         styling = _styling_layout_label(html, nodes, text)
 
         rows.append({
@@ -2204,6 +2474,8 @@ if "ai_update_df" not in st.session_state:
     st.session_state.ai_update_df = pd.DataFrame()
 if "cq_update_df" not in st.session_state:
     st.session_state.cq_update_df = pd.DataFrame()
+if "ai_vis_update_df" not in st.session_state:
+    st.session_state.ai_vis_update_df = pd.DataFrame()
 
 if "new_df" not in st.session_state:
     st.session_state.new_df = pd.DataFrame()
@@ -2215,6 +2487,8 @@ if "ai_new_df" not in st.session_state:
     st.session_state.ai_new_df = pd.DataFrame()
 if "cq_new_df" not in st.session_state:
     st.session_state.cq_new_df = pd.DataFrame()
+if "ai_vis_new_df" not in st.session_state:
+    st.session_state.ai_vis_new_df = pd.DataFrame()
 
 
 # =====================================================
@@ -2298,6 +2572,14 @@ if st.session_state.mode == "update":
             manual_query=manual_fkw_update.strip()
         )
 
+        query_for_ai = manual_fkw_update.strip() or get_first_h1(bayut_nodes)
+        st.session_state.ai_vis_update_df = build_ai_visibility_table(
+            query=query_for_ai,
+            target_url=bayut_url.strip(),
+            competitors=competitors,
+            device="mobile",
+        )
+
     if show_internal_fetch and st.session_state.update_fetch:
         st.sidebar.markdown("### Internal fetch log (Update Mode)")
         st.sidebar.write(f"Playwright enabled: {PLAYWRIGHT_OK}")
@@ -2310,17 +2592,23 @@ if st.session_state.mode == "update":
     else:
         render_table(st.session_state.update_df)
 
+    section_header_pill("Content Quality")
+    if st.session_state.cq_update_df is None or st.session_state.cq_update_df.empty:
+        st.info("Run analysis to see Content Quality signals.")
+    else:
+        render_table(st.session_state.cq_update_df, drop_internal_url=True)
+
     section_header_pill("SEO Analysis")
     if st.session_state.seo_update_df is None or st.session_state.seo_update_df.empty:
         st.info("Run analysis to see SEO comparison.")
     else:
         render_table(st.session_state.seo_update_df, drop_internal_url=True)
 
-    section_header_pill("Content Quality (Table 2)")
-    if st.session_state.cq_update_df is None or st.session_state.cq_update_df.empty:
-        st.info("Run analysis to see Content Quality signals.")
+    section_header_pill("AI Visibility")
+    if st.session_state.ai_vis_update_df is None or st.session_state.ai_vis_update_df.empty:
+        st.info("Run analysis to see AI visibility signals.")
     else:
-        render_table(st.session_state.cq_update_df, drop_internal_url=True)
+        render_table(st.session_state.ai_vis_update_df, drop_internal_url=True)
 
 
 # =====================================================
@@ -2389,6 +2677,14 @@ else:
             manual_query=manual_fkw_new.strip()
         )
 
+        query_for_ai = manual_fkw_new.strip() or new_title.strip()
+        st.session_state.ai_vis_new_df = build_ai_visibility_table(
+            query=query_for_ai,
+            target_url="Not applicable",
+            competitors=competitors,
+            device="mobile",
+        )
+
     if show_internal_fetch and st.session_state.new_fetch:
         st.sidebar.markdown("### Internal fetch log (New Post Mode)")
         st.sidebar.write(f"Playwright enabled: {PLAYWRIGHT_OK}")
@@ -2401,19 +2697,25 @@ else:
     else:
         render_table(st.session_state.new_df)
 
+    section_header_pill("Content Quality")
+    if st.session_state.cq_new_df is None or st.session_state.cq_new_df.empty:
+        st.info("Generate competitor coverage to see Content Quality signals.")
+    else:
+        render_table(st.session_state.cq_new_df, drop_internal_url=True)
+
     section_header_pill("SEO Analysis")
     if st.session_state.seo_new_df is None or st.session_state.seo_new_df.empty:
         st.info("Generate competitor coverage to see SEO comparison.")
     else:
         render_table(st.session_state.seo_new_df, drop_internal_url=True)
 
-    section_header_pill("Content Quality (Table 2)")
-    if st.session_state.cq_new_df is None or st.session_state.cq_new_df.empty:
-        st.info("Generate competitor coverage to see Content Quality signals.")
+    section_header_pill("AI Visibility")
+    if st.session_state.ai_vis_new_df is None or st.session_state.ai_vis_new_df.empty:
+        st.info("Generate competitor coverage to see AI visibility signals.")
     else:
-        render_table(st.session_state.cq_new_df, drop_internal_url=True)
+        render_table(st.session_state.ai_vis_new_df, drop_internal_url=True)
 
 if (st.session_state.seo_update_df is not None and not st.session_state.seo_update_df.empty) or \
    (st.session_state.seo_new_df is not None and not st.session_state.seo_new_df.empty):
     if not SERPAPI_API_KEY:
-        st.warning("Note: SERPAPI_API_KEY is optional now (used only for Topic Cannibalization).")
+        st.warning("Note: SERPAPI_API_KEY is optional now (used for Topic Cannibalization and AI Visibility).")
