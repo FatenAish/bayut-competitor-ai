@@ -484,7 +484,7 @@ def _select_content_root(soup):
     for tag in soup.find_all(["article", "main", "section", "div"]):
         if _is_noisy_container(tag):
             continue
-        p_text = " ".join([p.get_text(" ") for p in tag.find_all("p")])
+        p_text = " ".join([p.get_text(" ") for p in tag.find_all(["p", "li"])])
         p_len = len(clean(p_text))
         if p_len < 160:
             continue
@@ -560,12 +560,12 @@ def level_of(tag_name: str) -> int:
     except Exception:
         return 9
 
-def build_tree_from_html(html: str) -> List[dict]:
+def _build_tree_from_html(html: str, relaxed: bool = False) -> List[dict]:
     soup = BeautifulSoup(html, "html.parser")
     for t in soup.find_all(list(IGNORE_TAGS) + ["form"]):
         t.decompose()
 
-    root = _select_content_root(soup)
+    root = soup if relaxed else _select_content_root(soup)
     headings = root.find_all(["h1", "h2", "h3", "h4"])
 
     nodes: List[dict] = []
@@ -586,7 +586,7 @@ def build_tree_from_html(html: str) -> List[dict]:
         header = clean(h.get_text(" "))
         if not header or len(header) < 3:
             continue
-        if _heading_has_noisy_parent(h):
+        if not relaxed and _heading_has_noisy_parent(h):
             continue
         if is_noise_header(header):
             continue
@@ -614,12 +614,18 @@ def build_tree_from_html(html: str) -> List[dict]:
                     elif sib.name == "li":
                         li_texts.append(txt)
 
-        if _looks_like_widget_section(header, p_texts, li_texts):
+        if not relaxed and _looks_like_widget_section(header, p_texts, li_texts):
             continue
 
         node["content"] = clean(" ".join(content_parts))
 
     return nodes
+
+def build_tree_from_html(html: str) -> List[dict]:
+    nodes = _build_tree_from_html(html, relaxed=False)
+    if nodes:
+        return nodes
+    return _build_tree_from_html(html, relaxed=True)
 
 def build_tree_from_reader_text(text: str) -> List[dict]:
     lines = [l.rstrip() for l in (text or "").splitlines()]
@@ -714,14 +720,38 @@ def get_tree_from_fetchresult(fr: FetchResult) -> dict:
     txt = fr.text or ""
     maybe_html = ("<html" in txt.lower()) or ("<article" in txt.lower()) or ("<h1" in txt.lower()) or ("<h2" in txt.lower())
 
+    nodes: List[dict] = []
     if fr.html:
         nodes = build_tree_from_html(fr.html)
+        if not nodes:
+            nodes = build_tree_from_reader_text(txt)
+            if not nodes:
+                nodes = build_tree_from_plain_text_heuristic(txt)
     elif fr.source == "manual" and maybe_html:
         nodes = build_tree_from_html(txt)
+        if not nodes:
+            nodes = build_tree_from_reader_text(txt)
+            if not nodes:
+                nodes = build_tree_from_plain_text_heuristic(txt)
     else:
         nodes = build_tree_from_reader_text(txt)
         if not nodes:
             nodes = build_tree_from_plain_text_heuristic(txt)
+
+    if not nodes:
+        fallback_text = txt
+        if not fallback_text and fr.html:
+            try:
+                fallback_text = clean(BeautifulSoup(fr.html, "html.parser").get_text(" "))
+            except Exception:
+                fallback_text = ""
+        if fallback_text:
+            nodes = [{
+                "level": 2,
+                "header": "Main content",
+                "content": clean(fallback_text),
+                "children": [],
+            }]
 
     return {"ok": True, "source": fr.source, "nodes": nodes, "status": fr.status}
 
