@@ -1,4 +1,5 @@
 import base64
+import html as html_lib
 import streamlit as st
 import requests
 import re
@@ -144,6 +145,24 @@ st.markdown(
         padding: 2px 6px;
         border-radius: 8px;
       }}
+      .details-link summary {{
+        cursor: pointer;
+        color: {BAYUT_GREEN};
+        text-decoration: underline;
+        font-weight: 900;
+        list-style: none;
+      }}
+      .details-link summary::-webkit-details-marker {{
+        display: none;
+      }}
+      .details-box {{
+        margin-top: 6px;
+        padding: 8px 10px;
+        background: #F9FAFB;
+        border: 1px solid #E5E7EB;
+        border-radius: 10px;
+        color: {TEXT_DARK};
+      }}
       .ai-summary {{
         background: white;
         border: 1px solid #E5E7EB;
@@ -154,23 +173,6 @@ st.markdown(
       .muted {{
         color:#6B7280;
         font-size: 13px;
-      }}
-      details.outdated-details {{
-        border: 1px solid #E5E7EB;
-        border-radius: 10px;
-        padding: 6px 8px;
-        background: #F9FAFB;
-      }}
-      details.outdated-details[open] {{
-        background: #FFFFFF;
-      }}
-      details.outdated-details summary {{
-        cursor: pointer;
-        font-weight: 900;
-        color: {TEXT_DARK};
-      }}
-      details.outdated-details ul {{
-        margin: 6px 0 6px 18px;
       }}
     </style>
     """,
@@ -204,127 +206,6 @@ DEFAULT_HEADERS = {
 }
 
 IGNORE_TAGS = {"nav", "footer", "header", "aside", "script", "style", "noscript"}
-
-NON_CONTENT_CLASS_ID_PATTERNS = [
-    r"\b(nav|navbar|menu|breadcrumb|breadcrumbs|navigation)\b",
-    r"\b(footer|sidebar|aside)\b",
-    r"\b(share|social|follow|comment|comments)\b",
-    r"\b(related|recommended|popular|trending)\b",
-    r"\b(subscribe|newsletter)\b",
-    r"\b(sign[\s-]?up|register|log[\s-]?in|account|auth|password)\b",
-    r"\b(cookie|consent)\b",
-    r"\b(popup|modal|dialog|overlay)\b",
-    r"\b(ad|ads|advert|advertisement|sponsor|sponsored|promo|banner)\b",
-    r"\b(search|filter|sort|pagination|pager)\b",
-    r"\b(listing|listings|property-card|listing-card|product-card)\b",
-    r"\b(lead|contact|cta|call[\s-]?back|callback)\b",
-]
-
-CONTENT_ROOT_HINTS = [
-    "article", "post", "entry", "content", "blog", "page-content", "story",
-    "main-content", "post-content", "article-body", "post-body"
-]
-
-IMAGE_NOISE_PATTERNS = [
-    r"\b(logo|icon|sprite|avatar|placeholder|spacer|tracking|pixel)\b",
-    r"\b(ad|ads|advert|promo|sponsor|sponsored|banner)\b",
-]
-
-AUTH_UI_PATTERNS = [
-    r"\bdon't have an account\b",
-    r"\balready have an account\b",
-    r"\bcreate (an )?account\b",
-    r"\bsign[\s-]?up\b",
-    r"\blog[\s-]?in\b",
-    r"\blogin\b",
-    r"\bregister\b",
-    r"\bpassword\b",
-    r"\bconfirm password\b",
-    r"\bemail address\b",
-    r"\bname or email\b",
-    r"\bforgot password\b",
-    r"\bat least \d+ characters\b",
-    r"\bcontains a number\b",
-    r"\bcontains a symbol\b",
-]
-
-def _class_id_role_blob(tag) -> str:
-    try:
-        classes = " ".join(tag.get("class") or [])
-        idv = tag.get("id") or ""
-        role = tag.get("role") or ""
-        aria = tag.get("aria-label") or ""
-        return clean(f"{classes} {idv} {role} {aria}").lower()
-    except Exception:
-        return ""
-
-def _is_hidden_tag(tag) -> bool:
-    try:
-        style = (tag.get("style") or "").lower()
-        if "display:none" in style or "visibility:hidden" in style:
-            return True
-        if (tag.get("aria-hidden") or "").lower() == "true":
-            return True
-    except Exception:
-        pass
-    return False
-
-def _is_non_content_container(tag) -> bool:
-    try:
-        if tag.name in ("article", "main"):
-            return False
-        if _is_hidden_tag(tag):
-            return True
-        blob = _class_id_role_blob(tag)
-        if not blob:
-            return False
-        if "faq" in blob:
-            return False
-        if any(re.search(p, blob) for p in NON_CONTENT_CLASS_ID_PATTERNS):
-            if ("listing" in blob or "property" in blob) and len(clean(tag.get_text(" "))) > 260:
-                return False
-            return True
-    except Exception:
-        return False
-
-def prune_non_content(root):
-    if root is None:
-        return root
-    for t in root.find_all(list(IGNORE_TAGS) + ["form", "input", "textarea", "button", "select", "option", "label", "svg", "canvas"]):
-        t.decompose()
-    for t in list(root.find_all(True)):
-        if _is_non_content_container(t):
-            t.decompose()
-    return root
-
-def select_content_root(soup):
-    if soup is None:
-        return soup
-    article = soup.find("article")
-    if article:
-        return article
-    main = soup.find("main")
-    if main:
-        return main
-    candidates = []
-    for tag in soup.find_all(["section", "div"]):
-        blob = _class_id_role_blob(tag)
-        if any(h in blob for h in CONTENT_ROOT_HINTS):
-            tlen = len(clean(tag.get_text(" ")))
-            if tlen > 200:
-                candidates.append((tlen, tag))
-    if candidates:
-        return max(candidates, key=lambda x: x[0])[1]
-    body = soup.find("body")
-    return body or soup
-
-def content_root_from_html(html: str):
-    if not html:
-        return None
-    soup = BeautifulSoup(html, "html.parser")
-    root = select_content_root(soup)
-    prune_non_content(root)
-    return root
 
 
 def clean(text: str) -> str:
@@ -409,10 +290,11 @@ class FetchAgent:
         return True
 
     def _extract_article_text_from_html(self, html: str) -> str:
-        root = content_root_from_html(html)
-        if not root:
-            return ""
-        return self.clean(root.get_text(" "))
+        soup = BeautifulSoup(html, "html.parser")
+        for t in soup.find_all(list(self.ignore_tags)):
+            t.decompose()
+        article = soup.find("article") or soup
+        return self.clean(article.get_text(" "))
 
     def _fetch_playwright_html(self, url: str, timeout_ms: int = 25000) -> Tuple[bool, str]:
         if not PLAYWRIGHT_OK:
@@ -436,12 +318,9 @@ class FetchAgent:
             return FetchResult(False, None, None, "", "", "empty_url")
 
         # 1) direct HTML
-        best_html = ""
         code, html = self._http_get(url)
         if code == 200 and html:
             text = self._extract_article_text_from_html(html)
-            if text and not self.looks_blocked(text):
-                best_html = html
             if self._validate_text(text, min_len=500):
                 return FetchResult(True, "direct", code, html, text, None)
 
@@ -449,8 +328,6 @@ class FetchAgent:
         ok, html2 = self._fetch_playwright_html(url)
         if ok and html2:
             text2 = self._extract_article_text_from_html(html2)
-            if text2 and not self.looks_blocked(text2):
-                best_html = html2
             if self._validate_text(text2, min_len=500):
                 return FetchResult(True, "playwright", 200, html2, text2, None)
 
@@ -460,7 +337,7 @@ class FetchAgent:
         if code3 == 200 and txt3:
             text3 = self.clean(txt3)
             if self._validate_text(text3, min_len=500):
-                return FetchResult(True, "jina", code3, best_html, text3, None)
+                return FetchResult(True, "jina", code3, "", text3, None)
 
         # 4) Textise
         turl = self._textise_url(url)
@@ -469,7 +346,7 @@ class FetchAgent:
             soup = BeautifulSoup(html4, "html.parser")
             text4 = self.clean(soup.get_text(" "))
             if self._validate_text(text4, min_len=350):
-                return FetchResult(True, "textise", code4, best_html, text4, None)
+                return FetchResult(True, "textise", code4, "", text4, None)
 
         return FetchResult(False, None, code or None, "", "", "blocked_or_no_content")
 
@@ -529,8 +406,6 @@ NOISE_PATTERNS = [
     r"\bproperties for (rent|sale)\b", r"\bavailable (rental|properties)\b", r"\bget in touch\b",
     r"\bcontact (us|agent)\b", r"\bcall (us|now)\b", r"\bwhatsapp\b", r"\benquire\b",
     r"\binquire\b", r"\bbook a viewing\b",
-    r"\brequest (a|an) call\b", r"\bbook (a|an) call\b", r"\bschedule (a|an) call\b",
-    r"\brequest a callback\b", r"\bcall back\b", r"\btalk to (an|our) expert\b",
     r"\bshare\b", r"\bshare this\b", r"\bfollow us\b", r"\blike\b", r"\bsubscribe\b",
     r"\bnewsletter\b", r"\bsign up\b", r"\blogin\b", r"\bregister\b",
     r"\brelated (posts|articles)\b", r"\byou may also like\b", r"\brecommended\b",
@@ -540,20 +415,6 @@ NOISE_PATTERNS = [
     r"\bnext\b", r"\bprevious\b", r"\bcomments\b",
     r"\bplease stand by\b", r"\bloading\b", r"\bjust a moment\b",
 ]
-
-def is_noise_text(text: str) -> bool:
-    s = clean(text)
-    if not s:
-        return True
-    low = s.lower()
-    auth_hits = sum(1 for p in AUTH_UI_PATTERNS if re.search(p, low))
-    if auth_hits >= 2:
-        return True
-    if auth_hits >= 1 and len(s) <= 220:
-        return True
-    if len(s) <= 140 and any(re.search(p, low) for p in NOISE_PATTERNS):
-        return True
-    return False
 
 GENERIC_SECTION_HEADERS = {"introduction", "overview"}
 
@@ -579,6 +440,8 @@ def is_noise_header(h: str) -> bool:
     s = clean(h)
     if not s:
         return True
+    if header_is_faq(s):
+        return False
     hn = norm_header(s)
     if hn in GENERIC_SECTION_HEADERS:
         return True
@@ -600,9 +463,11 @@ def level_of(tag_name: str) -> int:
         return 9
 
 def build_tree_from_html(html: str) -> List[dict]:
-    root = content_root_from_html(html)
-    if not root:
-        return []
+    soup = BeautifulSoup(html, "html.parser")
+    for t in soup.find_all(list(IGNORE_TAGS)):
+        t.decompose()
+
+    root = soup.find("article") or soup
     headings = root.find_all(["h1", "h2", "h3", "h4"])
 
     nodes: List[dict] = []
@@ -619,7 +484,7 @@ def build_tree_from_html(html: str) -> List[dict]:
             nodes.append(node)
         stack.append(node)
 
-    for idx, h in enumerate(headings):
+    for h in headings:
         header = clean(h.get_text(" "))
         if not header or len(header) < 3:
             continue
@@ -632,16 +497,15 @@ def build_tree_from_html(html: str) -> List[dict]:
         node = {"level": lvl, "header": header, "content": "", "children": []}
         add_node(node)
 
-        next_h = headings[idx + 1] if idx + 1 < len(headings) else None
         content_parts = []
-        for sib in h.next_elements:
-            if sib == next_h:
-                break
-            if hasattr(sib, "parents") and root not in sib.parents and sib is not root:
+        for sib in h.find_all_next():
+            if sib == h:
+                continue
+            if getattr(sib, "name", None) in ["h1", "h2", "h3", "h4"]:
                 break
             if getattr(sib, "name", None) in ["p", "li"]:
                 txt = clean(sib.get_text(" "))
-                if txt and not is_noise_text(txt):
+                if txt:
                     content_parts.append(txt)
 
         node["content"] = clean(" ".join(content_parts))
@@ -677,8 +541,6 @@ def build_tree_from_reader_text(text: str) -> List[dict]:
         s = line.strip()
         if not s:
             continue
-        if is_noise_text(s):
-            continue
 
         ml = md_level(s)
         if ml:
@@ -705,7 +567,7 @@ def build_tree_from_reader_text(text: str) -> List[dict]:
 def build_tree_from_plain_text_heuristic(text: str) -> List[dict]:
     raw = (text or "").replace("\r", "")
     lines = [clean(l) for l in raw.split("\n")]
-    lines = [l for l in lines if l and not is_noise_text(l)]
+    lines = [l for l in lines if l]
 
     def looks_like_heading(line: str) -> bool:
         if len(line) < 5 or len(line) > 80:
@@ -743,12 +605,11 @@ def get_tree_from_fetchresult(fr: FetchResult) -> dict:
     txt = fr.text or ""
     maybe_html = ("<html" in txt.lower()) or ("<article" in txt.lower()) or ("<h1" in txt.lower()) or ("<h2" in txt.lower())
 
-    nodes: List[dict] = []
     if fr.html:
         nodes = build_tree_from_html(fr.html)
-    if not nodes and fr.source == "manual" and maybe_html:
+    elif fr.source == "manual" and maybe_html:
         nodes = build_tree_from_html(txt)
-    if not nodes:
+    else:
         nodes = build_tree_from_reader_text(txt)
         if not nodes:
             nodes = build_tree_from_plain_text_heuristic(txt)
@@ -828,6 +689,30 @@ def flatten(nodes: List[dict]) -> List[dict]:
 def strip_label(h: str) -> str:
     return clean(re.sub(r"\s*:\s*$", "", (h or "").strip()))
 
+def format_gap_list(items: List[str], limit: int = 6) -> str:
+    cleaned = []
+    seen = set()
+    skip = {
+        "other", "other topics", "other faq topics", "faq topics", "other faq topic",
+        "other faq", "general", "misc", "miscellaneous"
+    }
+    for item in items or []:
+        it = clean(item)
+        if not it:
+            continue
+        k = norm_header(it)
+        if k in skip:
+            continue
+        if k in seen:
+            continue
+        seen.add(k)
+        cleaned.append(it)
+    if not cleaned:
+        return ""
+    if limit <= 0 or len(cleaned) <= limit:
+        return ", ".join(cleaned)
+    return ", ".join(cleaned[:limit]) + f", and {len(cleaned) - limit} more"
+
 def headings_blob(nodes: List[dict]) -> str:
     hs = []
     for x in flatten(nodes):
@@ -856,18 +741,19 @@ FAQ_TITLES = {
     "faqs",
     "frequently asked questions",
     "frequently asked question",
-    "q&a",
-    "q and a",
-    "questions & answers",
-    "questions and answers",
-    "common questions",
 }
-
-FAQ_CONTAINER_HINTS = ["faq", "qna", "q&a", "questions-answers", "questions"]
 
 def header_is_faq(header: str) -> bool:
     nh = norm_header(header)
-    return nh in FAQ_TITLES
+    if not nh:
+        return False
+    if nh in FAQ_TITLES:
+        return True
+    if "faq" in nh:
+        return True
+    if "frequently asked" in nh:
+        return True
+    return False
 
 def _looks_like_question(s: str) -> bool:
     s = clean(s)
@@ -887,70 +773,6 @@ def normalize_question(q: str) -> str:
     q = re.sub(r"^\s*\d+[\.\)]\s*", "", q)
     q = re.sub(r"^\s*[-•]\s*", "", q)
     return q.strip()
-
-def is_noise_question(q: str) -> bool:
-    q = clean(q or "")
-    if not q:
-        return True
-    if len(q) > 180:
-        return True
-    if is_noise_text(q):
-        return True
-    return False
-
-def _dedupe_questions(qs: List[str]) -> List[str]:
-    seen = set()
-    out = []
-    for q in qs:
-        qn = normalize_question(q)
-        k = norm_header(qn)
-        if not k or k in seen:
-            continue
-        seen.add(k)
-        out.append(qn)
-    return out
-
-def extract_faq_questions_from_html(html: str) -> List[str]:
-    if not html:
-        return []
-    root = content_root_from_html(html)
-    if not root:
-        return []
-
-    faq_blocks = []
-    for tag in root.find_all(True):
-        blob = _class_id_role_blob(tag)
-        if any(h in blob for h in FAQ_CONTAINER_HINTS):
-            faq_blocks.append(tag)
-    if not faq_blocks:
-        for h in root.find_all(["h2", "h3", "h4"]):
-            if header_is_faq(h.get_text(" ")):
-                faq_blocks.append(h.parent)
-
-    qs: List[str] = []
-
-    def add_from_text_block(txt: str):
-        txt = clean(txt or "")
-        if not txt:
-            return
-        chunks = re.split(r"[\n\r]+|(?<=[\.\?\!])\s+", txt)
-        for ch in chunks[:80]:
-            ch = clean(ch)
-            if not ch or len(ch) > 160:
-                continue
-            if _looks_like_question(ch):
-                qs.append(normalize_question(ch))
-
-    for blk in faq_blocks:
-        for tag in blk.find_all(["summary", "dt", "button", "h3", "h4"]):
-            txt = clean(tag.get_text(" "))
-            if _looks_like_question(txt):
-                qs.append(normalize_question(txt))
-        for tag in blk.find_all(["p", "li"]):
-            add_from_text_block(tag.get_text(" "))
-
-    qs = [q for q in qs if q and not is_noise_question(q)]
-    return _dedupe_questions(qs)
 
 def _has_faq_schema(html: str) -> bool:
     if not html:
@@ -989,10 +811,105 @@ def _has_faq_schema(html: str) -> bool:
         return False
     return False
 
+def _faq_questions_from_schema(html: str) -> List[str]:
+    if not html:
+        return []
+    qs: List[str] = []
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        scripts = soup.find_all("script", attrs={"type": re.compile(r"ld\+json", re.I)})
+        for s in scripts:
+            raw = (s.string or s.get_text(" ") or "").strip()
+            if not raw:
+                continue
+            try:
+                j = json.loads(raw)
+            except Exception:
+                continue
+
+            def add_q(q: str):
+                qn = normalize_question(q)
+                if not qn or len(qn) < 6 or len(qn) > 180:
+                    return
+                qs.append(qn)
+
+            def walk(x):
+                if isinstance(x, dict):
+                    t = x.get("@type") or x.get("type")
+                    t_list = []
+                    if isinstance(t, list):
+                        t_list = [str(z).lower() for z in t]
+                    elif isinstance(t, str):
+                        t_list = [t.lower()]
+
+                    if any("question" == z or z.endswith("question") for z in t_list):
+                        name = x.get("name") or x.get("text") or ""
+                        if name:
+                            add_q(name)
+
+                    for v in x.values():
+                        walk(v)
+                elif isinstance(x, list):
+                    for v in x:
+                        walk(v)
+
+            walk(j)
+    except Exception:
+        return []
+
+    seen = set()
+    out = []
+    for q in qs:
+        k = norm_header(q)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        out.append(q)
+    return out
+
+def _faq_questions_from_html(html: str) -> List[str]:
+    if not html:
+        return []
+    soup = BeautifulSoup(html, "html.parser")
+    for t in soup.find_all(list(IGNORE_TAGS)):
+        t.decompose()
+
+    qs: List[str] = []
+    qs.extend(_faq_questions_from_schema(html))
+
+    candidates = []
+    for tag in soup.find_all(True):
+        id_attr = (tag.get("id") or "").lower()
+        cls_attr = " ".join(tag.get("class", []) or []).lower()
+        if re.search(r"\bfaq\b|\bfaqs\b|\baccordion\b|\bquestions\b", id_attr + " " + cls_attr):
+            candidates.append(tag)
+
+    for h in soup.find_all(["h1", "h2", "h3", "h4"]):
+        if header_is_faq(h.get_text(" ")):
+            candidates.append(h.parent or h)
+
+    for c in candidates[:10]:
+        for el in c.find_all(["summary", "button", "h3", "h4", "h5", "strong", "p", "li", "dt"]):
+            txt = clean(el.get_text(" "))
+            if not txt or len(txt) < 6 or len(txt) > 180:
+                continue
+            if _looks_like_question(txt):
+                qs.append(normalize_question(txt))
+
+    seen = set()
+    out = []
+    for q in qs:
+        k = norm_header(q)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        out.append(q)
+    return out
+
 def _faq_heading_nodes(nodes: List[dict]) -> List[dict]:
     out = []
     for x in flatten(nodes):
-        if x.get("level") in (2, 3) and header_is_faq(x.get("header", "")):
+        if x.get("level") in (2, 3, 4) and header_is_faq(x.get("header", "")):
             out.append(x)
     return out
 
@@ -1008,8 +925,7 @@ def page_has_real_faq(fr: FetchResult, nodes: List[dict]) -> bool:
     if fr and fr.html:
         if _has_faq_schema(fr.html):
             return True
-        html_qs = extract_faq_questions_from_html(fr.html)
-        if len(html_qs) >= 3:
+        if len(_faq_questions_from_html(fr.html)) >= 2:
             return True
 
     faq_nodes = _faq_heading_nodes(nodes)
@@ -1017,11 +933,31 @@ def page_has_real_faq(fr: FetchResult, nodes: List[dict]) -> bool:
         return False
 
     for fn in faq_nodes:
-        if len(_question_heading_children(fn)) >= 3:
+        if len(extract_questions_from_node(fn)) >= 2:
             return True
-        if len(extract_questions_from_node(fn)) >= 3:
+        txt = clean(fn.get("content", ""))
+        if txt and txt.count("?") >= 2:
             return True
-    return False
+
+    # FAQ header present is a strong signal even if questions were not parsed
+    return True
+
+def extract_faq_questions(fr: FetchResult, nodes: List[dict]) -> List[str]:
+    qs: List[str] = []
+    if fr and fr.html:
+        qs.extend(_faq_questions_from_html(fr.html))
+    for fn in _faq_heading_nodes(nodes):
+        qs.extend(extract_questions_from_node(fn))
+
+    seen = set()
+    out = []
+    for q in qs:
+        k = norm_header(q)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        out.append(q)
+    return out
 
 def extract_questions_from_node(node: dict) -> List[str]:
     qs: List[str] = []
@@ -1046,50 +982,46 @@ def extract_questions_from_node(node: dict) -> List[str]:
     seen = set()
     out = []
     for q in qs:
-        if is_noise_question(q):
-            continue
-        qn = normalize_question(q)
-        k = norm_header(qn)
+        k = norm_header(q)
         if not k or k in seen:
             continue
         seen.add(k)
-        out.append(qn)
+        out.append(q)
     return out[:25]
 
-def collect_faq_questions(fr: Optional[FetchResult], nodes: List[dict]) -> List[str]:
-    qs: List[str] = []
-    if fr and fr.html:
-        qs.extend(extract_faq_questions_from_html(fr.html))
-    for fn in _faq_heading_nodes(nodes):
-        qs.extend(extract_questions_from_node(fn))
-    qs = [q for q in qs if q and not is_noise_question(q)]
-    return _dedupe_questions(qs)
+def faq_topic_from_question(q: str) -> str:
+    raw = normalize_question(q)
+    if not raw:
+        return ""
+    topic = re.sub(
+        r"^(what|where|when|why|how|who|which|can|is|are|do|does|did|should|could|would|will)\b",
+        "",
+        raw,
+        flags=re.I,
+    )
+    topic = re.sub(
+        r"^(is|are|do|does|did|can|should|could|would|will|has|have|had|there|it|this|that)\b",
+        "",
+        topic,
+        flags=re.I,
+    )
+    topic = re.sub(r"^\s*(the|a|an)\b", "", topic, flags=re.I).strip()
+    topic = re.sub(r"\?$", "", topic).strip()
+    if len(topic) < 4:
+        topic = raw.strip("?").strip()
+    if len(topic) > 140:
+        topic = topic[:140].rstrip()
+    if not topic:
+        return ""
+    return topic[:1].upper() + topic[1:]
 
-def faq_subject(q: str) -> str:
-    s = norm_header(normalize_question(q))
-    if any(k in s for k in ["how much", "cost", "price", "pricing", "fees", "budget"]):
-        return "Pricing / cost"
-    if any(k in s for k in ["where", "located", "location", "distance", "near", "how to get", "map"]):
-        return "Location / nearby"
-    if any(k in s for k in ["who is it for", "who should", "is it for", "suitable", "best for"]):
-        return "Who it suits"
-    if any(k in s for k in ["pros", "cons", "advantages", "disadvantages", "worth it"]):
-        return "Decision help (pros/cons)"
-    if any(k in s for k in ["safe", "safety", "secure"]):
-        return "Safety"
-    if any(k in s for k in ["school", "education", "kids", "family"]):
-        return "Family / education"
-    if any(k in s for k in ["transport", "metro", "bus", "commute", "traffic", "parking"]):
-        return "Transport / traffic / parking"
-    if any(k in s for k in ["restaurants", "cafes", "nightlife", "things to do", "attractions", "lifestyle"]):
-        return "Lifestyle / things to do"
-    return "Other FAQ topics"
-
-def faq_subjects_from_questions(questions: List[str], limit: int = 10) -> List[str]:
+def faq_topics_from_questions(questions: List[str], limit: int = 10) -> List[str]:
     out: List[str] = []
     seen = set()
     for q in questions:
-        subj = faq_subject(q)
+        subj = faq_topic_from_question(q)
+        if not subj:
+            continue
         k = norm_header(subj)
         if k in seen:
             continue
@@ -1109,12 +1041,18 @@ def missing_faqs_row(
     if not page_has_real_faq(comp_fr, comp_nodes):
         return None
 
-    comp_qs = collect_faq_questions(comp_fr, comp_nodes)
+    comp_qs = extract_faq_questions(comp_fr, comp_nodes)
     comp_qs = [q for q in comp_qs if q and len(q) > 5]
-    if len(comp_qs) < 3:
-        return None
-
-    bayut_qs = collect_faq_questions(bayut_fr, bayut_nodes)
+    if not comp_qs:
+        return {
+            "Headers": "FAQs",
+            "Description": "FAQ section present, but topics could not be parsed for comparison.",
+            "Source": source_link(comp_url),
+        }
+    bayut_has = page_has_real_faq(bayut_fr, bayut_nodes)
+    bayut_qs = []
+    if bayut_has:
+        bayut_qs = extract_faq_questions(bayut_fr, bayut_nodes)
     bayut_qs = [q for q in bayut_qs if q and len(q) > 5]
 
     def q_key(q: str) -> str:
@@ -1125,11 +1063,22 @@ def missing_faqs_row(
 
     bayut_set = {q_key(q) for q in bayut_qs if q}
 
-    if not bayut_qs:
-        topics = faq_subjects_from_questions(comp_qs, limit=10)
+    if not bayut_has:
+        topics = faq_topics_from_questions(comp_qs, limit=8)
+        topic_list = format_gap_list(topics, limit=6)
+        topic_text = f" Missing topics include: {topic_list}." if topic_list else ""
         return {
             "Headers": "FAQs",
-            "Description": "Competitor has a real FAQ section covering topics such as: " + ", ".join(topics) + ".",
+            "Description": "FAQ section missing." + topic_text,
+            "Source": source_link(comp_url),
+        }
+    if bayut_has and not bayut_qs:
+        topics = faq_topics_from_questions(comp_qs, limit=8)
+        topic_list = format_gap_list(topics, limit=6)
+        topic_text = f" Competitor topics include: {topic_list}." if topic_list else ""
+        return {
+            "Headers": "FAQs",
+            "Description": "Bayut FAQ questions could not be parsed for comparison." + topic_text,
             "Source": source_link(comp_url),
         }
 
@@ -1137,10 +1086,12 @@ def missing_faqs_row(
     if not missing_qs:
         return None
 
-    topics = faq_subjects_from_questions(missing_qs, limit=10)
+    topics = faq_topics_from_questions(missing_qs, limit=8)
+    topic_list = format_gap_list(topics, limit=6)
+    topic_text = f" Missing FAQ topics: {topic_list}." if topic_list else " Missing FAQ topics found in competitor section."
     return {
         "Headers": "FAQs",
-        "Description": "Missing FAQ topics: " + ", ".join(topics) + ".",
+        "Description": topic_text.strip(),
         "Source": source_link(comp_url),
     }
 
@@ -1240,17 +1191,6 @@ def theme_flags(text: str) -> set:
     return flags
 
 def summarize_missing_section_action(header: str, subheaders: Optional[List[str]], comp_content: str) -> str:
-    hn = norm_header(header)
-
-    if ("importance" in hn and "pros" in hn and "cons" in hn) or ("consider" in hn and "pros" in hn and "cons" in hn):
-        return "Competitor includes decision framing on how to weigh pros vs cons before concluding."
-
-    if "comparison" in hn or "compare" in hn or "vs" in hn or "versus" in hn:
-        if subheaders:
-            hint = ", ".join(subheaders[:3])
-            return f"Competitor includes a comparison section and breaks it into alternatives such as: {hint}."
-        return "Competitor includes a comparison section explaining alternatives and how they differ."
-
     themes = list(theme_flags(comp_content))
     human_map = {
         "transport": "commute & connectivity",
@@ -1262,10 +1202,19 @@ def summarize_missing_section_action(header: str, subheaders: Optional[List[str]
         "decision_frame": "decision framing",
         "comparison": "comparison context",
     }
-    picks = [human_map.get(x, x) for x in themes][:3]
+    picks = [human_map.get(x, x) for x in themes]
+    parts = []
+    if subheaders:
+        sub_list = format_gap_list(subheaders, limit=6)
+        if sub_list:
+            parts.append(f"Missing subtopics: {sub_list}.")
     if picks:
-        return f"Competitor covers this as a dedicated section with practical details (e.g., {', '.join(picks)})."
-    return "Competitor covers this as a dedicated section with extra context and practical specifics."
+        theme_list = format_gap_list(picks, limit=4)
+        if theme_list:
+            parts.append(f"Missing coverage on: {theme_list}.")
+    if not parts:
+        parts.append("Missing this section.")
+    return " ".join(parts)
 
 def summarize_content_gap_action(header: str, comp_content: str, bayut_content: str) -> str:
     comp_flags = theme_flags(comp_content)
@@ -1282,10 +1231,11 @@ def summarize_content_gap_action(header: str, comp_content: str, bayut_content: 
         "decision_frame": "decision framing",
         "comparison": "comparison context",
     }
-    missing_human = [human_map.get(x, x) for x in missing][:3]
-    if missing_human:
-        return "Competitor goes deeper on: " + ", ".join(missing_human) + "."
-    return "Competitor provides more depth and practical specifics than Bayut under the same header."
+    missing_human = [human_map.get(x, x) for x in missing]
+    missing_list = format_gap_list(missing_human, limit=4)
+    if missing_list:
+        return "Missing depth on: " + missing_list + "."
+    return "Missing depth and practical specifics in this section."
 
 
 # =====================================================
@@ -1297,10 +1247,69 @@ def update_mode_rows_header_first(
     comp_nodes: List[dict],
     comp_fr: FetchResult,
     comp_url: str,
-    max_missing_headers: int = 7,
-    max_missing_parts: int = 5
+    max_missing_headers: Optional[int] = None
 ) -> List[dict]:
-    rows: List[dict] = []
+    rows_map: Dict[str, dict] = {}
+    source = source_link(comp_url)
+
+    def add_row(header: str, parts: List[str]):
+        if not header or not parts:
+            return
+        key = norm_header(header) + "||" + norm_header(re.sub(r"<[^>]+>", "", source))
+        if key not in rows_map:
+            rows_map[key] = {"Headers": header, "DescriptionParts": [], "Source": source}
+        for p in parts:
+            p = clean(p)
+            if not p:
+                continue
+            if not p.endswith("."):
+                p = p + "."
+            if p not in rows_map[key]["DescriptionParts"]:
+                rows_map[key]["DescriptionParts"].append(p)
+
+    def children_map(h3_list: List[dict]) -> Dict[str, List[dict]]:
+        cmap: Dict[str, List[dict]] = {}
+        for h3 in h3_list:
+            parent = h3.get("parent_h2") or ""
+            pk = norm_header(parent)
+            if not pk:
+                continue
+            cmap.setdefault(pk, []).append(h3)
+        return cmap
+
+    def child_headers(cmap: Dict[str, List[dict]], parent_header: str) -> List[str]:
+        pk = norm_header(parent_header)
+        return [c.get("header", "") for c in cmap.get(pk, [])]
+
+    def combined_h2_content(h2_header: str, h2_list: List[dict], cmap: Dict[str, List[dict]]) -> str:
+        pk = norm_header(h2_header)
+        h2_content = ""
+        for h2 in h2_list:
+            if norm_header(h2.get("header", "")) == pk:
+                h2_content = h2.get("content", "")
+                break
+        child_content = " ".join(c.get("content", "") for c in cmap.get(pk, []))
+        return clean(" ".join([h2_content, child_content]))
+
+    def missing_children(comp_children: List[str], bayut_children: List[str]) -> List[str]:
+        missing = []
+        for ch in comp_children:
+            if not any(header_similarity(ch, bh) >= 0.73 for bh in bayut_children):
+                missing.append(ch)
+        return missing
+
+    def depth_gap_summary(comp_text: str, bayut_text: str) -> str:
+        c_txt = clean(comp_text or "")
+        b_txt = clean(bayut_text or "")
+        if len(c_txt) < 140:
+            return ""
+        if len(c_txt) < (1.30 * max(len(b_txt), 1)):
+            return ""
+        comp_flags = theme_flags(c_txt)
+        bayut_flags = theme_flags(b_txt)
+        if len(comp_flags - bayut_flags) < 1 and len(c_txt) < 650:
+            return ""
+        return summarize_content_gap_action("", c_txt, b_txt)
 
     bayut_secs = section_nodes(bayut_nodes, levels=(2, 3))
     comp_secs = section_nodes(comp_nodes, levels=(2, 3))
@@ -1310,104 +1319,56 @@ def update_mode_rows_header_first(
     comp_h2 = [s for s in comp_secs if s["level"] == 2]
     comp_h3 = [s for s in comp_secs if s["level"] == 3]
 
-    comp_h2_ranked = []
-    for h2 in comp_h2:
-        child_count = sum(
-            1 for h3 in comp_h3
-            if norm_header(h3.get("parent_h2") or "") == norm_header(h2["header"])
-        )
-        score = len(clean(h2.get("content", ""))) + (child_count * 120)
-        comp_h2_ranked.append((score, h2))
-    comp_h2_ranked.sort(key=lambda x: x[0], reverse=True)
+    bayut_children_map = children_map(bayut_h3)
+    comp_children_map = children_map(comp_h3)
 
-    missing_h2_norms = set()
+    for cs in comp_h2:
+        comp_header = cs.get("header", "")
+        comp_children = child_headers(comp_children_map, comp_header)
+        comp_text = combined_h2_content(comp_header, comp_h2, comp_children_map) or cs.get("content", "")
 
-    missing_rows = []
-    for _, cs in comp_h2_ranked:
-        m = find_best_bayut_match(cs["header"], bayut_h2, min_score=0.73)
+        m = find_best_bayut_match(comp_header, bayut_h2, min_score=0.73)
+        if not m:
+            desc = summarize_missing_section_action(comp_header, comp_children, comp_text)
+            add_row(comp_header, [desc])
+            continue
+
+        bayut_header = m["bayut_section"]["header"]
+        bayut_children = child_headers(bayut_children_map, bayut_header)
+        missing_sub = missing_children(comp_children, bayut_children)
+
+        parts = []
+        if missing_sub:
+            sub_list = format_gap_list(missing_sub, limit=6)
+            if sub_list:
+                parts.append(f"Missing subtopics: {sub_list}.")
+
+        bayut_text = combined_h2_content(bayut_header, bayut_h2, bayut_children_map)
+        depth_note = depth_gap_summary(comp_text, bayut_text)
+        if depth_note:
+            parts.append(depth_note)
+
+        if parts:
+            add_row(comp_header, parts)
+
+    comp_h2_norms = {norm_header(h.get("header", "")) for h in comp_h2}
+    for cs in comp_h3:
+        parent = cs.get("parent_h2") or ""
+        if parent and norm_header(parent) in comp_h2_norms:
+            continue
+        m = find_best_bayut_match(cs["header"], bayut_h3 + bayut_h2, min_score=0.73)
         if m:
             continue
+        desc = summarize_missing_section_action(cs["header"], None, cs.get("content", ""))
+        add_row(cs["header"], [desc])
 
-        missing_h2_norms.add(norm_header(cs["header"]))
+    rows = []
+    for r in rows_map.values():
+        desc = " ".join(r.get("DescriptionParts", [])).strip()
+        rows.append({"Headers": r.get("Headers", ""), "Description": desc, "Source": r.get("Source", "")})
 
-        children = []
-        for h3 in comp_h3:
-            if norm_header(h3.get("parent_h2") or "") == norm_header(cs["header"]):
-                children.append(h3["header"])
-
-        comp_text = (cs.get("content", "") or "")
-        desc = summarize_missing_section_action(cs["header"], children, comp_text)
-
-        if children:
-            hint = ", ".join(children[:3])
-            desc = desc + f" (Breakdown: {hint}.)"
-
-        missing_rows.append({
-            "Headers": cs["header"],
-            "Description": desc,
-            "Source": source_link(comp_url),
-        })
-
-        if len(missing_rows) >= max_missing_headers:
-            break
-
-    rows.extend(missing_rows)
-
-    if len(rows) < max_missing_headers:
-        for cs in comp_h3:
-            parent = cs.get("parent_h2") or ""
-            if parent and norm_header(parent) in missing_h2_norms:
-                continue
-
-            if parent:
-                parent_match = find_best_bayut_match(parent, bayut_h2, min_score=0.73)
-                if not parent_match:
-                    continue
-
-            m = find_best_bayut_match(cs["header"], bayut_h3, min_score=0.73)
-            if m:
-                continue
-
-            label = f"{parent} → {cs['header']}" if parent else cs["header"]
-            rows.append({
-                "Headers": label,
-                "Description": summarize_missing_section_action(cs["header"], None, cs.get("content", "")),
-                "Source": source_link(comp_url),
-            })
-
-            if len(rows) >= max_missing_headers:
-                break
-
-    missing_parts_rows = []
-    for cs in comp_secs:
-        m = find_best_bayut_match(cs["header"], bayut_secs, min_score=0.73)
-        if not m:
-            continue
-
-        bs = m["bayut_section"]
-        c_txt = clean(cs.get("content", ""))
-        b_txt = clean(bs.get("content", ""))
-
-        if len(c_txt) < 140:
-            continue
-        if len(c_txt) < (1.30 * max(len(b_txt), 1)):
-            continue
-
-        comp_flags = theme_flags(c_txt)
-        bayut_flags = theme_flags(b_txt)
-        if len(comp_flags - bayut_flags) < 1 and len(c_txt) < 650:
-            continue
-
-        missing_parts_rows.append({
-            "Headers": f"{bs['header']} (missing parts)",
-            "Description": summarize_content_gap_action(bs["header"], c_txt, b_txt),
-            "Source": source_link(comp_url),
-        })
-
-        if len(missing_parts_rows) >= max_missing_parts:
-            break
-
-    rows.extend(missing_parts_rows)
+    if max_missing_headers and len(rows) > max_missing_headers:
+        rows = rows[:max_missing_headers]
 
     faq_row = missing_faqs_row(bayut_nodes, bayut_fr, comp_nodes, comp_fr, comp_url)
     if faq_row:
@@ -1456,38 +1417,15 @@ def extract_head_seo(html: str) -> Tuple[str, str]:
     return (title or "Not available", desc or "Not available")
 
 
-def _is_meaningful_image(img) -> bool:
-    try:
-        if _is_hidden_tag(img):
-            return False
-        src = img.get("src") or img.get("data-src") or img.get("data-lazy-src") or ""
-        src = src.strip()
-        if not src or src.startswith("data:"):
-            return False
-        blob = _class_id_role_blob(img)
-        if any(re.search(p, blob) for p in IMAGE_NOISE_PATTERNS):
-            return False
-        w = img.get("width")
-        h = img.get("height")
-        try:
-            wi = int(w) if w else None
-            hi = int(h) if h else None
-            if wi and hi and min(wi, hi) <= 2:
-                return False
-        except Exception:
-            pass
-    except Exception:
-        return False
-    return True
-
 def extract_media_used(html: str) -> str:
     if not html:
         return "Not available"
-    root = content_root_from_html(html)
-    if not root:
-        return "Not available"
+    soup = BeautifulSoup(html, "html.parser")
+    for t in soup.find_all(list(IGNORE_TAGS)):
+        t.decompose()
+    root = soup.find("article") or soup
 
-    imgs = sum(1 for img in root.find_all("img") if _is_meaningful_image(img))
+    imgs = len(root.find_all("img"))
     videos = len(root.find_all("video"))
     tables = len(root.find_all("table"))
 
@@ -1625,20 +1563,34 @@ def _extract_canonical_and_robots(html: str) -> Tuple[str, str]:
 def _count_headers(html: str) -> str:
     if not html:
         return "H1:0 / H2:0 / H3:0 / Total:0"
-    root = content_root_from_html(html)
-    if not root:
-        return "H1:0 / H2:0 / H3:0 / Total:0"
-    h1 = len(root.find_all("h1"))
-    h2 = len(root.find_all("h2"))
-    h3 = len(root.find_all("h3"))
+    soup = BeautifulSoup(html, "html.parser")
+    for t in soup.find_all(list(IGNORE_TAGS)):
+        t.decompose()
+    h1 = len(soup.find_all("h1"))
+    h2 = len(soup.find_all("h2"))
+    h3 = len(soup.find_all("h3"))
     total = h1 + h2 + h3
     return f"H1:{h1} / H2:{h2} / H3:{h3} / Total:{total}"
 
 from urllib.parse import urlparse, urljoin
 
-def _count_internal_outbound_links(html: str, page_url: str, text: str = "") -> Tuple[int, int]:
-    if not html and not text:
+def _count_internal_outbound_links(html: str, page_url: str) -> Tuple[int, int]:
+    if not html:
         return (0, 0)
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # remove non-body areas globally
+    for t in soup.find_all(["nav","footer","header","aside","script","style","noscript","form"]):
+        t.decompose()
+
+    # main content container
+    root = soup.find("article") or soup.find("main") or soup
+    for bad in root.find_all(["nav","footer","header","aside"]):
+        bad.decompose()
+
+    # BODY ONLY: links inside typical body text blocks
+    body_blocks = root.find_all(["p","li","td","th","blockquote","figcaption"])
 
     internal = 0
     outbound = 0
@@ -1646,41 +1598,34 @@ def _count_internal_outbound_links(html: str, page_url: str, text: str = "") -> 
     base_dom = domain_of(page_url)
     base_root = ".".join(base_dom.split(".")[-2:]) if base_dom else ""
 
-    def count_url(full: str):
-        nonlocal internal, outbound
-        try:
-            p = urlparse(full)
-        except Exception:
-            return
-        dom = (p.netloc or "").lower().replace("www.", "")
-        if not dom:
-            internal += 1
-            return
-        if base_root and dom.endswith(base_root):
-            internal += 1
-        elif dom == base_dom:
-            internal += 1
-        else:
-            outbound += 1
+    for blk in body_blocks:
+        for a in blk.find_all("a", href=True):
+            href = (a.get("href") or "").strip()
+            if not href:
+                continue
 
-    if html:
-        root = content_root_from_html(html)
-        if root:
-            for a in root.find_all("a", href=True):
-                href = (a.get("href") or "").strip()
-                if not href:
-                    continue
-                hlow = href.lower()
-                if hlow.startswith("#") or hlow.startswith("mailto:") or hlow.startswith("tel:") or hlow.startswith("javascript:"):
-                    continue
-                full = urljoin(page_url, href)
-                count_url(full)
+            hlow = href.lower()
+            if hlow.startswith("#") or hlow.startswith("mailto:") or hlow.startswith("tel:") or hlow.startswith("javascript:"):
+                continue
 
-    if (internal + outbound) == 0 and text:
-        urls = re.findall(r"https?://[^\s\)\]]+", text)
-        urls += re.findall(r"\]\((https?://[^\s\)]+)\)", text)
-        for u in set(urls):
-            count_url(u)
+            full = urljoin(page_url, href)
+            try:
+                p = urlparse(full)
+            except Exception:
+                continue
+
+            dom = (p.netloc or "").lower().replace("www.", "")
+            if not dom:
+                internal += 1
+                continue
+
+            # treat subdomains as internal
+            if base_root and dom.endswith(base_root):
+                internal += 1
+            elif dom == base_dom:
+                internal += 1
+            else:
+                outbound += 1
 
     return (internal, outbound)
 
@@ -1724,7 +1669,7 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
     h_counts = _count_headers(fr.html or fr.text or "")
     fkw = pick_fkw_only(seo_title, get_first_h1(nodes), h_blob, fr.text or "", manual_fkw=manual_fkw)
     kw_usage = kw_usage_summary(seo_title, get_first_h1(nodes), h_blob, fr.text or "", fkw)
-    internal_links_count, outbound_links_count = _count_internal_outbound_links(fr.html or "", url or "", fr.text or "")
+    internal_links_count, outbound_links_count = _count_internal_outbound_links(fr.html or "", url or "")
     media = extract_media_used(fr.html or "")
     schema = _schema_present(fr.html or "")
 
@@ -1834,6 +1779,139 @@ def enrich_seo_df_with_rank_and_ai(seo_df: pd.DataFrame, manual_query: str = "")
 
 
 # =====================================================
+# AI VISIBILITY (AIO) TABLE
+# =====================================================
+AI_OVERVIEW_KEYS = {"ai_overview", "ai_overviews", "ai overview", "ai overviews"}
+URL_RE = re.compile(r"https?://[^\s\"'>\)]+")
+
+def _find_ai_overview_block(data):
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if any(key in k.lower() for key in AI_OVERVIEW_KEYS):
+                return v
+        for v in data.values():
+            found = _find_ai_overview_block(v)
+            if found is not None:
+                return found
+    elif isinstance(data, list):
+        for v in data:
+            found = _find_ai_overview_block(v)
+            if found is not None:
+                return found
+    return None
+
+def _collect_urls(obj) -> List[str]:
+    urls: List[str] = []
+    if isinstance(obj, str):
+        urls.extend(URL_RE.findall(obj))
+    elif isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(v, str) and k.lower() in {"link", "source", "url"}:
+                urls.extend(URL_RE.findall(v) or [v])
+            else:
+                urls.extend(_collect_urls(v))
+    elif isinstance(obj, list):
+        for v in obj:
+            urls.extend(_collect_urls(v))
+    return urls
+
+def _serp_features_present(data: dict) -> List[str]:
+    if not isinstance(data, dict):
+        return []
+    features = []
+    feature_map = {
+        "ai_overview": "AI Overview",
+        "answer_box": "Answer box",
+        "featured_snippet": "Featured snippet",
+        "knowledge_graph": "Knowledge panel",
+        "related_questions": "People also ask",
+        "local_results": "Local pack",
+        "top_stories": "Top stories",
+        "news_results": "News results",
+        "images_results": "Image pack",
+        "image_results": "Image pack",
+        "video_results": "Video results",
+        "shopping_results": "Shopping results",
+        "recipes_results": "Recipes",
+    }
+    for k, label in feature_map.items():
+        if data.get(k):
+            features.append(label)
+    if _find_ai_overview_block(data) is not None and "AI Overview" not in features:
+        features.append("AI Overview")
+    return features
+
+def build_ai_visibility_table(
+    query: str,
+    target_url: str,
+    competitors: List[str],
+    device: str = "mobile"
+) -> pd.DataFrame:
+    cols = [
+        "Target URL Cited in AIO",
+        "Cited Domains",
+        "# AIO Citations",
+        "Top Competitor Domains",
+        "SERP Features Present",
+    ]
+
+    if not query or not SERPAPI_API_KEY:
+        return pd.DataFrame([{c: "Not available" for c in cols}], columns=cols)
+
+    data = serpapi_serp_cached(query, device=device)
+    if not data or (isinstance(data, dict) and data.get("_error")):
+        return pd.DataFrame([{c: "Not available" for c in cols}], columns=cols)
+
+    ai_block = _find_ai_overview_block(data)
+    cited_urls = _collect_urls(ai_block) if ai_block is not None else []
+    cited_urls = list(dict.fromkeys([u for u in cited_urls if u.startswith("http")]))
+    cited_domains = []
+    for u in cited_urls:
+        d = domain_of(u)
+        if d and d not in cited_domains:
+            cited_domains.append(d)
+
+    target_dom = domain_of(target_url) if target_url and target_url != "Not applicable" else ""
+    if ai_block is None:
+        target_cited = "Not available"
+        cited_domains_txt = "Not available"
+        cited_count = "Not available"
+    else:
+        if not target_dom:
+            target_cited = "Not applicable"
+        else:
+            target_cited = "Yes" if target_dom in cited_domains else "No"
+        cited_domains_txt = format_gap_list(cited_domains, limit=6) if cited_domains else "None detected"
+        cited_count = str(len(cited_urls))
+
+    top_comp_domains = []
+    organic = data.get("organic_results") or []
+    for it in organic:
+        link = it.get("link") or ""
+        dom = domain_of(link)
+        if not dom:
+            continue
+        if target_dom and dom == target_dom:
+            continue
+        if dom not in top_comp_domains:
+            top_comp_domains.append(dom)
+        if len(top_comp_domains) >= 6:
+            break
+
+    serp_features = _serp_features_present(data)
+    serp_features_txt = format_gap_list(serp_features, limit=6) if serp_features else "None detected"
+
+    row = {
+        "Target URL Cited in AIO": target_cited,
+        "Cited Domains": cited_domains_txt or "Not available",
+        "# AIO Citations": cited_count,
+        "Top Competitor Domains": format_gap_list(top_comp_domains, limit=6) if top_comp_domains else "Not available",
+        "SERP Features Present": serp_features_txt,
+    }
+    return pd.DataFrame([row], columns=cols)
+
+
+# =====================================================
 # CONTENT QUALITY (UPDATED COLUMNS EXACTLY AS REQUESTED)
 # =====================================================
 @st.cache_data(show_spinner=False, ttl=86400)
@@ -1911,9 +1989,10 @@ def _has_brief_summary(nodes: List[dict], text: str) -> str:
 def _count_tables_videos(html: str) -> Tuple[int, int]:
     if not html:
         return (0, 0)
-    root = content_root_from_html(html)
-    if not root:
-        return (0, 0)
+    soup = BeautifulSoup(html, "html.parser")
+    for t in soup.find_all(list(IGNORE_TAGS)):
+        t.decompose()
+    root = soup.find("article") or soup
     tables = len(root.find_all("table"))
     videos = len(root.find_all("video"))
     ifr = root.find_all("iframe")
@@ -1953,94 +2032,101 @@ def _outdated_label(last_modified: str, text: str) -> str:
     lm = (last_modified or "").lower()
     y = _latest_year_mentioned(text or "")
     if ("2026" in lm) or ("2025" in lm) or y >= 2025:
-        return "No outdated signal"
+        return "No obvious outdated signal"
     if y and y <= 2022:
-        return "Potentially outdated"
+        return "Potentially outdated (mentions older years)"
     if y and y <= 2023:
         return "Possibly outdated"
     return "Unclear"
 
-def _sample_old_year_sentences(text: str, max_year: int = 2023, limit: int = 1) -> List[str]:
+def _split_sentences(text: str) -> List[str]:
     if not text:
         return []
-    sentences = re.split(r"(?<=[.!?])\s+", text)
-    out: List[str] = []
-    for s in sentences:
-        years = re.findall(r"\b(19\d{2}|20\d{2})\b", s)
-        if not years:
-            continue
+    parts = re.split(r"(?<=[.!?])\s+", text)
+    return [clean(p) for p in parts if clean(p)]
+
+def _extract_years(s: str) -> List[int]:
+    years = []
+    for y in re.findall(r"\b(19\d{2}|20\d{2})\b", s or ""):
         try:
-            ys = [int(y) for y in years]
+            years.append(int(y))
         except Exception:
             continue
-        if ys and max(ys) <= max_year:
-            cleaned = clean(s)
-            if cleaned:
-                out.append(cleaned)
+    return years
+
+def _outdated_snippets(text: str, max_year: int = 2023, limit: int = 6) -> List[str]:
+    if not text:
+        return []
+    out = []
+    seen = set()
+    for s in _split_sentences(text):
+        yrs = _extract_years(s)
+        if not yrs:
+            continue
+        if any(y <= max_year for y in yrs):
+            key = norm_header(s)
+            if key and key not in seen:
+                seen.add(key)
+                out.append(s)
         if len(out) >= limit:
             break
     return out
 
-def _external_source_links(html: str, page_url: str, limit: int = 2) -> List[str]:
-    if not html:
+STRONG_WORDS_RE = r"\b(best|worst|always|never|guarantee|guaranteed|unbeatable|the most|the best|huge|massive)\b"
+
+def _strong_claim_snippets(text: str, limit: int = 6) -> List[str]:
+    if not text:
         return []
-    root = content_root_from_html(html)
-    if not root:
-        return []
-    base_dom = domain_of(page_url)
-    out: List[str] = []
-    for a in root.find_all("a", href=True):
-        href = (a.get("href") or "").strip()
-        if not href:
-            continue
-        hlow = href.lower()
-        if hlow.startswith("#") or hlow.startswith("mailto:") or hlow.startswith("tel:") or hlow.startswith("javascript:"):
-            continue
-        full = urljoin(page_url, href)
-        dom = domain_of(full)
-        if not dom or dom == base_dom:
-            continue
-        if full in out:
-            continue
-        out.append(full)
+    out = []
+    seen = set()
+    for s in _split_sentences(text):
+        if re.search(STRONG_WORDS_RE, s, flags=re.I) and not re.search(r"\d", s):
+            key = norm_header(s)
+            if key and key not in seen:
+                seen.add(key)
+                out.append(s)
         if len(out) >= limit:
             break
     return out
 
-def build_outdated_info_cell(page_url: str, last_modified: str, text: str, html: str) -> str:
-    summary = _outdated_label(last_modified, text)
-    points: List[str] = []
-    if last_modified and last_modified != "Not available":
-        points.append(f"Last modified: {last_modified}")
-    latest_year = _latest_year_mentioned(text or "")
-    if latest_year:
-        points.append(f"Latest year mentioned: {latest_year}")
-    samples = _sample_old_year_sentences(text, max_year=2023, limit=1)
-    if samples:
-        sample = samples[0]
-        if len(sample) > 140:
-            sample = sample[:137].rstrip() + "..."
-        points.append(f"Example: “{sample}”")
-    if not points:
-        points.append("No clear outdated signals detected.")
-    points = points[:3]
+def _outdated_misleading_cell(last_modified: str, text: str) -> str:
+    lm = clean(last_modified or "")
+    lm_years = _extract_years(lm)
+    outdated_items = _outdated_snippets(text, max_year=2023, limit=6)
+    if lm_years and max(lm_years) <= 2023:
+        outdated_items.insert(0, f"Last modified date: {lm}")
 
-    sources = _external_source_links(html, page_url, limit=2)
-    if sources:
-        sources_html = ", ".join([
-            f'<a href="{u}" target="_blank" rel="noopener noreferrer">{domain_of(u)}</a>'
-            for u in sources
-        ])
+    wrong_items = _strong_claim_snippets(text, limit=6)
+
+    has_outdated = bool(outdated_items)
+    has_wrong = bool(wrong_items)
+
+    if not has_outdated and not has_wrong:
+        return "No obvious issues"
+
+    if has_outdated and has_wrong:
+        label = "Outdated + Wrong info"
+    elif has_outdated:
+        label = "Outdated info"
     else:
-        sources_html = source_link(page_url) if page_url else "Not available"
+        label = "Wrong info"
 
-    bullets = "".join([f"<li>{p}</li>" for p in points])
+    def as_list(items: List[str]) -> str:
+        lis = "".join(f"<li>{html_lib.escape(i)}</li>" for i in items)
+        return f"<ul>{lis}</ul>" if lis else ""
+
+    details = []
+    if has_outdated:
+        details.append("<div><strong>Outdated signals</strong>" + as_list(outdated_items) + "</div>")
+    if has_wrong:
+        details.append("<div><strong>Potentially wrong or unsupported claims</strong>" + as_list(wrong_items) + "</div>")
+
+    detail_html = "".join(details)
     return (
-        f"<details class='outdated-details'>"
-        f"<summary>{summary}</summary>"
-        f"<ul>{bullets}</ul>"
-        f"<div class='muted'>Sources: {sources_html}</div>"
-        f"</details>"
+        "<details class='details-link'>"
+        f"<summary><span class='link-like'>{html_lib.escape(label)}</span></summary>"
+        f"<div class='details-box'>{detail_html}</div>"
+        "</details>"
     )
 
 @st.cache_data(show_spinner=False, ttl=1800)
@@ -2106,10 +2192,8 @@ def _topic_cannibalization_label(query: str, page_url: str) -> str:
 def _count_source_links(html: str) -> int:
     if not html:
         return 0
-    root = content_root_from_html(html)
-    if not root:
-        return 0
-    links = root.find_all("a", href=True)
+    soup = BeautifulSoup(html, "html.parser")
+    links = soup.find_all("a", href=True)
     cnt = 0
     for a in links:
         href = a.get("href") or ""
@@ -2122,10 +2206,8 @@ CREDIBLE_KEYWORDS = ["gov", "edu", "who.int", "un.org", "worldbank", "statista",
 def _credible_sources_count(html: str, page_url: str) -> int:
     if not html:
         return 0
-    root = content_root_from_html(html)
-    if not root:
-        return 0
-    links = root.find_all("a", href=True)
+    soup = BeautifulSoup(html, "html.parser")
+    links = soup.find_all("a", href=True)
     seen = set()
     base_dom = domain_of(page_url)
     for a in links:
@@ -2175,11 +2257,10 @@ def _data_backed_claims_count(text: str) -> int:
 def _unsupported_strong_claims_count(text: str) -> int:
     if not text:
         return 0
-    strong_words = r"\b(best|worst|always|never|guarantee|guaranteed|unbeatable|the most|the best|huge|massive)\b"
     sentences = re.split(r"(?<=[.!?])\s+", text)
     cnt = 0
     for s in sentences:
-        if re.search(strong_words, s, flags=re.I):
+        if re.search(STRONG_WORDS_RE, s, flags=re.I):
             if not re.search(r"\d", s):
                 cnt += 1
     return cnt
@@ -2252,7 +2333,7 @@ def build_content_quality_table_from_seo(
         data_backed = _data_backed_claims_count(text)
         unsupported = _unsupported_strong_claims_count(text)
         latest_score = _latest_information_label(lm, text)
-        outdated = build_outdated_info_cell(page_url, lm, text, html)
+        outdated = _outdated_misleading_cell(lm, text)
         styling = _styling_layout_label(html, nodes, text)
 
         rows.append({
@@ -2393,6 +2474,8 @@ if "ai_update_df" not in st.session_state:
     st.session_state.ai_update_df = pd.DataFrame()
 if "cq_update_df" not in st.session_state:
     st.session_state.cq_update_df = pd.DataFrame()
+if "ai_vis_update_df" not in st.session_state:
+    st.session_state.ai_vis_update_df = pd.DataFrame()
 
 if "new_df" not in st.session_state:
     st.session_state.new_df = pd.DataFrame()
@@ -2404,6 +2487,8 @@ if "ai_new_df" not in st.session_state:
     st.session_state.ai_new_df = pd.DataFrame()
 if "cq_new_df" not in st.session_state:
     st.session_state.cq_new_df = pd.DataFrame()
+if "ai_vis_new_df" not in st.session_state:
+    st.session_state.ai_vis_new_df = pd.DataFrame()
 
 
 # =====================================================
@@ -2456,8 +2541,6 @@ if st.session_state.mode == "update":
                 comp_nodes=comp_nodes,
                 comp_fr=comp_fr_map[comp_url],
                 comp_url=comp_url,
-                max_missing_headers=7,
-                max_missing_parts=5,
             ))
 
         st.session_state.update_fetch = internal_fetch
@@ -2489,17 +2572,31 @@ if st.session_state.mode == "update":
             manual_query=manual_fkw_update.strip()
         )
 
+        query_for_ai = manual_fkw_update.strip() or get_first_h1(bayut_nodes)
+        st.session_state.ai_vis_update_df = build_ai_visibility_table(
+            query=query_for_ai,
+            target_url=bayut_url.strip(),
+            competitors=competitors,
+            device="mobile",
+        )
+
     if show_internal_fetch and st.session_state.update_fetch:
         st.sidebar.markdown("### Internal fetch log (Update Mode)")
         st.sidebar.write(f"Playwright enabled: {PLAYWRIGHT_OK}")
         for u, s in st.session_state.update_fetch:
             st.sidebar.write(u, "—", s)
 
-    section_header_pill("Content Gaps")
+    section_header_pill("Gaps Table")
     if st.session_state.update_df is None or st.session_state.update_df.empty:
         st.info("Run analysis to see results.")
     else:
         render_table(st.session_state.update_df)
+
+    section_header_pill("Content Quality")
+    if st.session_state.cq_update_df is None or st.session_state.cq_update_df.empty:
+        st.info("Run analysis to see Content Quality signals.")
+    else:
+        render_table(st.session_state.cq_update_df, drop_internal_url=True)
 
     section_header_pill("SEO Analysis")
     if st.session_state.seo_update_df is None or st.session_state.seo_update_df.empty:
@@ -2507,11 +2604,11 @@ if st.session_state.mode == "update":
     else:
         render_table(st.session_state.seo_update_df, drop_internal_url=True)
 
-    section_header_pill("Content Quality (Table 2)")
-    if st.session_state.cq_update_df is None or st.session_state.cq_update_df.empty:
-        st.info("Run analysis to see Content Quality signals.")
+    section_header_pill("AI Visibility")
+    if st.session_state.ai_vis_update_df is None or st.session_state.ai_vis_update_df.empty:
+        st.info("Run analysis to see AI visibility signals.")
     else:
-        render_table(st.session_state.cq_update_df, drop_internal_url=True)
+        render_table(st.session_state.ai_vis_update_df, drop_internal_url=True)
 
 
 # =====================================================
@@ -2580,6 +2677,14 @@ else:
             manual_query=manual_fkw_new.strip()
         )
 
+        query_for_ai = manual_fkw_new.strip() or new_title.strip()
+        st.session_state.ai_vis_new_df = build_ai_visibility_table(
+            query=query_for_ai,
+            target_url="Not applicable",
+            competitors=competitors,
+            device="mobile",
+        )
+
     if show_internal_fetch and st.session_state.new_fetch:
         st.sidebar.markdown("### Internal fetch log (New Post Mode)")
         st.sidebar.write(f"Playwright enabled: {PLAYWRIGHT_OK}")
@@ -2592,19 +2697,25 @@ else:
     else:
         render_table(st.session_state.new_df)
 
+    section_header_pill("Content Quality")
+    if st.session_state.cq_new_df is None or st.session_state.cq_new_df.empty:
+        st.info("Generate competitor coverage to see Content Quality signals.")
+    else:
+        render_table(st.session_state.cq_new_df, drop_internal_url=True)
+
     section_header_pill("SEO Analysis")
     if st.session_state.seo_new_df is None or st.session_state.seo_new_df.empty:
         st.info("Generate competitor coverage to see SEO comparison.")
     else:
         render_table(st.session_state.seo_new_df, drop_internal_url=True)
 
-    section_header_pill("Content Quality (Table 2)")
-    if st.session_state.cq_new_df is None or st.session_state.cq_new_df.empty:
-        st.info("Generate competitor coverage to see Content Quality signals.")
+    section_header_pill("AI Visibility")
+    if st.session_state.ai_vis_new_df is None or st.session_state.ai_vis_new_df.empty:
+        st.info("Generate competitor coverage to see AI visibility signals.")
     else:
-        render_table(st.session_state.cq_new_df, drop_internal_url=True)
+        render_table(st.session_state.ai_vis_new_df, drop_internal_url=True)
 
 if (st.session_state.seo_update_df is not None and not st.session_state.seo_update_df.empty) or \
    (st.session_state.seo_new_df is not None and not st.session_state.seo_new_df.empty):
     if not SERPAPI_API_KEY:
-        st.warning("Note: SERPAPI_API_KEY is optional now (used only for Topic Cannibalization).")
+        st.warning("Note: SERPAPI_API_KEY is optional now (used for Topic Cannibalization and AI Visibility).")
