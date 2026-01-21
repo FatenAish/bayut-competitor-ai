@@ -47,7 +47,7 @@ st.markdown(
   --bayut-primary-dark: 163 90% 22%;
   --bayut-glow: 163 60% 50%;
 
-  --background: 150 30% 98%;
+  --background: 150 45% 97%;
   --foreground: 220 25% 12%;
 
   --card: 0 0% 100%;
@@ -55,7 +55,7 @@ st.markdown(
   --muted: 150 15% 92%;
   --muted-foreground: 220 10% 45%;
 
-  --secondary: 150 25% 94%;
+  --secondary: 150 30% 94%;
   --accent: 163 60% 92%;
 
   --primary: 163 82% 30%;
@@ -64,8 +64,8 @@ st.markdown(
   --radius: 0.75rem;
 
   --gradient-hero: linear-gradient(135deg, hsl(163 82% 30%) 0%, hsl(163 60% 45%) 50%, hsl(175 70% 40%) 100%);
-  --gradient-card: linear-gradient(180deg, hsl(0 0% 100%) 0%, hsl(150 30% 98%) 100%);
-  --gradient-surface: linear-gradient(135deg, hsl(150 30% 98%) 0%, hsl(163 20% 96%) 100%);
+  --gradient-card: linear-gradient(180deg, hsl(0 0% 100%) 0%, hsl(150 40% 97%) 100%);
+  --gradient-surface: linear-gradient(135deg, hsl(150 45% 96%) 0%, hsl(163 35% 95%) 100%);
 
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.03);
   --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.03);
@@ -83,7 +83,7 @@ html, body { background: hsl(var(--background)) !important; }
 }
 [data-testid="stHeader"] { background: transparent !important; }
 section.main > div.block-container{
-  max-width: 1100px !important;
+  max-width: 1040px !important;
   padding-top: 1.6rem !important;
   padding-bottom: 2.8rem !important;
 }
@@ -159,6 +159,13 @@ section.main > div.block-container{
   background: hsl(var(--primary));
 }
 
+.footer-note{
+  text-align: center;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+  margin: 26px 0 8px 0;
+}
+
 /* ------------------------------
    Hero styling
 --------------------------------*/
@@ -190,6 +197,7 @@ section.main > div.block-container{
   color: hsl(var(--muted-foreground));
   font-size: 16px;
   line-height: 1.6;
+  text-align: center;
 }
 .hero-badges{ margin-top: 14px; display:flex; justify-content:center; gap:10px; flex-wrap:wrap; }
 .hero-badge{
@@ -255,6 +263,15 @@ div[data-testid="stButton"] > button[kind="primary"]:hover,
 div[data-testid="stFormSubmitButton"] > button[kind="primary"]:hover{
   background: hsl(var(--primary-dark)) !important;
 }
+/* Ensure form submit stays primary */
+div[data-testid="stFormSubmitButton"] > button{
+  background: hsl(var(--primary)) !important;
+  color: hsl(var(--primary-foreground)) !important;
+  border-color: hsl(var(--primary)) !important;
+}
+div[data-testid="stFormSubmitButton"] > button:hover{
+  background: hsl(var(--primary-dark)) !important;
+}
 
 /* Mode toggle */
 .mode-toggle{
@@ -276,7 +293,9 @@ div[data-testid="stForm"]{
   border-radius: 20px !important;
   padding: 22px 22px 6px 22px !important;
   box-shadow: var(--shadow-lg) !important;
-  margin: 0 0 24px 0 !important;
+  margin: 0 auto 24px auto !important;
+  max-width: 860px !important;
+  width: 100% !important;
 }
 div[data-testid="stForm"] form{
   padding: 0 !important;
@@ -312,7 +331,8 @@ div[data-testid="stForm"] form{
   box-shadow: var(--shadow-lg);
   padding: 34px 20px;
   text-align: center;
-  margin-top: 24px;
+  margin: 24px auto 0 auto;
+  max-width: 860px;
 }
 .empty-icon{
   width: 58px;
@@ -2908,3 +2928,8 @@ if (st.session_state.seo_update_df is not None and not st.session_state.seo_upda
    (st.session_state.seo_new_df is not None and not st.session_state.seo_new_df.empty):
     if not SERPAPI_API_KEY:
         st.warning("Note: SERPAPI_API_KEY is optional now (used for Topic Cannibalization and AI Visibility).")
+
+st.markdown(
+    "<div class='footer-note'>Bayut Competitor Gap Analysis Tool - Built for content optimization</div>",
+    unsafe_allow_html=True,
+)
