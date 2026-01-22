@@ -180,25 +180,36 @@ section.main > div.block-container{
 .hero-wrap:before{
   content:"";
   position:absolute;
-  top:-180px;
+  top:-210px;
   left:50%;
   transform: translateX(-50%);
-  width: 1020px;
-  height: 560px;
-  background: radial-gradient(circle at center, hsl(163 80% 78% / 0.85), transparent 58%);
+  width: 1100px;
+  height: 640px;
+  background: radial-gradient(circle at center, hsl(163 90% 70% / 1), transparent 55%);
+  z-index: -1;
+}
+.hero-wrap:after{
+  content:"";
+  position:absolute;
+  top:-130px;
+  left:50%;
+  transform: translateX(-50%);
+  width: 820px;
+  height: 460px;
+  background: radial-gradient(circle at center, hsl(163 80% 78% / 0.8), transparent 60%);
   z-index: -1;
 }
 .hero-icon{
   width:76px; height:76px; margin:0 auto 18px auto;
   border-radius: 22px;
-  background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(var(--primary) / 0.75) 100%);
-  box-shadow: var(--shadow-md), var(--shadow-glow);
+  background: linear-gradient(135deg, hsl(150 75% 44%) 0%, hsl(163 82% 30%) 100%);
+  box-shadow: 0 16px 32px -18px hsl(163 82% 30% / 0.7), var(--shadow-md);
   border: 1px solid hsl(var(--primary) / 0.15);
   display:flex; align-items:center; justify-content:center;
 }
 .hero-icon svg{
-  width: 34px;
-  height: 34px;
+  width: 38px;
+  height: 38px;
   color: white;
 }
 .hero-h1{
@@ -442,9 +453,9 @@ st.markdown(
 <div class="hero-wrap">
   <div class="hero-icon">
     <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/>
-      <path d="M16.5 16.5L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-      <path d="M9.2 13.2V9.6L11 8.4L12.8 9.6V13.2H9.2Z" fill="currentColor"/>
+      <circle cx="12" cy="12" r="7" stroke="currentColor" stroke-width="2.4"/>
+      <path d="M6.2 17.8L3 21" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+      <path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M9 14.6V10.7L12 8.7L15 10.7V14.6H9ZM11 14.6V12.2H13V14.6H11Z"/>
     </svg>
   </div>
   <h1 class="hero-h1">
