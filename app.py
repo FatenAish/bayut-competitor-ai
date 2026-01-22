@@ -99,11 +99,11 @@ section.main > div.block-container{
   position: absolute;
   border-radius: 9999px;
   filter: blur(60px);
-  opacity: 0.5;
+  opacity: 0.35;
   animation: float 6s ease-in-out infinite;
 }
-.bg-decor .b1{ top:-120px; left:16%; width:620px; height:620px; background: hsl(163 90% 55% / 0.55); }
-.bg-decor .b2{ bottom:-120px; right:18%; width:520px; height:520px; background: hsl(163 85% 50% / 0.35); animation-delay:-3s; }
+.bg-decor .b1{ top:-90px; left:18%; width:520px; height:520px; background: hsl(var(--primary) / 0.28); }
+.bg-decor .b2{ bottom:-120px; right:18%; width:460px; height:460px; background: hsl(var(--primary) / 0.2); animation-delay:-3s; }
 .bg-decor .b3{ top:40%; left:-120px; width:420px; height:420px; background: hsl(163 60% 92% / 0.55); animation-delay:-1.5s; }
 @keyframes float { 0%,100%{ transform: translateY(0);} 50%{ transform: translateY(-10px);} }
 
@@ -180,23 +180,23 @@ section.main > div.block-container{
 .hero-wrap:before{
   content:"";
   position:absolute;
-  top:-300px;
+  top:-200px;
   left:50%;
   transform: translateX(-50%);
-  width: 1500px;
-  height: 820px;
-  background: radial-gradient(circle at center, hsl(163 95% 58% / 1), transparent 50%);
+  width: 1020px;
+  height: 560px;
+  background: radial-gradient(circle at center, hsl(163 70% 82% / 0.6), transparent 60%);
   z-index: -1;
 }
 .hero-wrap:after{
   content:"";
   position:absolute;
-  top:-200px;
+  top:-120px;
   left:50%;
   transform: translateX(-50%);
-  width: 1100px;
-  height: 620px;
-  background: radial-gradient(circle at center, hsl(163 90% 65% / 0.98), transparent 55%);
+  width: 820px;
+  height: 460px;
+  background: radial-gradient(circle at center, hsl(163 75% 85% / 0.5), transparent 62%);
   z-index: -1;
 }
 .hero-icon{
@@ -453,9 +453,7 @@ st.markdown(
 <div class="hero-wrap">
   <div class="hero-icon">
     <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <circle cx="12" cy="12" r="7" stroke="currentColor" stroke-width="2.4"/>
-      <path d="M6.2 17.8L3 21" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
-      <path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" d="M9 14.6V10.7L12 8.7L15 10.7V14.6H9ZM11 14.6V12.2H13V14.6H11Z"/>
+      <path d="M4 20V10M10 20V4M16 20V14M3 20H21" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
     </svg>
   </div>
   <h1 class="hero-h1">
