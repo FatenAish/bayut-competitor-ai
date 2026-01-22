@@ -2397,6 +2397,53 @@ def _extract_last_modified_from_html(html: str) -> str:
         if v:
             return v
 
+    scripts = soup.find_all("script", attrs={"type": re.compile(r"ld\+json", re.I)})
+    date_keys = ["dateModified", "datePublished", "dateCreated", "date"]
+
+    def pick_date(obj) -> str:
+        if isinstance(obj, dict):
+            t = obj.get("@type") or obj.get("type")
+            t_list = []
+            if isinstance(t, list):
+                t_list = [str(x).lower() for x in t]
+            elif isinstance(t, str):
+                t_list = [t.lower()]
+            is_article = any(
+                x in t_list or x.endswith("article")
+                for x in ["article", "newsarticle", "blogposting", "webpage", "creativework"]
+            )
+            if is_article:
+                for k in date_keys:
+                    v = obj.get(k)
+                    if isinstance(v, str) and v.strip():
+                        return v.strip()
+            for k in date_keys:
+                v = obj.get(k)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+            for v in obj.values():
+                out = pick_date(v)
+                if out:
+                    return out
+        elif isinstance(obj, list):
+            for v in obj:
+                out = pick_date(v)
+                if out:
+                    return out
+        return ""
+
+    for s in scripts:
+        raw = (s.string or s.get_text(" ") or "").strip()
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except Exception:
+            continue
+        v = pick_date(data)
+        if v:
+            return v
+
     return ""
 
 def get_last_modified(url: str, html: str) -> str:
