@@ -202,7 +202,7 @@ section.main > div.block-container{
   color: white;
 }
 .hero-h1{
-  font-size: 68px;
+  font-size: 76px !important;
   line-height: 1.06;
   margin: 0;
   color: hsl(var(--foreground));
