@@ -202,7 +202,7 @@ section.main > div.block-container{
   color: white;
 }
 .hero-h1{
-  font-size: 82px !important;
+  font-size: 78px !important;
   line-height: 1.06;
   margin: 0;
   color: hsl(var(--foreground));
@@ -1682,6 +1682,15 @@ def extract_head_seo(html: str) -> Tuple[str, str]:
 
     return (title or "Not available", desc or "Not available")
 
+def is_mobile_friendly(html: str) -> str:
+    if not html:
+        return "No"
+    soup = BeautifulSoup(html, "html.parser")
+    meta = soup.find("meta", attrs={"name": re.compile("^viewport$", re.I)})
+    if meta and meta.get("content"):
+        return "Yes"
+    return "No"
+
 def extract_media_used(html: str) -> str:
     if not html:
         return "Not available"
@@ -1924,6 +1933,7 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
     media = extract_media_used(fr.html or "")
     schema = _schema_present(fr.html or "")
     _, robots = _extract_canonical_and_robots(fr.html or "")
+    mobile_friendly = is_mobile_friendly(fr.html or "")
 
     return {
         "Page": label,
@@ -1934,6 +1944,7 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
         "Headers (H1/H2/H3/Total)": h_counts,
         "FKW Usage": kw_usage,
         "Robots Meta (index/follow)": robots,
+        "Mobile Friendly": mobile_friendly,
         "Outbound Links Count": str(outbound_links_count),
         "Media (Images/Video/Tables)": media,
         "Schema Present": schema,
@@ -1960,7 +1971,7 @@ def build_seo_analysis_update(
     cols = [
         "Page","UAE Rank (Mobile)","SEO Title","Meta Description","URL Slug",
         "Headers (H1/H2/H3/Total)","FKW Usage","Robots Meta (index/follow)",
-        "Outbound Links Count","Media (Images/Video/Tables)",
+        "Mobile Friendly","Outbound Links Count","Media (Images/Video/Tables)",
         "Schema Present","__fkw","__url"
     ]
     for c in cols:
@@ -1984,7 +1995,7 @@ def build_seo_analysis_newpost(
     cols = [
         "Page","UAE Rank (Mobile)","SEO Title","Meta Description","URL Slug",
         "Headers (H1/H2/H3/Total)","FKW Usage","Robots Meta (index/follow)",
-        "Outbound Links Count","Media (Images/Video/Tables)",
+        "Mobile Friendly","Outbound Links Count","Media (Images/Video/Tables)",
         "Schema Present","__fkw","__url"
     ]
     for c in cols:
