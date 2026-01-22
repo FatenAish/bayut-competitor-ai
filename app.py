@@ -202,7 +202,7 @@ section.main > div.block-container{
   color: white;
 }
 .hero-h1{
-  font-size: 78px !important;
+  font-size: 70px !important;
   line-height: 1.06;
   margin: 0;
   color: hsl(var(--foreground));
@@ -1941,7 +1941,7 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
         "SEO Title": seo_title,
         "Meta Description": meta_desc,
         "URL Slug": slug,
-        "Headers (H1/H2/H3/Total)": h_counts,
+        "Headers": h_counts,
         "FKW Usage": kw_usage,
         "Robots Meta (index/follow)": robots,
         "Mobile Friendly": mobile_friendly,
@@ -1969,9 +1969,9 @@ def build_seo_analysis_update(
         rows.append(seo_row_for_page_extended(site_name(cu), cu, fr, nodes, manual_fkw=manual_fkw))
     df = pd.DataFrame(rows)
     cols = [
-        "Page","UAE Rank (Mobile)","SEO Title","Meta Description","URL Slug",
-        "Headers (H1/H2/H3/Total)","FKW Usage","Robots Meta (index/follow)",
-        "Mobile Friendly","Outbound Links Count","Media (Images/Video/Tables)",
+        "Page","UAE Rank (Mobile)","Mobile Friendly","SEO Title","Meta Description","URL Slug",
+        "Headers","FKW Usage","Robots Meta (index/follow)",
+        "Outbound Links Count","Media (Images/Video/Tables)",
         "Schema Present","__fkw","__url"
     ]
     for c in cols:
@@ -1993,9 +1993,9 @@ def build_seo_analysis_newpost(
         rows.append(seo_row_for_page_extended(site_name(cu), cu, fr, nodes, manual_fkw=manual_fkw))
     df = pd.DataFrame(rows)
     cols = [
-        "Page","UAE Rank (Mobile)","SEO Title","Meta Description","URL Slug",
-        "Headers (H1/H2/H3/Total)","FKW Usage","Robots Meta (index/follow)",
-        "Mobile Friendly","Outbound Links Count","Media (Images/Video/Tables)",
+        "Page","UAE Rank (Mobile)","Mobile Friendly","SEO Title","Meta Description","URL Slug",
+        "Headers","FKW Usage","Robots Meta (index/follow)",
+        "Outbound Links Count","Media (Images/Video/Tables)",
         "Schema Present","__fkw","__url"
     ]
     for c in cols:
