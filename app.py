@@ -183,9 +183,9 @@ section.main > div.block-container{
   top:-180px;
   left:50%;
   transform: translateX(-50%);
-  width: 1000px;
-  height: 520px;
-  background: radial-gradient(circle at center, hsl(163 70% 82% / 0.65), transparent 62%);
+  width: 1020px;
+  height: 560px;
+  background: radial-gradient(circle at center, hsl(163 80% 78% / 0.85), transparent 58%);
   z-index: -1;
 }
 .hero-icon{
@@ -442,7 +442,9 @@ st.markdown(
 <div class="hero-wrap">
   <div class="hero-icon">
     <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <path d="M4 20V10M10 20V4M16 20V14M3 20H21" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2"/>
+      <path d="M16.5 16.5L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      <path d="M9.2 13.2V9.6L11 8.4L12.8 9.6V13.2H9.2Z" fill="currentColor"/>
     </svg>
   </div>
   <h1 class="hero-h1">
