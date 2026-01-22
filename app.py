@@ -202,7 +202,7 @@ section.main > div.block-container{
   color: white;
 }
 .hero-h1{
-  font-size: 68px;
+  font-size: 82px !important;
   line-height: 1.06;
   margin: 0;
   color: hsl(var(--foreground));
@@ -1976,8 +1976,6 @@ def build_seo_analysis_newpost(
     manual_fkw: str = ""
 ) -> pd.DataFrame:
     rows = []
-    fake_fr = FetchResult(True, "manual", 200, "", new_title, None)
-    rows.append(seo_row_for_page_extended("Target page (new)", "Not applicable", fake_fr, [], manual_fkw=manual_fkw))
     for cu in competitors:
         fr = comp_fr_map.get(cu)
         nodes = (comp_tree_map.get(cu) or {}).get("nodes", [])
@@ -3182,11 +3180,7 @@ else:
         else:
             render_table(st.session_state.seo_new_df, drop_internal_url=True)
 
-        section_header_pill("AI Visibility")
-        if st.session_state.ai_vis_new_df is None or st.session_state.ai_vis_new_df.empty:
-            st.info("Generate competitor coverage to see AI visibility signals.")
-        else:
-            render_table(st.session_state.ai_vis_new_df, drop_internal_url=True)
+    # AI Visibility table removed for new post mode per request.
 
 if (st.session_state.seo_update_df is not None and not st.session_state.seo_update_df.empty) or \
    (st.session_state.seo_new_df is not None and not st.session_state.seo_new_df.empty):
