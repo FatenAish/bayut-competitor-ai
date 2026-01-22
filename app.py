@@ -180,23 +180,23 @@ section.main > div.block-container{
 .hero-wrap:before{
   content:"";
   position:absolute;
-  top:-210px;
+  top:-260px;
   left:50%;
   transform: translateX(-50%);
-  width: 1100px;
-  height: 640px;
-  background: radial-gradient(circle at center, hsl(163 90% 70% / 1), transparent 55%);
+  width: 1400px;
+  height: 760px;
+  background: radial-gradient(circle at center, hsl(163 90% 65% / 1), transparent 52%);
   z-index: -1;
 }
 .hero-wrap:after{
   content:"";
   position:absolute;
-  top:-130px;
+  top:-170px;
   left:50%;
   transform: translateX(-50%);
-  width: 820px;
-  height: 460px;
-  background: radial-gradient(circle at center, hsl(163 80% 78% / 0.8), transparent 60%);
+  width: 980px;
+  height: 560px;
+  background: radial-gradient(circle at center, hsl(163 85% 72% / 0.95), transparent 58%);
   z-index: -1;
 }
 .hero-icon{
