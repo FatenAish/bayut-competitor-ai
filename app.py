@@ -99,11 +99,11 @@ section.main > div.block-container{
   position: absolute;
   border-radius: 9999px;
   filter: blur(60px);
-  opacity: 0.42;
+  opacity: 0.5;
   animation: float 6s ease-in-out infinite;
 }
-.bg-decor .b1{ top:-80px; left:18%; width:520px; height:520px; background: hsl(var(--primary) / 0.3); }
-.bg-decor .b2{ bottom:-120px; right:18%; width:460px; height:460px; background: hsl(var(--primary) / 0.22); animation-delay:-3s; }
+.bg-decor .b1{ top:-120px; left:16%; width:620px; height:620px; background: hsl(163 90% 55% / 0.55); }
+.bg-decor .b2{ bottom:-120px; right:18%; width:520px; height:520px; background: hsl(163 85% 50% / 0.35); animation-delay:-3s; }
 .bg-decor .b3{ top:40%; left:-120px; width:420px; height:420px; background: hsl(163 60% 92% / 0.55); animation-delay:-1.5s; }
 @keyframes float { 0%,100%{ transform: translateY(0);} 50%{ transform: translateY(-10px);} }
 
@@ -180,23 +180,23 @@ section.main > div.block-container{
 .hero-wrap:before{
   content:"";
   position:absolute;
-  top:-260px;
+  top:-300px;
   left:50%;
   transform: translateX(-50%);
-  width: 1400px;
-  height: 760px;
-  background: radial-gradient(circle at center, hsl(163 90% 65% / 1), transparent 52%);
+  width: 1500px;
+  height: 820px;
+  background: radial-gradient(circle at center, hsl(163 95% 58% / 1), transparent 50%);
   z-index: -1;
 }
 .hero-wrap:after{
   content:"";
   position:absolute;
-  top:-170px;
+  top:-200px;
   left:50%;
   transform: translateX(-50%);
-  width: 980px;
-  height: 560px;
-  background: radial-gradient(circle at center, hsl(163 85% 72% / 0.95), transparent 58%);
+  width: 1100px;
+  height: 620px;
+  background: radial-gradient(circle at center, hsl(163 90% 65% / 0.98), transparent 55%);
   z-index: -1;
 }
 .hero-icon{
