@@ -12,6 +12,13 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Tuple, List
 from difflib import SequenceMatcher
 import json
+import os
+
+def _env_or_secret(key: str, default=None):
+    v = os.getenv(key)
+    if v is not None and str(v).strip() != "":
+        return v
+    return _secrets_get(key, default)
 
 # Optional (recommended): JS rendering tool
 # pip install playwright
@@ -1704,22 +1711,25 @@ def _secrets_get(key: str, default=None):
         pass
     return default
 
-SERPAPI_API_KEY = _secrets_get("SERPAPI_API_KEY", None)
+SERPAPI_API_KEY = _env_or_secret("SERPAPI_API_KEY", None)
+
 DATAFORSEO_LOGIN = (
-    _secrets_get("DATAFORSEO_LOGIN", None)
-    or _secrets_get("DATAFORSEO_EMAIL", None)
-    or _secrets_get("DATAFORSEO_USERNAME", None)
+    _env_or_secret("DATAFORSEO_LOGIN", None)
+    or _env_or_secret("DATAFORSEO_EMAIL", None)
+    or _env_or_secret("DATAFORSEO_USERNAME", None)
 )
+
 DATAFORSEO_PASSWORD = (
-    _secrets_get("DATAFORSEO_PASSWORD", None)
-    or _secrets_get("DATAFORSEO_API_PASSWORD", None)
-    or _secrets_get("DATAFORSEO_API_KEY", None)
+    _env_or_secret("DATAFORSEO_PASSWORD", None)
+    or _env_or_secret("DATAFORSEO_API_PASSWORD", None)
+    or _env_or_secret("DATAFORSEO_API_KEY", None)
 )
-DATAFORSEO_LOCATION_CODE = _secrets_get("DATAFORSEO_LOCATION_CODE", None)
-DATAFORSEO_LOCATION_NAME = _secrets_get("DATAFORSEO_LOCATION_NAME", "United Arab Emirates")
-DATAFORSEO_LANGUAGE_CODE = _secrets_get("DATAFORSEO_LANGUAGE_CODE", "en")
-DATAFORSEO_SE_DOMAIN = _secrets_get("DATAFORSEO_SE_DOMAIN", "google.ae")
-DATAFORSEO_DEPTH = _secrets_get("DATAFORSEO_DEPTH", 50)
+
+DATAFORSEO_LOCATION_CODE = _env_or_secret("DATAFORSEO_LOCATION_CODE", None)
+DATAFORSEO_LOCATION_NAME = _env_or_secret("DATAFORSEO_LOCATION_NAME", "United Arab Emirates")
+DATAFORSEO_LANGUAGE_CODE = _env_or_secret("DATAFORSEO_LANGUAGE_CODE", "en")
+DATAFORSEO_SE_DOMAIN = _env_or_secret("DATAFORSEO_SE_DOMAIN", "google.ae")
+DATAFORSEO_DEPTH = int(_env_or_secret("DATAFORSEO_DEPTH", 50))
 
 def url_slug(url: str) -> str:
     try:
