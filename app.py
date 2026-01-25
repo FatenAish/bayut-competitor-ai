@@ -1697,6 +1697,18 @@ def update_mode_rows_header_first(
 # =====================================================
 # SEO ANALYSIS (YOUR SAME LOGIC)
 # =====================================================
+SECRET_FILE_DIRS = ("/secrets", "/var/secrets", "/run/secrets")
+
+def _read_secret_file(path: str):
+    try:
+        if not path or not os.path.isfile(path):
+            return None
+        with open(path, "r", encoding="utf-8") as handle:
+            value = handle.read().strip()
+        return value if value else None
+    except Exception:
+        return None
+
 def _secrets_get(key: str, default=None):
     try:
         v = os.getenv(key)
@@ -1704,6 +1716,18 @@ def _secrets_get(key: str, default=None):
             return v
     except Exception:
         pass
+    try:
+        file_key = os.getenv(f"{key}_FILE")
+        if file_key:
+            v = _read_secret_file(file_key)
+            if v is not None:
+                return v
+    except Exception:
+        pass
+    for base_dir in SECRET_FILE_DIRS:
+        v = _read_secret_file(os.path.join(base_dir, key))
+        if v is not None:
+            return v
     try:
         if hasattr(st, "secrets") and key in st.secrets:
             return st.secrets[key]
@@ -3412,7 +3436,11 @@ else:
 if (st.session_state.seo_update_df is not None and not st.session_state.seo_update_df.empty) or \
    (st.session_state.seo_new_df is not None and not st.session_state.seo_new_df.empty):
     if not (DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD) and not SERPAPI_API_KEY:
-        st.warning("Note: Add DATAFORSEO_LOGIN/DATAFORSEO_PASSWORD (preferred) or SERPAPI_API_KEY to enable Topic Cannibalization and AI Visibility.")
+        st.warning(
+            "Note: Add DATAFORSEO_LOGIN/DATAFORSEO_PASSWORD (preferred) or SERPAPI_API_KEY "
+            "to enable Topic Cannibalization and AI Visibility. File-based secrets are also "
+            "supported via DATAFORSEO_LOGIN_FILE/DATAFORSEO_PASSWORD_FILE or /secrets mounts."
+        )
 
 st.markdown(
     "<div class='footer-note'>Bayut Competitor Gap Analysis Tool - Built for content optimization</div>",
