@@ -2207,6 +2207,36 @@ def _dataforseo_features_present(data: dict) -> List[str]:
                 features.append(label)
     return features
 
+def _dataforseo_paa_questions(data: dict) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for item in _dataforseo_items(data):
+        t = (item.get("type") or "").lower()
+        if "people_also_ask" not in t and "related_questions" not in t:
+            continue
+        items = item.get("items") or []
+        if isinstance(items, list) and items:
+            for q in items:
+                if not isinstance(q, dict):
+                    continue
+                text = q.get("question") or q.get("title") or q.get("text") or ""
+                text = clean(text)
+                if not text:
+                    continue
+                k = norm_header(text)
+                if k and k not in seen:
+                    seen.add(k)
+                    out.append(text)
+        else:
+            text = item.get("question") or item.get("title") or item.get("text") or ""
+            text = clean(text)
+            if text:
+                k = norm_header(text)
+                if k and k not in seen:
+                    seen.add(k)
+                    out.append(text)
+    return out
+
 def _serp_features_present(data: dict) -> List[str]:
     if not isinstance(data, dict):
         return []
@@ -2233,6 +2263,22 @@ def _serp_features_present(data: dict) -> List[str]:
         features.append("AI Overview")
     return features
 
+def _serpapi_paa_questions(data: dict) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for item in data.get("related_questions") or []:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("question") or item.get("title") or item.get("text") or ""
+        text = clean(text)
+        if not text:
+            continue
+        k = norm_header(text)
+        if k and k not in seen:
+            seen.add(k)
+            out.append(text)
+    return out
+
 @st.cache_data(show_spinner=False, ttl=1800)
 def serpapi_serp_cached(query: str, device: str) -> dict:
     if not SERPAPI_API_KEY:
@@ -2256,7 +2302,7 @@ def serpapi_serp_cached(query: str, device: str) -> dict:
         return {"_error": str(e)}
 
 def build_ai_visibility_table(query: str, target_url: str, competitors: List[str], device: str = "mobile") -> pd.DataFrame:
-    cols = ["Target URL Cited in AIO","Cited Domains","# AIO Citations","Top Competitor Domains","SERP Features Present"]
+    cols = ["Target URL Cited in AIO","Cited Domains","# AIO Citations","Top Competitor Domains","SERP Features Present","People Also Ask questions"]
     if not query:
         return pd.DataFrame([{c: "Not available" for c in cols}], columns=cols)
 
@@ -2304,6 +2350,8 @@ def build_ai_visibility_table(query: str, target_url: str, competitors: List[str
 
         serp_features = _dataforseo_features_present(data)
         serp_features_txt = format_gap_list(serp_features, limit=6) if serp_features else "None detected"
+        paa_questions = _dataforseo_paa_questions(data)
+        paa_txt = format_gap_list(paa_questions, limit=6) if paa_questions else "None detected"
 
         row = {
             "Target URL Cited in AIO": target_cited,
@@ -2311,6 +2359,7 @@ def build_ai_visibility_table(query: str, target_url: str, competitors: List[str
             "# AIO Citations": cited_count,
             "Top Competitor Domains": format_gap_list(top_comp_domains, limit=6) if top_comp_domains else "Not available",
             "SERP Features Present": serp_features_txt,
+            "People Also Ask questions": paa_txt,
         }
         return pd.DataFrame([row], columns=cols)
 
@@ -2359,6 +2408,8 @@ def build_ai_visibility_table(query: str, target_url: str, competitors: List[str
 
     serp_features = _serp_features_present(data)
     serp_features_txt = format_gap_list(serp_features, limit=6) if serp_features else "None detected"
+    paa_questions = _serpapi_paa_questions(data)
+    paa_txt = format_gap_list(paa_questions, limit=6) if paa_questions else "None detected"
 
     row = {
         "Target URL Cited in AIO": target_cited,
@@ -2366,6 +2417,7 @@ def build_ai_visibility_table(query: str, target_url: str, competitors: List[str
         "# AIO Citations": cited_count,
         "Top Competitor Domains": format_gap_list(top_comp_domains, limit=6) if top_comp_domains else "Not available",
         "SERP Features Present": serp_features_txt,
+        "People Also Ask questions": paa_txt,
     }
     return pd.DataFrame([row], columns=cols)
 
