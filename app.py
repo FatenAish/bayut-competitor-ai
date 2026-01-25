@@ -392,6 +392,29 @@ div[data-testid="stForm"] form{
   font-size: 14px;
 }
 
+/* Details tips */
+.details-link{
+  margin-top: 4px;
+}
+.details-link summary{
+  cursor: pointer;
+  color: hsl(var(--primary));
+  font-weight: 800;
+  list-style: none;
+}
+.link-like{
+  color: hsl(var(--primary));
+  text-decoration: underline;
+}
+.details-link summary::-webkit-details-marker{
+  display:none;
+}
+.details-box{
+  margin-top: 6px;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+}
+
 
 /* ------------------------------
    Tables (we’ll render with df.to_html(classes="data-table"))
@@ -2279,6 +2302,26 @@ def _serpapi_paa_questions(data: dict) -> List[str]:
             out.append(text)
     return out
 
+def _aio_tip_cell(status: str) -> str:
+    if status != "No":
+        return status
+    tips = [
+        "Add a Quick Answer at the top.",
+        "Add a People Also Ask section with questions as H3 headings + short answers.",
+        "Add recent facts and cite credible sources (inline citations).",
+        "Include a Key Facts box/table.",
+        "Use intent-matching headings and avoid unsupported claims.",
+    ]
+    tip_items = "".join(f"<li>{html_lib.escape(t)}</li>" for t in tips)
+    tips_html = f"<ul>{tip_items}</ul>"
+    return (
+        "No"
+        "<details class='details-link'>"
+        "<summary><span class='link-like'>Tips</span></summary>"
+        f"<div class='details-box'>{tips_html}</div>"
+        "</details>"
+    )
+
 @st.cache_data(show_spinner=False, ttl=1800)
 def serpapi_serp_cached(query: str, device: str) -> dict:
     if not SERPAPI_API_KEY:
@@ -2354,7 +2397,7 @@ def build_ai_visibility_table(query: str, target_url: str, competitors: List[str
         paa_txt = format_gap_list(paa_questions, limit=6) if paa_questions else "None detected"
 
         row = {
-            "Target URL Cited in AIO": target_cited,
+            "Target URL Cited in AIO": _aio_tip_cell(target_cited),
             "Cited Domains": cited_domains_txt or "Not available",
             "# AIO Citations": cited_count,
             "Top Competitor Domains": format_gap_list(top_comp_domains, limit=6) if top_comp_domains else "Not available",
@@ -2412,7 +2455,7 @@ def build_ai_visibility_table(query: str, target_url: str, competitors: List[str
     paa_txt = format_gap_list(paa_questions, limit=6) if paa_questions else "None detected"
 
     row = {
-        "Target URL Cited in AIO": target_cited,
+        "Target URL Cited in AIO": _aio_tip_cell(target_cited),
         "Cited Domains": cited_domains_txt or "Not available",
         "# AIO Citations": cited_count,
         "Top Competitor Domains": format_gap_list(top_comp_domains, limit=6) if top_comp_domains else "Not available",
