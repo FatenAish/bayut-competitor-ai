@@ -243,9 +243,14 @@ section.main > div.block-container{
   font-size: 13px;
   color: hsl(var(--foreground));
 }
+.hero-badge .icon{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+}
 .hero-badge svg{
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
   color: hsl(var(--primary));
 }
 
@@ -492,22 +497,34 @@ st.markdown(
   </p>
   <div class="hero-badges">
     <span class="hero-badge">
-      <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <path d="M12 3l1.8 4.7L18 9l-4.2 1.3L12 15l-1.8-4.7L6 9l4.2-1.3L12 3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
-      </svg>
-      SEO Analysis
+      <span class="icon">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <circle cx="11" cy="11" r="6" stroke="currentColor" stroke-width="2"/>
+          <path d="M20 20l-3.6-3.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <path d="M8 12l2-2 2 2 3-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </span>
+      <span class="label">SEO Analysis</span>
     </span>
     <span class="hero-badge">
-      <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <path d="M12 3l1.8 4.7L18 9l-4.2 1.3L12 15l-1.8-4.7L6 9l4.2-1.3L12 3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
-      </svg>
-      Content Quality
+      <span class="icon">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          <path d="M14 2v6h6" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+          <path d="M9 13l2 2 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </span>
+      <span class="label">Content Quality</span>
     </span>
     <span class="hero-badge">
-      <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <path d="M12 3l1.8 4.7L18 9l-4.2 1.3L12 15l-1.8-4.7L6 9l4.2-1.3L12 3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
-      </svg>
-      Gap Detection
+      <span class="icon">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect x="3" y="5" width="10" height="10" rx="2" stroke="currentColor" stroke-width="2"/>
+          <rect x="11" y="9" width="10" height="10" rx="2" stroke="currentColor" stroke-width="2"/>
+          <path d="M17.5 16.5L21 20" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <span class="label">Topic Gaps</span>
     </span>
   </div>
 </div>
