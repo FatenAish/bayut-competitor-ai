@@ -20,6 +20,13 @@ def _env_or_secret(key: str, default=None):
         return v
     return _secrets_get(key, default)
 
+def _first_secret(keys: List[str], default=None):
+    for key in keys:
+        v = _env_or_secret(key, None)
+        if v is not None and str(v).strip() != "":
+            return v
+    return default
+
 # Optional (recommended): JS rendering tool
 # pip install playwright
 # playwright install chromium
@@ -1713,16 +1720,24 @@ def _secrets_get(key: str, default=None):
 
 SERPAPI_API_KEY = _env_or_secret("SERPAPI_API_KEY", None)
 
-DATAFORSEO_LOGIN = (
-    _env_or_secret("DATAFORSEO_LOGIN", None)
-    or _env_or_secret("DATAFORSEO_EMAIL", None)
-    or _env_or_secret("DATAFORSEO_USERNAME", None)
+DATAFORSEO_LOGIN = _first_secret(
+    [
+        "DATAFORSEO_LOGIN",
+        "DATAFORSEO_EMAIL",
+        "DATAFORSEO_USERNAME",
+        "DATAFORSEO_API_LOGIN",
+        "DATAFORSEO_API_USERNAME",
+    ],
+    None,
 )
 
-DATAFORSEO_PASSWORD = (
-    _env_or_secret("DATAFORSEO_PASSWORD", None)
-    or _env_or_secret("DATAFORSEO_API_PASSWORD", None)
-    or _env_or_secret("DATAFORSEO_API_KEY", None)
+DATAFORSEO_PASSWORD = _first_secret(
+    [
+        "DATAFORSEO_PASSWORD",
+        "DATAFORSEO_API_PASSWORD",
+        "DATAFORSEO_API_KEY",
+    ],
+    None,
 )
 
 DATAFORSEO_LOCATION_CODE = _env_or_secret("DATAFORSEO_LOCATION_CODE", None)
@@ -3412,7 +3427,10 @@ else:
 if (st.session_state.seo_update_df is not None and not st.session_state.seo_update_df.empty) or \
    (st.session_state.seo_new_df is not None and not st.session_state.seo_new_df.empty):
     if not (DATAFORSEO_LOGIN and DATAFORSEO_PASSWORD) and not SERPAPI_API_KEY:
-        st.warning("Note: Add DATAFORSEO_LOGIN/DATAFORSEO_PASSWORD (preferred) or SERPAPI_API_KEY to enable Topic Cannibalization and AI Visibility.")
+        st.warning(
+            "Note: Add DATAFORSEO_LOGIN/DATAFORSEO_PASSWORD (or DATAFORSEO_API_LOGIN/DATAFORSEO_API_PASSWORD)"
+            " or SERPAPI_API_KEY to enable Topic Cannibalization and AI Visibility."
+        )
 
 st.markdown(
     "<div class='footer-note'>Bayut Competitor Gap Analysis Tool - Built for content optimization</div>",
