@@ -406,6 +406,12 @@ div[data-testid="stForm"] form{
   color: hsl(var(--primary));
   text-decoration: underline;
 }
+.tip-icon{
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+  vertical-align: -2px;
+}
 .details-link summary::-webkit-details-marker{
   display:none;
 }
@@ -2302,22 +2308,41 @@ def _serpapi_paa_questions(data: dict) -> List[str]:
             out.append(text)
     return out
 
-def _aio_tip_cell(status: str) -> str:
-    if status != "No":
+TIP_ICON = """
+<svg class="tip-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <path d="M9 21h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+  <path d="M10 17h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+  <path d="M12 3a6 6 0 0 0-3.6 10.8c.7.6 1.2 1.3 1.4 2.2h4.4c.2-.9.7-1.6 1.4-2.2A6 6 0 0 0 12 3Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+"""
+
+def _aio_tip_items(target_cited: str, serp_features: List[str], paa_questions: List[str]) -> List[str]:
+    if target_cited != "No":
+        return []
+    tips = []
+    if "AI Overview" in serp_features:
+        tips.append("Add a Quick Answer at the top to target AI Overview.")
+    else:
+        tips.append("Add a concise Quick Answer at the top.")
+    if paa_questions:
+        top_qs = "; ".join(paa_questions[:3])
+        tips.append(f"Add a People Also Ask section with H3s answering: {top_qs}.")
+    else:
+        tips.append("Add a People Also Ask section with H3 questions + short answers.")
+    tips.append("Add recent facts and cite credible sources (inline citations).")
+    tips.append("Include a Key Facts box/table.")
+    tips.append("Use intent-matching headings and avoid unsupported claims.")
+    return tips
+
+def _aio_tip_cell(status: str, tips: List[str]) -> str:
+    if status != "No" or not tips:
         return status
-    tips = [
-        "Add a Quick Answer at the top.",
-        "Add a People Also Ask section with questions as H3 headings + short answers.",
-        "Add recent facts and cite credible sources (inline citations).",
-        "Include a Key Facts box/table.",
-        "Use intent-matching headings and avoid unsupported claims.",
-    ]
     tip_items = "".join(f"<li>{html_lib.escape(t)}</li>" for t in tips)
     tips_html = f"<ul>{tip_items}</ul>"
     return (
         "No"
         "<details class='details-link'>"
-        "<summary><span class='link-like'>Tips</span></summary>"
+        f"<summary><span class='link-like'>{TIP_ICON}Tips</span></summary>"
         f"<div class='details-box'>{tips_html}</div>"
         "</details>"
     )
@@ -2395,9 +2420,10 @@ def build_ai_visibility_table(query: str, target_url: str, competitors: List[str
         serp_features_txt = format_gap_list(serp_features, limit=6) if serp_features else "None detected"
         paa_questions = _dataforseo_paa_questions(data)
         paa_txt = format_gap_list(paa_questions, limit=6) if paa_questions else "None detected"
+        tips = _aio_tip_items(target_cited, serp_features, paa_questions)
 
         row = {
-            "Target URL Cited in AIO": _aio_tip_cell(target_cited),
+            "Target URL Cited in AIO": _aio_tip_cell(target_cited, tips),
             "Cited Domains": cited_domains_txt or "Not available",
             "# AIO Citations": cited_count,
             "Top Competitor Domains": format_gap_list(top_comp_domains, limit=6) if top_comp_domains else "Not available",
@@ -2453,9 +2479,10 @@ def build_ai_visibility_table(query: str, target_url: str, competitors: List[str
     serp_features_txt = format_gap_list(serp_features, limit=6) if serp_features else "None detected"
     paa_questions = _serpapi_paa_questions(data)
     paa_txt = format_gap_list(paa_questions, limit=6) if paa_questions else "None detected"
+    tips = _aio_tip_items(target_cited, serp_features, paa_questions)
 
     row = {
-        "Target URL Cited in AIO": _aio_tip_cell(target_cited),
+        "Target URL Cited in AIO": _aio_tip_cell(target_cited, tips),
         "Cited Domains": cited_domains_txt or "Not available",
         "# AIO Citations": cited_count,
         "Top Competitor Domains": format_gap_list(top_comp_domains, limit=6) if top_comp_domains else "Not available",
