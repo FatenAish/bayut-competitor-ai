@@ -407,10 +407,11 @@ div[data-testid="stForm"] form{
   text-decoration: underline;
 }
 .tip-icon{
-  width: 14px;
-  height: 14px;
+  display: inline-block;
+  font-size: 13px;
   margin-right: 6px;
-  vertical-align: -2px;
+  line-height: 1;
+  vertical-align: -1px;
 }
 .details-link summary::-webkit-details-marker{
   display:none;
@@ -2308,13 +2309,7 @@ def _serpapi_paa_questions(data: dict) -> List[str]:
             out.append(text)
     return out
 
-TIP_ICON = """
-<svg class="tip-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-  <path d="M9 21h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-  <path d="M10 17h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-  <path d="M12 3a6 6 0 0 0-3.6 10.8c.7.6 1.2 1.3 1.4 2.2h4.4c.2-.9.7-1.6 1.4-2.2A6 6 0 0 0 12 3Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>
-"""
+TIP_ICON_HTML = "<span class='tip-icon' aria-hidden='true'>&#128161;</span>"
 
 def _aio_tip_items(
     target_cited: str,
@@ -2351,7 +2346,7 @@ def _aio_tip_cell(status: str, tips: List[str]) -> str:
     return (
         "No"
         "<details class='details-link'>"
-        f"<summary><span class='link-like'>{TIP_ICON}Tips</span></summary>"
+        f"<summary><span class='link-like'>{TIP_ICON_HTML}Tips</span></summary>"
         f"<div class='details-box'>{tips_html}</div>"
         "</details>"
     )
