@@ -2316,21 +2316,30 @@ TIP_ICON = """
 </svg>
 """
 
-def _aio_tip_items(target_cited: str, serp_features: List[str], paa_questions: List[str]) -> List[str]:
+def _aio_tip_items(
+    target_cited: str,
+    serp_features: List[str],
+    paa_questions: List[str],
+    cited_domains: List[str],
+    top_comp_domains: List[str],
+) -> List[str]:
     if target_cited != "No":
         return []
     tips = []
     if "AI Overview" in serp_features:
-        tips.append("Add a Quick Answer at the top to target AI Overview.")
+        cited_txt = format_gap_list(cited_domains, limit=4) if cited_domains else "trusted sources"
+        tips.append(f"AI Overview is present; add a Quick Answer and cite {cited_txt}.")
     else:
-        tips.append("Add a concise Quick Answer at the top.")
+        tips.append("No AI Overview detected; focus on winning Featured Snippet + PAA.")
     if paa_questions:
         top_qs = "; ".join(paa_questions[:3])
         tips.append(f"Add a People Also Ask section with H3s answering: {top_qs}.")
     else:
         tips.append("Add a People Also Ask section with H3 questions + short answers.")
-    tips.append("Add recent facts and cite credible sources (inline citations).")
-    tips.append("Include a Key Facts box/table.")
+    if top_comp_domains:
+        comp_txt = format_gap_list(top_comp_domains, limit=4)
+        tips.append(f"Review top competitor coverage (e.g., {comp_txt}) and fill missing sections.")
+    tips.append("Include a Key Facts box/table near the top.")
     tips.append("Use intent-matching headings and avoid unsupported claims.")
     return tips
 
@@ -2420,7 +2429,7 @@ def build_ai_visibility_table(query: str, target_url: str, competitors: List[str
         serp_features_txt = format_gap_list(serp_features, limit=6) if serp_features else "None detected"
         paa_questions = _dataforseo_paa_questions(data)
         paa_txt = format_gap_list(paa_questions, limit=6) if paa_questions else "None detected"
-        tips = _aio_tip_items(target_cited, serp_features, paa_questions)
+        tips = _aio_tip_items(target_cited, serp_features, paa_questions, cited_domains, top_comp_domains)
 
         row = {
             "Target URL Cited in AIO": _aio_tip_cell(target_cited, tips),
@@ -2479,7 +2488,7 @@ def build_ai_visibility_table(query: str, target_url: str, competitors: List[str
     serp_features_txt = format_gap_list(serp_features, limit=6) if serp_features else "None detected"
     paa_questions = _serpapi_paa_questions(data)
     paa_txt = format_gap_list(paa_questions, limit=6) if paa_questions else "None detected"
-    tips = _aio_tip_items(target_cited, serp_features, paa_questions)
+    tips = _aio_tip_items(target_cited, serp_features, paa_questions, cited_domains, top_comp_domains)
 
     row = {
         "Target URL Cited in AIO": _aio_tip_cell(target_cited, tips),
