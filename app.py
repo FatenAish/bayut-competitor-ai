@@ -1,5 +1,6 @@
 import base64
 import html as html_lib
+import os
 import streamlit as st
 import requests
 import re
@@ -1690,6 +1691,12 @@ def update_mode_rows_header_first(
 # SEO ANALYSIS (YOUR SAME LOGIC)
 # =====================================================
 def _secrets_get(key: str, default=None):
+    try:
+        v = os.getenv(key)
+        if v is not None and v != "":
+            return v
+    except Exception:
+        pass
     try:
         if hasattr(st, "secrets") and key in st.secrets:
             return st.secrets[key]
