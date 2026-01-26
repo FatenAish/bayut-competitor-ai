@@ -2748,6 +2748,31 @@ def _internal_linking_quality(html: str, page_url: str, word_count: int) -> str:
         return "Moderate"
     return "Weak"
 
+def _normalize_internal_linking_quality(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty or "Internal Linking Quality" not in df.columns:
+        return df
+    def to_label(val):
+        if val is None:
+            return val
+        s = str(val).strip()
+        if not s:
+            return val
+        if s.isdigit():
+            n = int(s)
+        else:
+            try:
+                n = int(float(s))
+            except Exception:
+                return val
+        if n >= 8:
+            return "Strong"
+        if n >= 3:
+            return "Moderate"
+        return "Weak"
+    df = df.copy()
+    df["Internal Linking Quality"] = df["Internal Linking Quality"].map(to_label)
+    return df
+
 CREDIBLE_KEYWORDS = ["gov", "edu", "who.int", "un.org", "worldbank", "statista", "imf", "oecd", "bbc", "nytimes", "guardian", "reuters", "wsj", "ft"]
 
 def _credible_sources_count(html: str, page_url: str) -> int:
@@ -3109,6 +3134,7 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
         drop_cols = [c for c in df.columns if c.startswith("__")]
         if drop_cols:
             df = df.drop(columns=drop_cols)
+    df = _normalize_internal_linking_quality(df)
     html = df.to_html(index=False, escape=False, classes="data-table")
     st.markdown(html, unsafe_allow_html=True)
 
