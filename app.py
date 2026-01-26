@@ -2677,6 +2677,102 @@ def _count_source_links(html: str) -> int:
             cnt += 1
     return cnt
 
+GENERIC_ANCHORS = {
+    "click here",
+    "here",
+    "this",
+    "learn more",
+    "read more",
+    "more",
+    "see more",
+    "view more",
+    "view",
+    "details",
+    "link",
+}
+
+def _internal_linking_quality(html: str, page_url: str, word_count: int) -> str:
+    if not html:
+        return "Not available"
+    soup = BeautifulSoup(html, "html.parser")
+    for t in soup.find_all(list(IGNORE_TAGS)):
+        t.decompose()
+    root = soup.find("article") or soup.find("main") or soup
+    links = root.find_all("a", href=True)
+    base_dom = domain_of(page_url)
+    internal = 0
+    contextual = 0
+    for a in links:
+        href = (a.get("href") or "").strip()
+        if not href:
+            continue
+        if href.startswith(("#", "mailto:", "tel:", "javascript:")):
+            continue
+        is_internal = False
+        if href.startswith("/"):
+            is_internal = True
+        elif href.startswith("http"):
+            dom = urlparse(href).netloc.lower().replace("www.", "")
+            if base_dom and dom == base_dom:
+                is_internal = True
+        elif href.startswith("//"):
+            dom = urlparse("http:" + href).netloc.lower().replace("www.", "")
+            if base_dom and dom == base_dom:
+                is_internal = True
+        else:
+            is_internal = True
+        if not is_internal:
+            continue
+        internal += 1
+        anchor_text = clean(a.get_text(" ")).strip()
+        anchor_low = anchor_text.lower()
+        if anchor_text and anchor_low not in GENERIC_ANCHORS and len(anchor_text) >= 3:
+            contextual += 1
+    if internal == 0:
+        return "Weak"
+    per_1k = internal / max(word_count / 1000, 1) if word_count else internal
+    score = 0
+    if internal >= 8 or per_1k >= 4:
+        score += 2
+    elif internal >= 3 or per_1k >= 2:
+        score += 1
+    if internal >= 3:
+        ratio = contextual / internal
+        if ratio >= 0.6:
+            score += 1
+        elif ratio < 0.3:
+            score -= 1
+    if score >= 3:
+        return "Strong"
+    if score >= 1:
+        return "Moderate"
+    return "Weak"
+
+def _normalize_internal_linking_quality(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty or "Internal Linking Quality" not in df.columns:
+        return df
+    def to_label(val):
+        if val is None:
+            return val
+        s = str(val).strip()
+        if not s:
+            return val
+        if s.isdigit():
+            n = int(s)
+        else:
+            try:
+                n = int(float(s))
+            except Exception:
+                return val
+        if n >= 8:
+            return "Strong"
+        if n >= 3:
+            return "Moderate"
+        return "Weak"
+    df = df.copy()
+    df["Internal Linking Quality"] = df["Internal Linking Quality"].map(to_label)
+    return df
+
 CREDIBLE_KEYWORDS = ["gov", "edu", "who.int", "un.org", "worldbank", "statista", "imf", "oecd", "bbc", "nytimes", "guardian", "reuters", "wsj", "ft"]
 
 def _credible_sources_count(html: str, page_url: str) -> int:
@@ -2953,7 +3049,7 @@ def build_content_quality_table_from_seo(
         brief = _has_brief_summary(nodes, text)
         faqs = "Yes" if (fr and page_has_real_faq(fr, nodes)) else "No"
         refs = _references_section_present(nodes, html)
-        src_links = _count_source_links(html)
+        internal_quality = _internal_linking_quality(html, page_url, wc)
         data_backed = _data_backed_claims_count(text)
         latest_score = _latest_information_label(lm, text)
         outdated = _outdated_misleading_cell(lm, text)
@@ -2968,7 +3064,7 @@ def build_content_quality_table_from_seo(
             "Brief Summary": brief,
             "FAQs": faqs,
             "References Section": refs,
-            "Internal Linking Quality": str(src_links),
+            "Internal Linking Quality": internal_quality,
             "Data-Backed Claims": str(data_backed),
             "Latest Information Score": latest_score,
             "Outdated / Misleading Info": outdated,
@@ -3038,6 +3134,7 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
         drop_cols = [c for c in df.columns if c.startswith("__")]
         if drop_cols:
             df = df.drop(columns=drop_cols)
+    df = _normalize_internal_linking_quality(df)
     html = df.to_html(index=False, escape=False, classes="data-table")
     st.markdown(html, unsafe_allow_html=True)
 
