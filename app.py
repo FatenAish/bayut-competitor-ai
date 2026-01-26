@@ -2916,7 +2916,7 @@ def build_content_quality_table_from_seo(
     cols = [
         "Page","Word Count","Last Updated / Modified","Topic Cannibalization","Keyword Stuffing",
         "Brief Summary","FAQs","References Section",
-        "Source Links Count","Data-Backed Claims","Latest Information Score",
+        "Internal Linking Quality","Data-Backed Claims","Latest Information Score",
         "Outdated / Misleading Info","Styling / Layout",
     ]
 
@@ -2968,7 +2968,7 @@ def build_content_quality_table_from_seo(
             "Brief Summary": brief,
             "FAQs": faqs,
             "References Section": refs,
-            "Source Links Count": str(src_links),
+            "Internal Linking Quality": str(src_links),
             "Data-Backed Claims": str(data_backed),
             "Latest Information Score": latest_score,
             "Outdated / Misleading Info": outdated,
