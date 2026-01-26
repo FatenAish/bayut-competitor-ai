@@ -14,6 +14,12 @@ from difflib import SequenceMatcher
 import json
 import os
 
+try:
+    from wordfreq import zipf_frequency
+    WORDFREQ_OK = True
+except Exception:
+    WORDFREQ_OK = False
+
 def _env_or_secret(key: str, default=None):
     v = os.getenv(key)
     if v is not None and str(v).strip() != "":
@@ -2773,6 +2779,73 @@ def _normalize_internal_linking_quality(df: pd.DataFrame) -> pd.DataFrame:
     df["Internal Linking Quality"] = df["Internal Linking Quality"].map(to_label)
     return df
 
+SPELLCHECK_ALLOWLIST = {
+    "bayut",
+    "dubai",
+    "emirate",
+    "emirates",
+    "jumeirah",
+    "deira",
+    "mirdif",
+    "dubailand",
+    "sharjah",
+    "ajman",
+    "fujairah",
+    "khaimah",
+    "abudhabi",
+    "abu",
+    "dhabi",
+    "marina",
+    "downtown",
+    "jbr",
+    "jlt",
+}
+_CONSONANT_RUN_RE = re.compile(r"[bcdfghjklmnpqrstvwxyz]{5,}")
+
+def _looks_like_misspelling(word: str) -> bool:
+    if re.search(r"(.)\1\1", word):
+        return True
+    if not any(c in "aeiouy" for c in word):
+        return True
+    if _CONSONANT_RUN_RE.search(word):
+        return True
+    return False
+
+def _misspelling_and_wrong_words(text: str) -> str:
+    if not text:
+        return "Not available"
+    words = re.findall(r"[A-Za-z][A-Za-z']{2,}", text or "")
+    if not words:
+        return "Not available"
+    issues = set()
+    for w in words[:4000]:
+        if w.isupper() or w[0].isupper():
+            continue
+        w = w.lower().strip("'")
+        if w.endswith("'s"):
+            w = w[:-2]
+        if len(w) < 4:
+            continue
+        if w in SPELLCHECK_ALLOWLIST:
+            continue
+        if _looks_like_misspelling(w):
+            issues.add(w)
+            continue
+        if WORDFREQ_OK:
+            if zipf_frequency(w, "en") < 2.2:
+                issues.add(w)
+        else:
+            if re.search(r"(.)\1\1", w):
+                issues.add(w)
+        if len(issues) >= 200:
+            break
+    count = len(issues)
+    if count == 0:
+        return "None detected"
+    if count == 1:
+        return "1 issue"
+    return f"{count} issues"
+
 CREDIBLE_KEYWORDS = ["gov", "edu", "who.int", "un.org", "worldbank", "statista", "imf", "oecd", "bbc", "nytimes", "guardian", "reuters", "wsj", "ft"]
 
 def _credible_sources_count(html: str, page_url: str) -> int:
@@ -3012,7 +3085,7 @@ def build_content_quality_table_from_seo(
     cols = [
         "Page","Word Count","Last Updated / Modified","Topic Cannibalization","Keyword Stuffing",
         "Brief Summary","FAQs","References Section",
-        "Internal Linking Quality","Data-Backed Claims","Latest Information Score",
+        "Internal Linking Quality","Misspelling & Wrong Words","Data-Backed Claims","Latest Information Score",
         "Outdated / Misleading Info","Styling / Layout",
     ]
 
@@ -3050,6 +3123,8 @@ def build_content_quality_table_from_seo(
         faqs = "Yes" if (fr and page_has_real_faq(fr, nodes)) else "No"
         refs = _references_section_present(nodes, html)
         internal_quality = _internal_linking_quality(html, page_url, wc)
+        is_bayut = page.strip().lower() == "bayut" or domain_of(page_url).endswith("bayut.com")
+        misspell = _misspelling_and_wrong_words(text) if is_bayut else "-"
         data_backed = _data_backed_claims_count(text)
         latest_score = _latest_information_label(lm, text)
         outdated = _outdated_misleading_cell(lm, text)
@@ -3065,6 +3140,7 @@ def build_content_quality_table_from_seo(
             "FAQs": faqs,
             "References Section": refs,
             "Internal Linking Quality": internal_quality,
+            "Misspelling & Wrong Words": misspell,
             "Data-Backed Claims": str(data_backed),
             "Latest Information Score": latest_score,
             "Outdated / Misleading Info": outdated,
