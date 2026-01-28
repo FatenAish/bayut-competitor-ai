@@ -1,6 +1,8 @@
-streamlit>=1.35.0
-requests>=2.32.0
-beautifulsoup4>=4.12.0
-lxml>=5.2.0
-scikit-learn
-openai>=1.40.0
+streamlit
+requests
+beautifulsoup4
+lxml
+pandas
+openpyxl
+langchain-community
+faiss-cpu
