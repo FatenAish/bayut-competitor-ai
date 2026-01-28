@@ -6,3 +6,4 @@ pandas
 openpyxl
 langchain-community
 faiss-cpu
+langchain-openai
