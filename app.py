@@ -643,11 +643,41 @@ NONCONTENT_TOKENS = {
     "table-of-contents",
     "breadcrumb",
     "breadcrumbs",
+    "post_meta",
+    "meta",
     "related",
     "recommend",
     "recommended",
     "share",
     "social",
+    "newsletter",
+    "subscribe",
+    "signup",
+    "form",
+    "sidebar",
+    "widget",
+    "author",
+    "comments",
+    "listing",
+    "listings",
+    "property-slider",
+    "carousel",
+    "swiper",
+    "gallery",
+    "slider",
+    "sponsored",
+    "promo",
+    "advert",
+}
+
+CONTENT_CLASS_HINTS = {
+    "entry-content",
+    "post-content",
+    "article-content",
+    "article-body",
+    "post-body",
+    "blog-content",
+    "content-body",
 }
 
 
@@ -1953,7 +1983,38 @@ def _safe_tag_attr(el, key: str):
         return None
     return None
 
-def content_text_from_html(html: str) -> str:
+def _find_content_root(soup: BeautifulSoup):
+    candidates = []
+    for tag in soup.find_all(attrs={"itemprop": re.compile(r"articleBody", re.I)}):
+        candidates.append(tag)
+    for el in soup.find_all(["div", "section", "article"]):
+        cls = " ".join(_safe_tag_attr(el, "class") or []).lower()
+        if any(hint in cls for hint in CONTENT_CLASS_HINTS):
+            candidates.append(el)
+    for el in [soup.find("article"), soup.find("main")]:
+        if el:
+            candidates.append(el)
+    if not candidates:
+        return soup
+    def score(el) -> int:
+        try:
+            text = clean(el.get_text(" "))
+        except Exception:
+            return 0
+        return len(re.findall(r"\b\w+\b", text))
+    return max(candidates, key=score)
+
+def _looks_like_heading_line(line: str) -> bool:
+    words = re.findall(r"[A-Za-z]{2,}", line)
+    if not words:
+        return True
+    if re.fullmatch(r"[A-Z0-9\\s&'\\-:]{6,}", line):
+        return True
+    if not re.search(r"[\\.?!,]", line) and len(words) <= 12:
+        return True
+    return False
+
+def content_text_from_html(html: str, include_headings: bool = False) -> str:
     if not html:
         return ""
     soup = BeautifulSoup(html, "html.parser")
@@ -1964,13 +2025,24 @@ def content_text_from_html(html: str) -> str:
         el_id = (_safe_tag_attr(el, "id") or "").lower()
         if any(tok in cls or tok in el_id for tok in NONCONTENT_TOKENS):
             el.decompose()
-    root = soup.find("article") or soup.find("main") or soup
+    root = _find_content_root(soup)
     chunks = []
-    for tag in root.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p"]):
-        chunks.append(tag.get_text(" "))
+    tags = ["p"]
+    if include_headings:
+        tags = ["h1", "h2", "h3", "h4", "h5", "h6", "p"]
+    for tag in root.find_all(tags):
+        text = clean(tag.get_text(" "))
+        if not text:
+            continue
+        text_low = text.lower()
+        if text_low.startswith(("updated:", "last updated:", "published", "min read")):
+            continue
+        if not include_headings and tag.name != "p":
+            continue
+        chunks.append(text)
     return clean(" ".join(chunks))
 
-def content_text_from_plaintext(text: str) -> str:
+def content_text_from_plaintext(text: str, include_headings: bool = False) -> str:
     if not text:
         return ""
     keep = []
@@ -1992,6 +2064,8 @@ def content_text_from_plaintext(text: str) -> str:
         if re.match(r"^[-*•]\\s+", s):
             continue
         if re.match(r"^\\d+[\\).:-]\\s+", s):
+            continue
+        if not include_headings and _looks_like_heading_line(s):
             continue
         keep.append(s)
     return clean(" ".join(keep))
@@ -3419,11 +3493,14 @@ def build_content_quality_table_from_seo(
 
         html = (fr.html if fr else "") or ""
         text = (fr.text if fr else "") or ""
-        content_text = content_text_from_html(html) if html else ""
+        content_text = content_text_from_html(html, include_headings=False) if html else ""
         if not content_text:
-            content_text = content_text_from_plaintext(text)
+            content_text = content_text_from_plaintext(text, include_headings=False)
+        wc_text = content_text_from_html(html, include_headings=True) if html else ""
+        if not wc_text:
+            wc_text = content_text_from_plaintext(text, include_headings=True)
 
-        wc = word_count_from_text(content_text)
+        wc = word_count_from_text(wc_text)
         lm = get_last_modified(page_url, html, text)
 
         fkw = clean(manual_query) if clean(manual_query) else str(r.get("__fkw", ""))
