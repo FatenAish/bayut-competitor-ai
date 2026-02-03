@@ -2699,6 +2699,13 @@ def _extract_labeled_date_candidates(html: str) -> List[Tuple[str, str]]:
         date_txt = _first_date_in_text(snippet) or snippet
         if date_txt:
             out.append((date_txt, "modified"))
+    for m in re.finditer(r"(published\s*time|published\s*on|published|date\s*published)\s*[:\-]?\s*([^\n]{0,80})", text, re.I):
+        snippet = clean(m.group(2))
+        if not snippet:
+            continue
+        date_txt = _first_date_in_text(snippet) or snippet
+        if date_txt:
+            out.append((date_txt, "published"))
     return out
 
 def _collect_jsonld_dates(obj, out: List[Tuple[str, str]]):
@@ -2729,8 +2736,14 @@ def _pick_best_date_candidate(candidates: List[Tuple[str, str]]) -> str:
 def _extract_last_modified_candidates_from_html(html: str) -> List[Tuple[str, str]]:
     if not html:
         return []
-    soup = BeautifulSoup(html, "html.parser")
     candidates: List[Tuple[str, str]] = []
+    for m in re.finditer(r'"dateModified"\s*:\s*"([^"]+)"', html, re.I):
+        candidates.append((m.group(1), "modified"))
+    for m in re.finditer(r'"datePublished"\s*:\s*"([^"]+)"', html, re.I):
+        candidates.append((m.group(1), "published"))
+    for m in re.finditer(r'"dateCreated"\s*:\s*"([^"]+)"', html, re.I):
+        candidates.append((m.group(1), "published"))
+    soup = BeautifulSoup(html, "html.parser")
     candidates.extend(_extract_labeled_date_candidates(html))
 
     meta_candidates = [
@@ -3375,25 +3388,21 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
         if drop_cols:
             df = df.drop(columns=drop_cols)
     df = _normalize_internal_linking_quality(df)
+    if "Internal linking" in df.columns:
+        rule_lines = [
+            "Counts internal links inside main content (same domain or relative; ignores mailto, tel, and # links).",
+            "+2 if internal links >= 8 or >= 4 per 1k words.",
+            "+1 if internal links >= 3 or >= 2 per 1k words.",
+            "If internal links >= 3, add +1 when contextual anchors >= 60%, or -1 when < 30%.",
+            "Strong = score >= 3, Medium = score >= 1, Weak otherwise.",
+        ]
+        rule_title = "Internal linking rule: " + " ".join(rule_lines)
+        header_html = (
+            f"<span title='{html_lib.escape(rule_title)}'>Internal linking ⓘ</span>"
+        )
+        df = df.rename(columns={"Internal linking": header_html})
     html = df.to_html(index=False, escape=False, classes="data-table")
     st.markdown(html, unsafe_allow_html=True)
-
-def render_internal_linking_rule():
-    rule_items = [
-        "Counts internal links inside main content (same domain or relative; ignores mailto, tel, and # links).",
-        "+2 if internal links >= 8 or >= 4 per 1k words.",
-        "+1 if internal links >= 3 or >= 2 per 1k words.",
-        "If internal links >= 3, add +1 when contextual anchors >= 60%, or -1 when < 30%.",
-        "Strong = score >= 3, Medium = score >= 1, Weak otherwise.",
-    ]
-    rule_html = "".join(f"<li>{html_lib.escape(item)}</li>" for item in rule_items)
-    st.markdown(
-        "<details class='details-link'>"
-        "<summary><span class='link-like'>Internal linking rule</span></summary>"
-        f"<div class='details-box'><ul>{rule_html}</ul></div>"
-        "</details>",
-        unsafe_allow_html=True,
-    )
 
 ICON_LINK = """
 <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -3637,7 +3646,6 @@ if st.session_state.mode == "update":
         if st.session_state.cq_update_df is None or st.session_state.cq_update_df.empty:
             st.info("Run analysis to see Content Quality signals.")
         else:
-            render_internal_linking_rule()
             render_table(st.session_state.cq_update_df, drop_internal_url=True)
 
         section_header_pill("SEO Analysis")
@@ -3769,7 +3777,6 @@ else:
         if st.session_state.cq_new_df is None or st.session_state.cq_new_df.empty:
             st.info("Generate competitor coverage to see Content Quality signals.")
         else:
-            render_internal_linking_rule()
             render_table(st.session_state.cq_new_df, drop_internal_url=True)
 
         section_header_pill("SEO Analysis")
