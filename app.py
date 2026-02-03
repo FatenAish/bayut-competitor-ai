@@ -3471,7 +3471,7 @@ def build_content_quality_table_from_seo(
         return pd.DataFrame()
 
     cols = [
-        "Page","Word Count","Last Updated / Modified","Topic Cannibalization","Keyword Stuffing",
+        "Page","Last Updated / Modified","Topic Cannibalization","Keyword Stuffing",
         "Brief Summary","FAQs","References Section",
         "Internal linking","Misspelling & Wrong Words","Data-Backed Claims","Latest Information Score",
         "Outdated / Misleading Info","Styling / Layout",
@@ -3526,7 +3526,6 @@ def build_content_quality_table_from_seo(
 
         rows.append({
             "Page": page,
-            "Word Count": str(wc) if wc else "Not available",
             "Last Updated / Modified": lm,
             "Topic Cannibalization": topic_cann,
             "Keyword Stuffing": kw_stuff,
