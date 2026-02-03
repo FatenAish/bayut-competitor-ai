@@ -2008,7 +2008,7 @@ def _looks_like_heading_line(line: str) -> bool:
     words = re.findall(r"[A-Za-z]{2,}", line)
     if not words:
         return True
-    if re.fullmatch(r"[A-Z0-9\\s&'\\-:]{6,}", line):
+    if re.fullmatch(r"[A-Z0-9\s&':-]{6,}", line):
         return True
     if not re.search(r"[\\.?!,]", line) and len(words) <= 12:
         return True
@@ -3471,7 +3471,7 @@ def build_content_quality_table_from_seo(
         return pd.DataFrame()
 
     cols = [
-        "Page","Word Count","Last Updated / Modified","Topic Cannibalization","Keyword Stuffing",
+        "Page","Last Updated / Modified","Topic Cannibalization","Keyword Stuffing",
         "Brief Summary","FAQs","References Section",
         "Internal linking","Misspelling & Wrong Words","Data-Backed Claims","Latest Information Score",
         "Outdated / Misleading Info","Styling / Layout",
@@ -3526,7 +3526,6 @@ def build_content_quality_table_from_seo(
 
         rows.append({
             "Page": page,
-            "Word Count": str(wc) if wc else "Not available",
             "Last Updated / Modified": lm,
             "Topic Cannibalization": topic_cann,
             "Keyword Stuffing": kw_stuff,
