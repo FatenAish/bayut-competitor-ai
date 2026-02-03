@@ -2751,18 +2751,31 @@ def _internal_linking_quality(html: str, page_url: str, word_count: int) -> str:
     if score >= 3:
         return "Strong"
     if score >= 1:
-        return "Moderate"
+        return "Medium"
     return "Weak"
 
 def _normalize_internal_linking_quality(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty or "Internal Linking Quality" not in df.columns:
+    if df is None or df.empty:
         return df
+    df = df.copy()
+    if "Internal Linking Quality" in df.columns and "Internal linking" not in df.columns:
+        df = df.rename(columns={"Internal Linking Quality": "Internal linking"})
+    if "Internal linking" not in df.columns:
+        return df
+
     def to_label(val):
         if val is None:
             return val
         s = str(val).strip()
         if not s:
             return val
+        s_low = s.lower()
+        if s_low == "strong":
+            return "Strong"
+        if s_low in {"moderate", "medium"}:
+            return "Medium"
+        if s_low == "weak":
+            return "Weak"
         if s.isdigit():
             n = int(s)
         else:
@@ -2773,10 +2786,10 @@ def _normalize_internal_linking_quality(df: pd.DataFrame) -> pd.DataFrame:
         if n >= 8:
             return "Strong"
         if n >= 3:
-            return "Moderate"
+            return "Medium"
         return "Weak"
-    df = df.copy()
-    df["Internal Linking Quality"] = df["Internal Linking Quality"].map(to_label)
+
+    df["Internal linking"] = df["Internal linking"].map(to_label)
     return df
 
 SPELLCHECK_ALLOWLIST = {
@@ -3085,7 +3098,7 @@ def build_content_quality_table_from_seo(
     cols = [
         "Page","Word Count","Last Updated / Modified","Topic Cannibalization","Keyword Stuffing",
         "Brief Summary","FAQs","References Section",
-        "Internal Linking Quality","Misspelling & Wrong Words","Data-Backed Claims","Latest Information Score",
+        "Internal linking","Misspelling & Wrong Words","Data-Backed Claims","Latest Information Score",
         "Outdated / Misleading Info","Styling / Layout",
     ]
 
@@ -3139,7 +3152,7 @@ def build_content_quality_table_from_seo(
             "Brief Summary": brief,
             "FAQs": faqs,
             "References Section": refs,
-            "Internal Linking Quality": internal_quality,
+            "Internal linking": internal_quality,
             "Misspelling & Wrong Words": misspell,
             "Data-Backed Claims": str(data_backed),
             "Latest Information Score": latest_score,
@@ -3213,6 +3226,23 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
     df = _normalize_internal_linking_quality(df)
     html = df.to_html(index=False, escape=False, classes="data-table")
     st.markdown(html, unsafe_allow_html=True)
+
+def render_internal_linking_rule():
+    rule_items = [
+        "Counts internal links inside main content (same domain or relative; ignores mailto, tel, and # links).",
+        "+2 if internal links >= 8 or >= 4 per 1k words.",
+        "+1 if internal links >= 3 or >= 2 per 1k words.",
+        "If internal links >= 3, add +1 when contextual anchors >= 60%, or -1 when < 30%.",
+        "Strong = score >= 3, Medium = score >= 1, Weak otherwise.",
+    ]
+    rule_html = "".join(f"<li>{html_lib.escape(item)}</li>" for item in rule_items)
+    st.markdown(
+        "<details class='details-link'>"
+        "<summary><span class='link-like'>Internal linking rule</span></summary>"
+        f"<div class='details-box'><ul>{rule_html}</ul></div>"
+        "</details>",
+        unsafe_allow_html=True,
+    )
 
 ICON_LINK = """
 <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -3456,6 +3486,7 @@ if st.session_state.mode == "update":
         if st.session_state.cq_update_df is None or st.session_state.cq_update_df.empty:
             st.info("Run analysis to see Content Quality signals.")
         else:
+            render_internal_linking_rule()
             render_table(st.session_state.cq_update_df, drop_internal_url=True)
 
         section_header_pill("SEO Analysis")
@@ -3587,6 +3618,7 @@ else:
         if st.session_state.cq_new_df is None or st.session_state.cq_new_df.empty:
             st.info("Generate competitor coverage to see Content Quality signals.")
         else:
+            render_internal_linking_rule()
             render_table(st.session_state.cq_new_df, drop_internal_url=True)
 
         section_header_pill("SEO Analysis")
