@@ -3487,20 +3487,29 @@ def _topic_similarity_score(a_nodes: List[dict], b_nodes: List[dict]) -> float:
         jacc = 0.0
     return max(h1_score, jacc)
 
-def _bayut_topic_cannibalization_label(page_url: str, bayut_nodes_map: Dict[str, List[dict]]) -> str:
-    target_nodes = bayut_nodes_map.get(page_url) or []
+def _domain_topic_cannibalization_label(
+    page_url: str,
+    domain_nodes_map: Dict[str, Dict[str, List[dict]]],
+) -> str:
+    dom = domain_of(page_url)
+    if not dom:
+        return "Not available"
+    url_map = domain_nodes_map.get(dom) or {}
+    if len(url_map) < 2:
+        return "Not available"
+    target_nodes = url_map.get(page_url) or []
     if not target_nodes:
         return "Not available"
     overlap = 0
-    for url, nodes in bayut_nodes_map.items():
+    for url, nodes in url_map.items():
         if url == page_url:
             continue
         if _topic_similarity_score(target_nodes, nodes) >= 0.7:
             overlap += 1
     if overlap >= 2:
-        return f"High risk (≈{overlap} other Bayut pages)"
+        return f"High risk (≈{overlap} other pages)"
     if overlap >= 1:
-        return "Medium risk (≈1 other Bayut page)"
+        return "Medium risk (≈1 other page)"
     return "Low risk"
 
 def build_content_quality_table_from_seo(
@@ -3519,13 +3528,17 @@ def build_content_quality_table_from_seo(
         "Outdated / Misleading Info","Styling / Layout",
     ]
 
-    bayut_nodes_map = {}
+    domain_nodes_map: Dict[str, Dict[str, List[dict]]] = {}
     for url, tr in (tree_map_by_url or {}).items():
-        if not url or not domain_of(url).endswith("bayut.com"):
+        if not url:
+            continue
+        dom = domain_of(url)
+        if not dom:
             continue
         nodes = tr.get("nodes", []) if isinstance(tr, dict) else []
-        if nodes:
-            bayut_nodes_map[url] = nodes
+        if not nodes:
+            continue
+        domain_nodes_map.setdefault(dom, {})[url] = nodes
 
     rows = []
     for _, r in seo_df.iterrows():
@@ -3561,10 +3574,7 @@ def build_content_quality_table_from_seo(
             rep_i = 0
 
         is_bayut = page.strip().lower() == "bayut" or domain_of(page_url).endswith("bayut.com")
-        if is_bayut:
-            topic_cann = _bayut_topic_cannibalization_label(page_url, bayut_nodes_map)
-        else:
-            topic_cann = "-"
+        topic_cann = _domain_topic_cannibalization_label(page_url, domain_nodes_map)
         kw_stuff = _kw_stuffing_label(wc, rep_i)
 
         brief = _has_brief_summary(nodes, text)
