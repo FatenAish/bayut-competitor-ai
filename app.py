@@ -424,6 +424,14 @@ div[data-testid="stForm"] form{
 .details-link{
   margin-top: 4px;
 }
+.details-link.inline{
+  display: inline-block;
+  margin: 0 0 0 6px;
+  vertical-align: middle;
+}
+.details-link.inline summary{
+  font-weight: 700;
+}
 .details-link summary{
   cursor: pointer;
   color: hsl(var(--primary));
@@ -3396,9 +3404,13 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
             "If internal links >= 3, add +1 when contextual anchors >= 60%, or -1 when < 30%.",
             "Strong = score >= 3, Medium = score >= 1, Weak otherwise.",
         ]
-        rule_title = "Internal linking rule: " + " ".join(rule_lines)
+        rule_html = "".join(f"<li>{html_lib.escape(item)}</li>" for item in rule_lines)
         header_html = (
-            f"<span title='{html_lib.escape(rule_title)}'>Internal linking ⓘ</span>"
+            "Internal linking "
+            "<details class='details-link inline'>"
+            "<summary><span class='link-like'>ⓘ</span></summary>"
+            f"<div class='details-box'><ul>{rule_html}</ul></div>"
+            "</details>"
         )
         df = df.rename(columns={"Internal linking": header_html})
     html = df.to_html(index=False, escape=False, classes="data-table")
