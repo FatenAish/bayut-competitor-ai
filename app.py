@@ -2008,7 +2008,7 @@ def _looks_like_heading_line(line: str) -> bool:
     words = re.findall(r"[A-Za-z]{2,}", line)
     if not words:
         return True
-    if re.fullmatch(r"[A-Z0-9\\s&'\\-:]{6,}", line):
+    if re.fullmatch(r"[A-Z0-9\s&':-]{6,}", line):
         return True
     if not re.search(r"[\\.?!,]", line) and len(words) <= 12:
         return True
