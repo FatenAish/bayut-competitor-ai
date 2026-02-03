@@ -2752,10 +2752,23 @@ def _parse_date_string(raw: str) -> Optional[datetime]:
                 continue
     return None
 
-def _extract_labeled_date_candidates(html: str) -> List[Tuple[str, str]]:
+def _extract_primary_date_candidate(html: str) -> Optional[Tuple[str, str]]:
     if not html:
+        return None
+    m = re.search(r"<h1[^>]*>.*?</h1>", html, re.I | re.S)
+    if not m:
+        return None
+    segment = html[m.end():m.end() + 2500]
+    segment_text = re.sub(r"<[^>]+>", " ", segment)
+    candidates = _extract_labeled_date_candidates_from_text(segment_text, first_only=True)
+    if not candidates:
+        return None
+    val, kind = candidates[0]
+    return (val, f"{kind}_primary")
+
+def _extract_labeled_date_candidates_from_text(text: str, first_only: bool = False) -> List[Tuple[str, str]]:
+    if not text:
         return []
-    text = re.sub(r"<[^>]+>", " ", html)
     out = []
     for m in re.finditer(r"(last\s*updated|updated\s*on|updated)\s*[:\-]?\s*([^\n]{0,80})", text, re.I):
         snippet = clean(m.group(2))
@@ -2764,6 +2777,8 @@ def _extract_labeled_date_candidates(html: str) -> List[Tuple[str, str]]:
         date_txt = _first_date_in_text(snippet) or snippet
         if date_txt:
             out.append((date_txt, "modified"))
+            if first_only:
+                break
     for m in re.finditer(r"(published\s*time|published\s*on|published|date\s*published)\s*[:\-]?\s*([^\n]{0,80})", text, re.I):
         snippet = clean(m.group(2))
         if not snippet:
@@ -2771,7 +2786,30 @@ def _extract_labeled_date_candidates(html: str) -> List[Tuple[str, str]]:
         date_txt = _first_date_in_text(snippet) or snippet
         if date_txt:
             out.append((date_txt, "published"))
+            if first_only:
+                break
     return out
+
+def _extract_labeled_date_candidates(html: str) -> List[Tuple[str, str]]:
+    if not html:
+        return []
+    soup = BeautifulSoup(html, "html.parser")
+    scopes = []
+    h1 = soup.find("h1")
+    if h1:
+        scopes.extend([h1.parent, getattr(h1.parent, "parent", None), getattr(getattr(h1.parent, "parent", None), "parent", None)])
+    main = soup.find("article") or soup.find("main")
+    if main:
+        scopes.append(main)
+    scopes.append(soup)
+    for scope in scopes:
+        if not scope:
+            continue
+        text = scope.get_text(" ", strip=True)
+        candidates = _extract_labeled_date_candidates_from_text(text, first_only=True)
+        if candidates:
+            return candidates
+    return []
 
 def _collect_jsonld_dates(obj, out: List[Tuple[str, str]]):
     if isinstance(obj, dict):
@@ -2793,7 +2831,13 @@ def _pick_best_date_candidate(candidates: List[Tuple[str, str]]) -> str:
             parsed.append((dt, clean(val), kind))
     if not parsed:
         return ""
-    modified = [p for p in parsed if p[2] == "modified"]
+    primary = [p for p in parsed if p[2].endswith("_primary")]
+    if primary:
+        modified_primary = [p for p in primary if p[2].startswith("modified")]
+        if modified_primary:
+            return max(modified_primary, key=lambda x: x[0])[1]
+        return max(primary, key=lambda x: x[0])[1]
+    modified = [p for p in parsed if p[2].startswith("modified")]
     if modified:
         return max(modified, key=lambda x: x[0])[1]
     return max(parsed, key=lambda x: x[0])[1]
@@ -2802,6 +2846,9 @@ def _extract_last_modified_candidates_from_html(html: str) -> List[Tuple[str, st
     if not html:
         return []
     candidates: List[Tuple[str, str]] = []
+    primary = _extract_primary_date_candidate(html)
+    if primary:
+        candidates.append(primary)
     for m in re.finditer(r'"dateModified"\s*:\s*"([^"]+)"', html, re.I):
         candidates.append((m.group(1), "modified"))
     for m in re.finditer(r'"datePublished"\s*:\s*"([^"]+)"', html, re.I):
@@ -2858,7 +2905,7 @@ def get_last_modified(url: str, html: str, text: str = "") -> str:
     if html:
         candidates.extend(_extract_last_modified_candidates_from_html(html))
     if text:
-        candidates.extend(_extract_labeled_date_candidates(text))
+        candidates.extend(_extract_labeled_date_candidates_from_text(text, first_only=True))
     v = _pick_best_date_candidate(candidates)
     if v:
         return v
