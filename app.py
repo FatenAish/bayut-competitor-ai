@@ -2919,6 +2919,29 @@ GENERIC_ANCHORS = {
     "link",
 }
 
+INTENT_STOPWORDS = {
+    "the","and","for","with","from","that","this","these","those","your","you","our","their","them","they","into",
+    "of","in","on","to","a","an","is","are","was","were","be","as","at","by","or","it","its","about","near","vs",
+}
+
+def _intent_tokens_from_html(html: str, page_url: str) -> List[str]:
+    soup = BeautifulSoup(html, "html.parser")
+    h1 = soup.find("h1")
+    h1_text = clean(h1.get_text(" ")) if h1 else ""
+    title = ""
+    title_tag = soup.find("title")
+    if title_tag:
+        title = clean(title_tag.get_text(" "))
+    slug = urlparse(page_url).path.strip("/").split("/")[-1]
+    raw = " ".join([h1_text, title, slug.replace("-", " ")])
+    tokens = []
+    for w in re.findall(r"[A-Za-z]{3,}", raw.lower()):
+        if w in INTENT_STOPWORDS:
+            continue
+        if w not in tokens:
+            tokens.append(w)
+    return tokens[:12]
+
 def _internal_linking_quality(html: str, page_url: str, word_count: int) -> str:
     if not html:
         return "Not available"
@@ -2928,14 +2951,18 @@ def _internal_linking_quality(html: str, page_url: str, word_count: int) -> str:
     root = soup.find("article") or soup.find("main") or soup
     links = root.find_all("a", href=True)
     base_dom = domain_of(page_url)
+    total_links = 0
     internal = 0
     contextual = 0
+    intent_support = 0
+    intent_tokens = _intent_tokens_from_html(html, page_url)
     for a in links:
         href = (a.get("href") or "").strip()
         if not href:
             continue
         if href.startswith(("#", "mailto:", "tel:", "javascript:")):
             continue
+        total_links += 1
         is_internal = False
         if href.startswith("/"):
             is_internal = True
@@ -2956,23 +2983,24 @@ def _internal_linking_quality(html: str, page_url: str, word_count: int) -> str:
         anchor_low = anchor_text.lower()
         if anchor_text and anchor_low not in GENERIC_ANCHORS and len(anchor_text) >= 3:
             contextual += 1
+        if intent_tokens and anchor_text:
+            if any(tok in anchor_low for tok in intent_tokens):
+                intent_support += 1
     if internal == 0:
         return "Weak"
-    per_1k = internal / max(word_count / 1000, 1) if word_count else internal
     score = 0
-    if internal >= 8 or per_1k >= 4:
-        score += 2
-    elif internal >= 3 or per_1k >= 2:
-        score += 1
-    if internal >= 3:
-        ratio = contextual / internal
-        if ratio >= 0.6:
+    if total_links > 0:
+        internal_ratio = internal / max(total_links, 1)
+        if internal_ratio >= 0.6 and internal >= 2:
             score += 1
-        elif ratio < 0.3:
-            score -= 1
-    if score >= 3:
+    ratio = contextual / internal
+    if ratio >= 0.6:
+        score += 1
+    if intent_support >= 2 or (intent_support / internal) >= 0.4:
+        score += 1
+    if score >= 2:
         return "Strong"
-    if score >= 1:
+    if score == 1:
         return "Medium"
     return "Weak"
 
@@ -3455,11 +3483,10 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
     df = _normalize_internal_linking_quality(df)
     if "Internal linking" in df.columns:
         rule_lines = [
-            "Counts internal links inside main content (same domain or relative; ignores mailto, tel, and # links).",
-            "+2 if internal links >= 8 or >= 4 per 1k words.",
-            "+1 if internal links >= 3 or >= 2 per 1k words.",
-            "If internal links >= 3, add +1 when contextual anchors >= 60%, or -1 when < 30%.",
-            "Strong = score >= 3, Medium = score >= 1, Weak otherwise.",
+            "+1 if most links point to relevant internal pages.",
+            "+1 if anchor texts are descriptive (not generic).",
+            "+1 if links support the page's main intent.",
+            "Strong = score >= 2, Medium = score = 1, Weak = score = 0.",
         ]
         rule_html = "".join(f"<li>{html_lib.escape(item)}</li>" for item in rule_lines)
         header_html = (
