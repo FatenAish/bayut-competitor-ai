@@ -1886,8 +1886,9 @@ def content_text_from_html(html: str) -> str:
     for t in soup.find_all(list(IGNORE_TAGS) + list(LIST_TAGS)):
         t.decompose()
     for el in soup.find_all(True):
-        cls = " ".join(el.get("class") or []).lower()
-        el_id = (el.get("id") or "").lower()
+        attrs = getattr(el, "attrs", None) or {}
+        cls = " ".join(attrs.get("class") or []).lower()
+        el_id = (attrs.get("id") or "").lower()
         if any(tok in cls or tok in el_id for tok in NONCONTENT_TOKENS):
             el.decompose()
     root = soup.find("article") or soup.find("main") or soup
