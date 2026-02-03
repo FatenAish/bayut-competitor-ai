@@ -3495,8 +3495,6 @@ def _domain_topic_cannibalization_label(
     if not dom:
         return "Not available"
     url_map = domain_nodes_map.get(dom) or {}
-    if len(url_map) < 2:
-        return "Not available"
     target_nodes = url_map.get(page_url) or []
     if not target_nodes:
         return "Not available"
