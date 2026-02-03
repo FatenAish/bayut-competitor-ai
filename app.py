@@ -9,6 +9,8 @@ from urllib.parse import quote_plus, urlparse
 import pandas as pd
 import time, random, hashlib
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Optional, Dict, Tuple, List
 from difflib import SequenceMatcher
 import json
@@ -570,6 +572,7 @@ DEFAULT_HEADERS = {
 }
 
 IGNORE_TAGS = {"nav", "footer", "header", "aside", "script", "style", "noscript"}
+LIST_TAGS = {"ul", "ol", "li", "dl", "dt", "dd"}
 
 
 def clean(text: str) -> str:
@@ -1865,6 +1868,18 @@ def word_count_from_text(text: str) -> int:
         return 0
     return len(re.findall(r"\b\w+\b", t))
 
+def content_text_from_html(html: str) -> str:
+    if not html:
+        return ""
+    soup = BeautifulSoup(html, "html.parser")
+    for t in soup.find_all(list(IGNORE_TAGS) + list(LIST_TAGS)):
+        t.decompose()
+    root = soup.find("article") or soup.find("main") or soup
+    chunks = []
+    for tag in root.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p"]):
+        chunks.append(tag.get_text(" "))
+    return clean(" ".join(chunks))
+
 def compute_kw_repetition(text: str, phrase: str) -> str:
     if not text or not phrase or phrase == "Not available":
         return "Not available"
@@ -2560,68 +2575,137 @@ def _head_last_modified(url: str) -> str:
     except Exception:
         return ""
 
+DATE_TEXT_PATTERNS = [
+    r"\b\d{4}-\d{2}-\d{2}\b",
+    r"\b\d{4}/\d{1,2}/\d{1,2}\b",
+    r"\b\d{1,2}/\d{1,2}/\d{4}\b",
+    r"\b\d{1,2}\s+[A-Za-z]{3,9},?\s+\d{4}\b",
+    r"\b[A-Za-z]{3,9}\s+\d{1,2},\s+\d{4}\b",
+]
+
+def _first_date_in_text(text: str) -> str:
+    for pat in DATE_TEXT_PATTERNS:
+        m = re.search(pat, text, re.I)
+        if m:
+            return m.group(0)
+    return ""
+
+def _ensure_tz(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+def _parse_date_string(raw: str) -> Optional[datetime]:
+    s = clean(raw or "")
+    if not s:
+        return None
+    s = re.sub(r"\b(\d{1,2})(st|nd|rd|th)\b", r"\1", s, flags=re.I)
+    s = re.sub(r"(?i)^(last\s*)?updated\s*(on)?\s*[:\-]?\s*", "", s).strip()
+    try:
+        dt = parsedate_to_datetime(s)
+        if dt:
+            return _ensure_tz(dt)
+    except Exception:
+        pass
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return _ensure_tz(dt)
+    except Exception:
+        pass
+    date_only = _first_date_in_text(s)
+    for cand in [s, date_only]:
+        if not cand:
+            continue
+        for fmt in [
+            "%Y-%m-%d",
+            "%Y/%m/%d",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%dT%H:%M:%S%z",
+            "%Y-%m-%dT%H:%M:%S.%f%z",
+            "%d %b %Y",
+            "%d %b, %Y",
+            "%d %B %Y",
+            "%d %B, %Y",
+            "%b %d, %Y",
+            "%B %d, %Y",
+        ]:
+            try:
+                return _ensure_tz(datetime.strptime(cand, fmt))
+            except Exception:
+                continue
+    return None
+
+def _extract_labeled_date_candidates(html: str) -> List[Tuple[str, str]]:
+    if not html:
+        return []
+    text = re.sub(r"<[^>]+>", " ", html)
+    out = []
+    for m in re.finditer(r"(last\s*updated|updated\s*on|updated)\s*[:\-]?\s*([^\n]{0,80})", text, re.I):
+        snippet = clean(m.group(2))
+        if not snippet:
+            continue
+        date_txt = _first_date_in_text(snippet) or snippet
+        if date_txt:
+            out.append((date_txt, "modified"))
+    return out
+
+def _collect_jsonld_dates(obj, out: List[Tuple[str, str]]):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in {"dateModified", "datePublished", "dateCreated", "date"} and isinstance(v, str) and v.strip():
+                kind = "modified" if k == "dateModified" else "published"
+                out.append((v.strip(), kind))
+            elif isinstance(v, (dict, list)):
+                _collect_jsonld_dates(v, out)
+    elif isinstance(obj, list):
+        for v in obj:
+            _collect_jsonld_dates(v, out)
+
+def _pick_best_date_candidate(candidates: List[Tuple[str, str]]) -> str:
+    parsed = []
+    for val, kind in candidates:
+        dt = _parse_date_string(val)
+        if dt:
+            parsed.append((dt, clean(val), kind))
+    if not parsed:
+        return ""
+    return max(parsed, key=lambda x: (x[0], 1 if x[2] == "modified" else 0))[1]
+
 def _extract_last_modified_from_html(html: str) -> str:
     if not html:
         return ""
     soup = BeautifulSoup(html, "html.parser")
+    candidates: List[Tuple[str, str]] = []
+    candidates.extend(_extract_labeled_date_candidates(html))
 
     meta_candidates = [
-        ("meta", {"property": "article:modified_time"}, "content"),
-        ("meta", {"property": "article:published_time"}, "content"),
-        ("meta", {"name": "lastmod"}, "content"),
-        ("meta", {"name": "last-modified"}, "content"),
-        ("meta", {"name": "date"}, "content"),
-        ("meta", {"itemprop": "dateModified"}, "content"),
-        ("meta", {"itemprop": "datePublished"}, "content"),
+        ("meta", {"property": "article:modified_time"}, "content", "modified"),
+        ("meta", {"property": "og:updated_time"}, "content", "modified"),
+        ("meta", {"property": "article:published_time"}, "content", "published"),
+        ("meta", {"name": "lastmod"}, "content", "modified"),
+        ("meta", {"name": "last-modified"}, "content", "modified"),
+        ("meta", {"name": "date"}, "content", "published"),
+        ("meta", {"itemprop": "dateModified"}, "content", "modified"),
+        ("meta", {"itemprop": "datePublished"}, "content", "published"),
     ]
-    for tag, attrs, key in meta_candidates:
+    for tag, attrs, key, kind in meta_candidates:
         t = soup.find(tag, attrs=attrs)
         if t and t.get(key):
             v = clean(t.get(key))
             if v:
-                return v
+                candidates.append((v, kind))
 
-    tm = soup.find("time", attrs={"datetime": True})
-    if tm and tm.get("datetime"):
+    for tm in soup.find_all("time", attrs={"datetime": True}):
         v = clean(tm.get("datetime"))
-        if v:
-            return v
+        if not v:
+            continue
+        itemprop = (tm.get("itemprop") or "").lower()
+        cls = " ".join(tm.get("class") or []).lower()
+        kind = "modified" if "updated" in cls or itemprop == "datemodified" else "published"
+        candidates.append((v, kind))
 
     scripts = soup.find_all("script", attrs={"type": re.compile(r"ld\+json", re.I)})
-    date_keys = ["dateModified", "datePublished", "dateCreated", "date"]
-
-    def pick_date(obj) -> str:
-        if isinstance(obj, dict):
-            t = obj.get("@type") or obj.get("type")
-            t_list = []
-            if isinstance(t, list):
-                t_list = [str(x).lower() for x in t]
-            elif isinstance(t, str):
-                t_list = [t.lower()]
-            is_article = any(
-                x in t_list or x.endswith("article")
-                for x in ["article", "newsarticle", "blogposting", "webpage", "creativework"]
-            )
-            if is_article:
-                for k in date_keys:
-                    v = obj.get(k)
-                    if isinstance(v, str) and v.strip():
-                        return v.strip()
-            for k in date_keys:
-                v = obj.get(k)
-                if isinstance(v, str) and v.strip():
-                    return v.strip()
-            for v in obj.values():
-                out = pick_date(v)
-                if out:
-                    return out
-        elif isinstance(obj, list):
-            for v in obj:
-                out = pick_date(v)
-                if out:
-                    return out
-        return ""
-
     for s in scripts:
         raw = (s.string or s.get_text(" ") or "").strip()
         if not raw:
@@ -2630,11 +2714,9 @@ def _extract_last_modified_from_html(html: str) -> str:
             data = json.loads(raw)
         except Exception:
             continue
-        v = pick_date(data)
-        if v:
-            return v
+        _collect_jsonld_dates(data, candidates)
 
-    return ""
+    return _pick_best_date_candidate(candidates)
 
 def get_last_modified(url: str, html: str) -> str:
     v = _extract_last_modified_from_html(html or "")
@@ -3118,12 +3200,15 @@ def build_content_quality_table_from_seo(
 
         html = (fr.html if fr else "") or ""
         text = (fr.text if fr else "") or ""
+        content_text = content_text_from_html(html) if html else ""
+        if not content_text:
+            content_text = text
 
-        wc = word_count_from_text(text)
+        wc = word_count_from_text(content_text)
         lm = get_last_modified(page_url, html)
 
         fkw = clean(manual_query) if clean(manual_query) else str(r.get("__fkw", ""))
-        rep_s = compute_kw_repetition(text, fkw) if fkw and fkw != "Not available" else "0"
+        rep_s = compute_kw_repetition(content_text, fkw) if fkw and fkw != "Not available" else "0"
         try:
             rep_i = int(rep_s)
         except Exception:
