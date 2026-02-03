@@ -432,6 +432,63 @@ div[data-testid="stForm"] form{
 .details-link.inline summary{
   font-weight: 700;
 }
+.rule-toggle{
+  display: none;
+}
+.rule-trigger{
+  cursor: pointer;
+  color: hsl(var(--primary));
+  font-weight: 800;
+  text-decoration: underline;
+  margin-left: 6px;
+}
+.rule-modal{
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.rule-backdrop{
+  position: absolute;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.38);
+}
+.rule-card{
+  position: relative;
+  z-index: 1;
+  max-width: 520px;
+  width: 100%;
+  background: white;
+  border: 1px solid hsl(var(--border));
+  border-radius: 14px;
+  padding: 18px 20px;
+  box-shadow: var(--shadow-lg);
+}
+.rule-card h4{
+  margin: 0 0 8px 0;
+  font-size: 16px;
+  font-weight: 900;
+  color: hsl(var(--foreground));
+}
+.rule-card ul{
+  margin: 8px 0 0 18px;
+  color: hsl(var(--muted-foreground));
+  font-size: 13px;
+}
+.rule-close{
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  cursor: pointer;
+  font-size: 18px;
+  color: hsl(var(--muted-foreground));
+}
+.rule-toggle:checked + label + .rule-modal{
+  display: flex;
+}
 .details-link summary{
   cursor: pointer;
   color: hsl(var(--primary));
@@ -3407,10 +3464,16 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
         rule_html = "".join(f"<li>{html_lib.escape(item)}</li>" for item in rule_lines)
         header_html = (
             "Internal linking "
-            "<details class='details-link inline'>"
-            "<summary><span class='link-like'>ⓘ</span></summary>"
-            f"<div class='details-box'><ul>{rule_html}</ul></div>"
-            "</details>"
+            "<input type='checkbox' id='internal-linking-rule-toggle' class='rule-toggle'/>"
+            "<label for='internal-linking-rule-toggle' class='rule-trigger'>ⓘ</label>"
+            "<div class='rule-modal'>"
+            "<label for='internal-linking-rule-toggle' class='rule-backdrop'></label>"
+            "<div class='rule-card'>"
+            "<h4>Internal linking rule</h4>"
+            "<label for='internal-linking-rule-toggle' class='rule-close'>×</label>"
+            f"<ul>{rule_html}</ul>"
+            "</div>"
+            "</div>"
         )
         df = df.rename(columns={"Internal linking": header_html})
     html = df.to_html(index=False, escape=False, classes="data-table")
