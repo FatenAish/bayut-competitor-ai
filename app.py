@@ -1879,6 +1879,15 @@ def word_count_from_text(text: str) -> int:
         return 0
     return len(re.findall(r"\b\w+\b", t))
 
+def _safe_tag_attr(el, key: str):
+    try:
+        attrs = getattr(el, "attrs", None)
+        if isinstance(attrs, dict):
+            return attrs.get(key)
+    except Exception:
+        return None
+    return None
+
 def content_text_from_html(html: str) -> str:
     if not html:
         return ""
@@ -1886,8 +1895,8 @@ def content_text_from_html(html: str) -> str:
     for t in soup.find_all(list(IGNORE_TAGS) + list(LIST_TAGS)):
         t.decompose()
     for el in soup.find_all(True):
-        cls = " ".join(el.get("class") or []).lower()
-        el_id = (el.get("id") or "").lower()
+        cls = " ".join(_safe_tag_attr(el, "class") or []).lower()
+        el_id = (_safe_tag_attr(el, "id") or "").lower()
         if any(tok in cls or tok in el_id for tok in NONCONTENT_TOKENS):
             el.decompose()
     root = soup.find("article") or soup.find("main") or soup
