@@ -573,6 +573,17 @@ DEFAULT_HEADERS = {
 
 IGNORE_TAGS = {"nav", "footer", "header", "aside", "script", "style", "noscript"}
 LIST_TAGS = {"ul", "ol", "li", "dl", "dt", "dd"}
+NONCONTENT_TOKENS = {
+    "toc",
+    "table-of-contents",
+    "breadcrumb",
+    "breadcrumbs",
+    "related",
+    "recommend",
+    "recommended",
+    "share",
+    "social",
+}
 
 
 def clean(text: str) -> str:
@@ -1874,11 +1885,42 @@ def content_text_from_html(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
     for t in soup.find_all(list(IGNORE_TAGS) + list(LIST_TAGS)):
         t.decompose()
+    for el in soup.find_all(True):
+        cls = " ".join(el.get("class") or []).lower()
+        el_id = (el.get("id") or "").lower()
+        if any(tok in cls or tok in el_id for tok in NONCONTENT_TOKENS):
+            el.decompose()
     root = soup.find("article") or soup.find("main") or soup
     chunks = []
     for tag in root.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p"]):
         chunks.append(tag.get_text(" "))
     return clean(" ".join(chunks))
+
+def content_text_from_plaintext(text: str) -> str:
+    if not text:
+        return ""
+    keep = []
+    for raw in text.splitlines():
+        s = clean(raw)
+        if not s:
+            continue
+        s_low = s.lower()
+        if s_low.startswith(("title:", "url source:", "published time:", "updated:", "last updated:", "markdown content:")):
+            continue
+        if s_low.endswith("min read"):
+            continue
+        if s.startswith("!["):
+            continue
+        if s == "|" or re.fullmatch(r"[-_=]{3,}", s):
+            continue
+        if re.match(r"^\\*+\\s*\\[", s):
+            continue
+        if re.match(r"^[-*•]\\s+", s):
+            continue
+        if re.match(r"^\\d+[\\).:-]\\s+", s):
+            continue
+        keep.append(s)
+    return clean(" ".join(keep))
 
 def compute_kw_repetition(text: str, phrase: str) -> str:
     if not text or not phrase or phrase == "Not available":
@@ -2670,11 +2712,14 @@ def _pick_best_date_candidate(candidates: List[Tuple[str, str]]) -> str:
             parsed.append((dt, clean(val), kind))
     if not parsed:
         return ""
-    return max(parsed, key=lambda x: (x[0], 1 if x[2] == "modified" else 0))[1]
+    modified = [p for p in parsed if p[2] == "modified"]
+    if modified:
+        return max(modified, key=lambda x: x[0])[1]
+    return max(parsed, key=lambda x: x[0])[1]
 
-def _extract_last_modified_from_html(html: str) -> str:
+def _extract_last_modified_candidates_from_html(html: str) -> List[Tuple[str, str]]:
     if not html:
-        return ""
+        return []
     soup = BeautifulSoup(html, "html.parser")
     candidates: List[Tuple[str, str]] = []
     candidates.extend(_extract_labeled_date_candidates(html))
@@ -2716,10 +2761,18 @@ def _extract_last_modified_from_html(html: str) -> str:
             continue
         _collect_jsonld_dates(data, candidates)
 
-    return _pick_best_date_candidate(candidates)
+    return candidates
 
-def get_last_modified(url: str, html: str) -> str:
-    v = _extract_last_modified_from_html(html or "")
+def _extract_last_modified_from_html(html: str) -> str:
+    return _pick_best_date_candidate(_extract_last_modified_candidates_from_html(html))
+
+def get_last_modified(url: str, html: str, text: str = "") -> str:
+    candidates: List[Tuple[str, str]] = []
+    if html:
+        candidates.extend(_extract_last_modified_candidates_from_html(html))
+    if text:
+        candidates.extend(_extract_labeled_date_candidates(text))
+    v = _pick_best_date_candidate(candidates)
     if v:
         return v
     h = _head_last_modified(url)
@@ -2937,9 +2990,13 @@ def _misspelling_and_wrong_words(text: str) -> str:
     count = len(issues)
     if count == 0:
         return "None detected"
+    examples = sorted(issues)[:5]
+    suffix = ""
+    if examples:
+        suffix = f" ({', '.join(examples)}{' ...' if count > len(examples) else ''})"
     if count == 1:
-        return "1 issue"
-    return f"{count} issues"
+        return "1 issue" + suffix
+    return f"{count} issues" + suffix
 
 CREDIBLE_KEYWORDS = ["gov", "edu", "who.int", "un.org", "worldbank", "statista", "imf", "oecd", "bbc", "nytimes", "guardian", "reuters", "wsj", "ft"]
 
@@ -3202,10 +3259,10 @@ def build_content_quality_table_from_seo(
         text = (fr.text if fr else "") or ""
         content_text = content_text_from_html(html) if html else ""
         if not content_text:
-            content_text = text
+            content_text = content_text_from_plaintext(text)
 
         wc = word_count_from_text(content_text)
-        lm = get_last_modified(page_url, html)
+        lm = get_last_modified(page_url, html, text)
 
         fkw = clean(manual_query) if clean(manual_query) else str(r.get("__fkw", ""))
         rep_s = compute_kw_repetition(content_text, fkw) if fkw and fkw != "Not available" else "0"
@@ -3222,7 +3279,7 @@ def build_content_quality_table_from_seo(
         refs = _references_section_present(nodes, html)
         internal_quality = _internal_linking_quality(html, page_url, wc)
         is_bayut = page.strip().lower() == "bayut" or domain_of(page_url).endswith("bayut.com")
-        misspell = _misspelling_and_wrong_words(text) if is_bayut else "-"
+        misspell = _misspelling_and_wrong_words(content_text if content_text else text) if is_bayut else "-"
         data_backed = _data_backed_claims_count(text)
         latest_score = _latest_information_label(lm, text)
         outdated = _outdated_misleading_cell(lm, text)
