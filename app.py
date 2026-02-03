@@ -643,11 +643,31 @@ NONCONTENT_TOKENS = {
     "table-of-contents",
     "breadcrumb",
     "breadcrumbs",
+    "post_meta",
+    "meta",
     "related",
     "recommend",
     "recommended",
     "share",
     "social",
+    "newsletter",
+    "subscribe",
+    "signup",
+    "form",
+    "sidebar",
+    "widget",
+    "author",
+    "comments",
+    "listing",
+    "listings",
+    "property-slider",
+    "carousel",
+    "swiper",
+    "gallery",
+    "slider",
+    "sponsored",
+    "promo",
+    "advert",
 }
 
 CONTENT_CLASS_HINTS = {
@@ -1964,13 +1984,25 @@ def _safe_tag_attr(el, key: str):
     return None
 
 def _find_content_root(soup: BeautifulSoup):
+    candidates = []
     for tag in soup.find_all(attrs={"itemprop": re.compile(r"articleBody", re.I)}):
-        return tag
+        candidates.append(tag)
     for el in soup.find_all(["div", "section", "article"]):
         cls = " ".join(_safe_tag_attr(el, "class") or []).lower()
         if any(hint in cls for hint in CONTENT_CLASS_HINTS):
-            return el
-    return soup.find("article") or soup.find("main") or soup
+            candidates.append(el)
+    for el in [soup.find("article"), soup.find("main")]:
+        if el:
+            candidates.append(el)
+    if not candidates:
+        return soup
+    def score(el) -> int:
+        try:
+            text = clean(el.get_text(" "))
+        except Exception:
+            return 0
+        return len(re.findall(r"\b\w+\b", text))
+    return max(candidates, key=score)
 
 def _looks_like_heading_line(line: str) -> bool:
     words = re.findall(r"[A-Za-z]{2,}", line)
@@ -2010,7 +2042,7 @@ def content_text_from_html(html: str, include_headings: bool = False) -> str:
         chunks.append(text)
     return clean(" ".join(chunks))
 
-def content_text_from_plaintext(text: str) -> str:
+def content_text_from_plaintext(text: str, include_headings: bool = False) -> str:
     if not text:
         return ""
     keep = []
@@ -2033,7 +2065,7 @@ def content_text_from_plaintext(text: str) -> str:
             continue
         if re.match(r"^\\d+[\\).:-]\\s+", s):
             continue
-        if _looks_like_heading_line(s):
+        if not include_headings and _looks_like_heading_line(s):
             continue
         keep.append(s)
     return clean(" ".join(keep))
@@ -3461,11 +3493,14 @@ def build_content_quality_table_from_seo(
 
         html = (fr.html if fr else "") or ""
         text = (fr.text if fr else "") or ""
-        content_text = content_text_from_html(html) if html else ""
+        content_text = content_text_from_html(html, include_headings=False) if html else ""
         if not content_text:
-            content_text = content_text_from_plaintext(text)
+            content_text = content_text_from_plaintext(text, include_headings=False)
+        wc_text = content_text_from_html(html, include_headings=True) if html else ""
+        if not wc_text:
+            wc_text = content_text_from_plaintext(text, include_headings=True)
 
-        wc = word_count_from_text(content_text)
+        wc = word_count_from_text(wc_text)
         lm = get_last_modified(page_url, html, text)
 
         fkw = clean(manual_query) if clean(manual_query) else str(r.get("__fkw", ""))
