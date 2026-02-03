@@ -3461,6 +3461,48 @@ def _topic_cannibalization_label(query: str, page_url: str) -> str:
         return f"Medium risk (≈{cnt} other page(s) on same domain)"
     return "Low risk"
 
+def _topic_tokens_from_nodes(nodes: List[dict]) -> List[str]:
+    h1 = get_first_h1(nodes)
+    h2s = []
+    for x in flatten(nodes):
+        if x.get("level") == 2:
+            h = clean(x.get("header", ""))
+            if h and not is_noise_header(h):
+                h2s.append(h)
+        if len(h2s) >= 8:
+            break
+    raw = clean(" ".join([h1] + h2s))
+    tokens = [w for w in norm_header(raw).split() if len(w) >= 3]
+    return tokens
+
+def _topic_similarity_score(a_nodes: List[dict], b_nodes: List[dict]) -> float:
+    h1_a = get_first_h1(a_nodes)
+    h1_b = get_first_h1(b_nodes)
+    h1_score = header_similarity(h1_a, h1_b)
+    a_tokens = set(_topic_tokens_from_nodes(a_nodes))
+    b_tokens = set(_topic_tokens_from_nodes(b_nodes))
+    if a_tokens and b_tokens:
+        jacc = len(a_tokens & b_tokens) / max(len(a_tokens | b_tokens), 1)
+    else:
+        jacc = 0.0
+    return max(h1_score, jacc)
+
+def _bayut_topic_cannibalization_label(page_url: str, bayut_nodes_map: Dict[str, List[dict]]) -> str:
+    target_nodes = bayut_nodes_map.get(page_url) or []
+    if not target_nodes:
+        return "Not available"
+    overlap = 0
+    for url, nodes in bayut_nodes_map.items():
+        if url == page_url:
+            continue
+        if _topic_similarity_score(target_nodes, nodes) >= 0.7:
+            overlap += 1
+    if overlap >= 2:
+        return f"High risk (≈{overlap} other Bayut pages)"
+    if overlap >= 1:
+        return "Medium risk (≈1 other Bayut page)"
+    return "Low risk"
+
 def build_content_quality_table_from_seo(
     seo_df: pd.DataFrame,
     fr_map_by_url: Dict[str, FetchResult],
@@ -3476,6 +3518,14 @@ def build_content_quality_table_from_seo(
         "Internal linking","Misspelling & Wrong Words","Data-Backed Claims","Latest Information Score",
         "Outdated / Misleading Info","Styling / Layout",
     ]
+
+    bayut_nodes_map = {}
+    for url, tr in (tree_map_by_url or {}).items():
+        if not url or not domain_of(url).endswith("bayut.com"):
+            continue
+        nodes = tr.get("nodes", []) if isinstance(tr, dict) else []
+        if nodes:
+            bayut_nodes_map[url] = nodes
 
     rows = []
     for _, r in seo_df.iterrows():
@@ -3510,14 +3560,17 @@ def build_content_quality_table_from_seo(
         except Exception:
             rep_i = 0
 
-        topic_cann = _topic_cannibalization_label(fkw, page_url) if fkw else "Not available"
+        is_bayut = page.strip().lower() == "bayut" or domain_of(page_url).endswith("bayut.com")
+        if is_bayut:
+            topic_cann = _bayut_topic_cannibalization_label(page_url, bayut_nodes_map)
+        else:
+            topic_cann = "-"
         kw_stuff = _kw_stuffing_label(wc, rep_i)
 
         brief = _has_brief_summary(nodes, text)
         faqs = "Yes" if (fr and page_has_real_faq(fr, nodes)) else "No"
         refs = _references_section_present(nodes, html)
         internal_quality = _internal_linking_quality(html, page_url, wc)
-        is_bayut = page.strip().lower() == "bayut" or domain_of(page_url).endswith("bayut.com")
         misspell = _misspelling_and_wrong_words(content_text if content_text else text) if is_bayut else "-"
         data_backed = _data_backed_claims_count(text)
         latest_score = _latest_information_label(lm, text)
