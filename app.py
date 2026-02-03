@@ -2059,7 +2059,7 @@ def content_text_from_plaintext(text: str, include_headings: bool = False) -> st
             continue
         if s == "|" or re.fullmatch(r"[-_=]{3,}", s):
             continue
-        if re.match(r"^\\*+\\s*\\[", s):
+        if re.match(r"^\*+\s*\[", s):
             continue
         if re.match(r"^[-*•]\\s+", s):
             continue
