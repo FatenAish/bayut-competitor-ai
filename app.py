@@ -3572,7 +3572,8 @@ def build_content_quality_table_from_seo(
     seo_df: pd.DataFrame,
     fr_map_by_url: Dict[str, FetchResult],
     tree_map_by_url: Dict[str, dict],
-    manual_query: str = ""
+    manual_query: str = "",
+    manual_query_secondary: str = ""
 ) -> pd.DataFrame:
     if seo_df is None or seo_df.empty:
         return pd.DataFrame()
@@ -3623,6 +3624,7 @@ def build_content_quality_table_from_seo(
         lm = get_last_modified(page_url, html, text)
 
         fkw = clean(manual_query) if clean(manual_query) else str(r.get("__fkw", ""))
+        fkw_secondary = clean(manual_query_secondary) if clean(manual_query_secondary) else ""
         rep_s = compute_kw_repetition(content_text, fkw) if fkw and fkw != "Not available" else "0"
         try:
             rep_i = int(rep_s)
@@ -3632,6 +3634,14 @@ def build_content_quality_table_from_seo(
         is_bayut = page.strip().lower() == "bayut" or domain_of(page_url).endswith("bayut.com")
         topic_cann = _domain_topic_cannibalization_label(page_url, domain_nodes_map)
         kw_stuff = _kw_stuffing_label(wc, rep_i)
+        if fkw_secondary and fkw_secondary != fkw:
+            rep2_s = compute_kw_repetition(content_text, fkw_secondary)
+            try:
+                rep2_i = int(rep2_s)
+                kw_stuff_secondary = _kw_stuffing_label(wc, rep2_i)
+            except Exception:
+                kw_stuff_secondary = "Not available"
+            kw_stuff = f"Primary: {kw_stuff} | Secondary: {kw_stuff_secondary}"
 
         brief = _has_brief_summary(nodes, text)
         faqs = "Yes" if (fr and page_has_real_faq(fr, nodes)) else "No"
@@ -3884,6 +3894,12 @@ if st.session_state.mode == "update":
             placeholder="e.g., pros and cons business bay",
             label_visibility="collapsed",
         )
+        render_field_label("Secondary Keyword", meta="(optional)", icon_svg=ICON_SEARCH)
+        manual_fkw2_update = st.text_input(
+            "Secondary Keyword",
+            placeholder="e.g., living in business bay",
+            label_visibility="collapsed",
+        )
         run = st.form_submit_button("Run Analysis", type="primary", use_container_width=True)
 
     competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
@@ -3948,7 +3964,8 @@ if st.session_state.mode == "update":
             seo_df=st.session_state.seo_update_df,
             fr_map_by_url={bayut_url.strip(): bayut_fr, **comp_fr_map},
             tree_map_by_url={bayut_url.strip(): {"nodes": bayut_nodes}, **{u: comp_tree_map[u] for u in competitors}},
-            manual_query=manual_fkw_update.strip()
+            manual_query=manual_fkw_update.strip(),
+            manual_query_secondary=manual_fkw2_update.strip()
         )
 
         query_for_ai = manual_fkw_update.strip() or get_first_h1(bayut_nodes)
@@ -4030,6 +4047,12 @@ else:
             placeholder="e.g., pros and cons business bay",
             label_visibility="collapsed",
         )
+        render_field_label("Secondary Keyword", meta="(optional)", icon_svg=ICON_SEARCH)
+        manual_fkw2_new = st.text_input(
+            "Secondary Keyword",
+            placeholder="e.g., living in business bay",
+            label_visibility="collapsed",
+        )
         run = st.form_submit_button("Generate Coverage", type="primary", use_container_width=True)
 
     competitors = [c.strip() for c in competitors_text.splitlines() if c.strip()]
@@ -4079,7 +4102,8 @@ else:
             seo_df=st.session_state.seo_new_df,
             fr_map_by_url={u: comp_fr_map[u] for u in competitors},
             tree_map_by_url={u: comp_tree_map[u] for u in competitors},
-            manual_query=manual_fkw_new.strip()
+            manual_query=manual_fkw_new.strip(),
+            manual_query_secondary=manual_fkw2_new.strip()
         )
 
         query_for_ai = manual_fkw_new.strip() or new_title.strip()
