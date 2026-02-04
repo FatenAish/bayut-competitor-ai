@@ -2299,9 +2299,6 @@ def _heading_structure_label(nodes: List[dict], html: str) -> str:
         return f"Weak (no headings; {counts_text})"
     if counts[1] == 0:
         return f"Weak (missing H1; {counts_text})"
-    for prev, cur in zip(levels, levels[1:]):
-        if cur - prev > 1:
-            return f"Weak (H{prev}→H{cur} jump; {counts_text})"
     for lvl in range(2, 6):
         if counts[lvl] == 0 and any(counts[x] > 0 for x in range(lvl + 1, 7)):
             return f"Weak (missing H{lvl}; {counts_text})"
