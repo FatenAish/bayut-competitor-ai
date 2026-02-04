@@ -2263,6 +2263,15 @@ def _count_headers(html: str) -> str:
 def _heading_counts(nodes: List[dict], html: str) -> Dict[int, int]:
     counts = {i: 0 for i in range(1, 7)}
     used = False
+    h1_exists = False
+    if html and "<h1" in html.lower():
+        try:
+            soup_full = BeautifulSoup(html, "html.parser")
+            h1_tag = soup_full.find("h1")
+            if h1_tag and clean(h1_tag.get_text(" ")):
+                h1_exists = True
+        except Exception:
+            h1_exists = False
     if html and "<h" in html.lower():
         soup = BeautifulSoup(html, "html.parser")
         for t in soup.find_all(list(IGNORE_TAGS)):
@@ -2272,10 +2281,8 @@ def _heading_counts(nodes: List[dict], html: str) -> Dict[int, int]:
         for tag in root.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
             counts[int(tag.name[1])] += 1
         used = True
-        if counts[1] == 0:
-            h1_tag = soup.find("h1")
-            if h1_tag and clean(h1_tag.get_text(" ")):
-                counts[1] = 1
+        if counts[1] == 0 and h1_exists:
+            counts[1] = 1
     if not used and nodes:
         for x in flatten(nodes):
             lvl = x.get("level")
@@ -2303,9 +2310,13 @@ def _heading_structure_label(nodes: List[dict], html: str) -> str:
         for tag in root.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
             html_levels.append(int(tag.name[1]))
         if 1 not in html_levels:
-            h1_tag = soup.find("h1")
-            if h1_tag and clean(h1_tag.get_text(" ")):
-                h1_fallback = True
+            try:
+                soup_full = BeautifulSoup(html, "html.parser")
+                h1_tag = soup_full.find("h1")
+                if h1_tag and clean(h1_tag.get_text(" ")):
+                    h1_fallback = True
+            except Exception:
+                h1_fallback = False
     if html_levels:
         levels = html_levels
     if not levels and nodes:
@@ -2316,6 +2327,8 @@ def _heading_structure_label(nodes: List[dict], html: str) -> str:
                 continue
             if isinstance(lvl, int):
                 levels.append(lvl)
+            if lvl == 1 and h:
+                h1_fallback = True
     has_title_line = bool(re.search(r"(?m)^Title:\s*.+$", html or ""))
     if levels and 1 not in levels and has_title_line:
         levels = [1] + levels
