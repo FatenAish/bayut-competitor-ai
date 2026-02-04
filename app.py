@@ -3314,6 +3314,49 @@ def _credible_sources_count(html: str, page_url: str) -> int:
             seen.add(dom)
     return len(seen)
 
+def _styling_layout_label(html: str) -> str:
+    if not html:
+        return "Not available"
+    soup = BeautifulSoup(html, "html.parser")
+    root = soup.find("article") or soup.find("main") or soup
+    score = 0
+
+    tables = root.find_all("table")
+    has_table = len(tables) > 0
+    if has_table:
+        score += 1
+
+    has_ul = any(len(ul.find_all("li")) >= 2 for ul in root.find_all("ul"))
+    if has_ul:
+        score += 1
+
+    has_ol = any(len(ol.find_all("li")) >= 2 for ol in root.find_all("ol"))
+    step_heading = bool(re.search(r"\bstep\s*\d+", root.get_text(" "), re.I))
+    has_steps = has_ol or step_heading
+    if has_steps:
+        score += 1
+
+    has_infographic = False
+    for img in root.find_all("img"):
+        alt = (img.get("alt") or "").lower()
+        title = (img.get("title") or "").lower()
+        if any(k in alt or k in title for k in ["infographic", "chart", "graph", "map", "diagram"]):
+            has_infographic = True
+            break
+    if not has_infographic:
+        for fig in root.find_all("figure"):
+            if fig.find("img"):
+                has_infographic = True
+                break
+    if has_infographic:
+        score += 1
+
+    if score >= 3:
+        return "Good"
+    if score >= 2:
+        return "OK"
+    return "Weak"
+
 def _references_section_present(nodes: List[dict], html: str) -> str:
     blob = headings_blob(nodes).lower()
     if any(k in blob for k in ["references", "sources", "further reading", "bibliography"]):
@@ -3651,7 +3694,7 @@ def build_content_quality_table_from_seo(
         data_backed = _data_backed_claims_count(text)
         latest_score = _latest_information_label(lm, text)
         outdated = _outdated_misleading_cell(lm, text)
-        styling = "OK"
+        styling = _styling_layout_label(html)
 
         rows.append({
             "Page": page,
