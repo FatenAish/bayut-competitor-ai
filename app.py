@@ -2092,12 +2092,22 @@ def content_text_from_plaintext(text: str, include_headings: bool = False) -> st
         keep.append(s)
     return clean(" ".join(keep))
 
+def _tokenize_words(text: str) -> List[str]:
+    return re.findall(r"[A-Za-z0-9]+", (text or "").lower())
+
 def compute_kw_repetition(text: str, phrase: str) -> str:
     if not text or not phrase or phrase == "Not available":
         return "Not available"
-    t = " " + re.sub(r"\s+", " ", (text or "").lower()) + " "
-    p = " " + re.sub(r"\s+", " ", (phrase or "").lower()) + " "
-    return str(t.count(p))
+    t_tokens = _tokenize_words(text)
+    p_tokens = _tokenize_words(phrase)
+    if not p_tokens:
+        return "0"
+    n = len(p_tokens)
+    count = 0
+    for i in range(0, len(t_tokens) - n + 1):
+        if t_tokens[i:i + n] == p_tokens:
+            count += 1
+    return str(count)
 
 def kw_usage_summary(seo_title: str, h1: str, headings_blob_text: str, body_text: str, fkw: str) -> str:
     fkw = clean(fkw or "").lower()
@@ -3912,7 +3922,7 @@ def build_content_quality_table_from_seo(
 
         fkw = clean(manual_query) if clean(manual_query) else str(r.get("__fkw", ""))
         fkw_secondary = clean(manual_query_secondary) if clean(manual_query_secondary) else ""
-        rep_s = compute_kw_repetition(content_text, fkw) if fkw and fkw != "Not available" else "0"
+        rep_s = compute_kw_repetition(wc_text, fkw) if fkw and fkw != "Not available" else "0"
         try:
             rep_i = int(rep_s)
         except Exception:
@@ -3922,7 +3932,7 @@ def build_content_quality_table_from_seo(
         topic_cann = _domain_topic_cannibalization_label(page_url, domain_nodes_map)
         kw_stuff = _kw_stuffing_label(wc, rep_i)
         if fkw_secondary and fkw_secondary != fkw:
-            rep2_s = compute_kw_repetition(content_text, fkw_secondary)
+            rep2_s = compute_kw_repetition(wc_text, fkw_secondary)
             try:
                 rep2_i = int(rep2_s)
                 kw_stuff_secondary = _kw_stuffing_label(wc, rep2_i)
