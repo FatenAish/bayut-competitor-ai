@@ -2473,7 +2473,6 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
     h_counts = _heading_structure_label(nodes, fr.html or fr.text or "")
     fkw = pick_fkw_only(seo_title, get_first_h1(nodes), h_blob, fr.text or "", manual_fkw=manual_fkw)
     kw_usage = kw_usage_summary(seo_title, get_first_h1(nodes), h_blob, fr.text or "", fkw)
-    _, outbound_links_count = _count_internal_outbound_links(fr.html or "", url or "")
     media = extract_media_used(fr.html or "")
     schema = _schema_present(fr.html or "")
     mobile_friendly = is_mobile_friendly(fr.html or "")
@@ -2487,7 +2486,6 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
         "Headers": h_counts,
         "FKW Usage": kw_usage,
         "Mobile Friendly": mobile_friendly,
-        "Outbound Links Count": str(outbound_links_count),
         "Media (Images/Video/Tables)": media,
         "Schema Present": schema,
         "__fkw": fkw,
@@ -2513,7 +2511,7 @@ def build_seo_analysis_update(
     cols = [
         "Page","UAE Rank (Mobile)","Mobile Friendly","SEO Title","Meta Description","URL Slug",
         "Headers","FKW Usage",
-        "Outbound Links Count","Media (Images/Video/Tables)",
+        "Media (Images/Video/Tables)",
         "Schema Present","__fkw","__url"
     ]
     for c in cols:
@@ -2537,7 +2535,7 @@ def build_seo_analysis_newpost(
     cols = [
         "Page","UAE Rank (Mobile)","Mobile Friendly","SEO Title","Meta Description","URL Slug",
         "Headers","FKW Usage",
-        "Outbound Links Count","Media (Images/Video/Tables)",
+        "Media (Images/Video/Tables)",
         "Schema Present","__fkw","__url"
     ]
     for c in cols:
