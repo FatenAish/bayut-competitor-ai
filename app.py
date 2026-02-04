@@ -2346,15 +2346,14 @@ def _heading_structure_label(nodes: List[dict], html: str) -> str:
                 continue
             if isinstance(lvl, int) and 1 <= lvl <= 6:
                 counts[lvl] += 1
-    counts_text = ", ".join(f"H{i}:{counts[i]}" for i in range(1, 7))
     if sum(counts.values()) == 0:
-        return f"Weak (no headings; {counts_text})"
+        return "Weak (no headings)"
     if counts[1] == 0:
-        return f"Weak (missing H1; {counts_text})"
+        return "Weak (missing H1)"
     for lvl in range(2, 6):
         if counts[lvl] == 0 and any(counts[x] > 0 for x in range(lvl + 1, 7)):
-            return f"Weak (missing H{lvl}; {counts_text})"
-    return f"OK ({counts_text})"
+            return f"Weak (missing H{lvl})"
+    return "OK"
 
 from urllib.parse import urljoin
 
