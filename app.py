@@ -3320,21 +3320,25 @@ def _styling_layout_label(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
     root = soup.find("article") or soup.find("main") or soup
     score = 0
+    signals = []
 
     tables = root.find_all("table")
     has_table = len(tables) > 0
     if has_table:
         score += 1
+        signals.append("tables")
 
     has_ul = any(len(ul.find_all("li")) >= 2 for ul in root.find_all("ul"))
     if has_ul:
         score += 1
+        signals.append("bullet lists")
 
     has_ol = any(len(ol.find_all("li")) >= 2 for ol in root.find_all("ol"))
     step_heading = bool(re.search(r"\bstep\s*\d+", root.get_text(" "), re.I))
     has_steps = has_ol or step_heading
     if has_steps:
         score += 1
+        signals.append("steps/numbered")
 
     has_infographic = False
     for img in root.find_all("img"):
@@ -3350,12 +3354,17 @@ def _styling_layout_label(html: str) -> str:
                 break
     if has_infographic:
         score += 1
+        signals.append("infographic/visuals")
 
     if score >= 3:
-        return "Good"
-    if score >= 2:
-        return "OK"
-    return "Weak"
+        label = "Good"
+    elif score >= 2:
+        label = "OK"
+    else:
+        label = "Weak"
+    if signals:
+        return f"{label} ({', '.join(signals)})"
+    return label
 
 def _references_section_present(nodes: List[dict], html: str) -> str:
     blob = headings_blob(nodes).lower()
@@ -3624,7 +3633,7 @@ def build_content_quality_table_from_seo(
     cols = [
         "Page","Last Updated / Modified","Topic Cannibalization","Keyword Stuffing",
         "Brief Summary","FAQs","References Section",
-        "Internal linking","Misspelling & Wrong Words","Data-Backed Claims","Latest Information Score",
+        "Internal linking","Misspelling & Wrong Words","Latest Information Score",
         "Outdated / Misleading Info","Styling / Layout",
     ]
 
@@ -3691,7 +3700,6 @@ def build_content_quality_table_from_seo(
         refs = _references_section_present(nodes, html)
         internal_quality = _internal_linking_quality(html, page_url, wc)
         misspell = _misspelling_and_wrong_words(content_text if content_text else text) if is_bayut else "-"
-        data_backed = _data_backed_claims_count(text)
         latest_score = _latest_information_label(lm, text)
         outdated = _outdated_misleading_cell(lm, text)
         styling = _styling_layout_label(html)
@@ -3706,7 +3714,6 @@ def build_content_quality_table_from_seo(
             "References Section": refs,
             "Internal linking": internal_quality,
             "Misspelling & Wrong Words": misspell,
-            "Data-Backed Claims": str(data_backed),
             "Latest Information Score": latest_score,
             "Outdated / Misleading Info": outdated,
             "Styling / Layout": styling,
