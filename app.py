@@ -21,6 +21,25 @@ try:
     WORDFREQ_OK = True
 except Exception:
     WORDFREQ_OK = False
+    import re
+from difflib import SequenceMatcher
+# ADD THIS too (if not already imported)
+from difflib import get_close_matches
+
+try:
+    from wordfreq import zipf_frequency
+    WORDFREQ_OK = True
+except Exception:
+    WORDFREQ_OK = False
+
+# >>> PASTE HELPERS HERE <<<
+TOKEN_RE = ...
+DOMAIN_ALLOW = ...
+...
+def find_misspellings(...):
+    ...
+# <<< END HELPERS >>>
+
 
 def _env_or_secret(key: str, default=None):
     v = os.getenv(key)
