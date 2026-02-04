@@ -2133,6 +2133,104 @@ def _extract_canonical_and_robots(html: str) -> Tuple[str, str]:
 
     return (canonical or "Not available", robots or "Not available")
 
+def _extract_lang(html: str) -> str:
+    if not html:
+        return "Not available"
+    soup = BeautifulSoup(html, "html.parser")
+    html_tag = soup.find("html")
+    if html_tag and html_tag.get("lang"):
+        return clean(html_tag.get("lang"))
+    meta = soup.find("meta", attrs={"http-equiv": re.compile("content-language", re.I)})
+    if meta and meta.get("content"):
+        return clean(meta.get("content"))
+    meta = soup.find("meta", attrs={"name": re.compile("^language$", re.I)})
+    if meta and meta.get("content"):
+        return clean(meta.get("content"))
+    meta = soup.find("meta", attrs={"property": re.compile("og:locale", re.I)})
+    if meta and meta.get("content"):
+        return clean(meta.get("content"))
+    return "Not available"
+
+def _jsonld_find_name(data, key: str) -> str:
+    if isinstance(data, dict):
+        if key in data:
+            val = data.get(key)
+            if isinstance(val, str) and val.strip():
+                return clean(val)
+            if isinstance(val, dict):
+                name = val.get("name") or val.get("@id") or val.get("url")
+                if isinstance(name, str) and name.strip():
+                    return clean(name)
+            if isinstance(val, list):
+                for item in val:
+                    name = _jsonld_find_name({key: item}, key)
+                    if name:
+                        return name
+        for v in data.values():
+            out = _jsonld_find_name(v, key)
+            if out:
+                return out
+    elif isinstance(data, list):
+        for v in data:
+            out = _jsonld_find_name(v, key)
+            if out:
+                return out
+    return ""
+
+def _extract_author_publisher(html: str) -> Tuple[str, str]:
+    if not html:
+        return ("Not available", "Not available")
+    soup = BeautifulSoup(html, "html.parser")
+    author = ""
+    publisher = ""
+    a = soup.find("meta", attrs={"name": re.compile("^author$", re.I)})
+    if a and a.get("content"):
+        author = clean(a.get("content"))
+    if not author:
+        a = soup.find("meta", attrs={"property": re.compile("article:author", re.I)})
+        if a and a.get("content"):
+            author = clean(a.get("content"))
+    if not author:
+        a = soup.find(attrs={"itemprop": re.compile("^author$", re.I)})
+        if a and a.get("content"):
+            author = clean(a.get("content"))
+
+    p = soup.find("meta", attrs={"name": re.compile("^publisher$", re.I)})
+    if p and p.get("content"):
+        publisher = clean(p.get("content"))
+    if not publisher:
+        p = soup.find("meta", attrs={"property": re.compile("article:publisher", re.I)})
+        if p and p.get("content"):
+            publisher = clean(p.get("content"))
+    if not publisher:
+        p = soup.find(attrs={"itemprop": re.compile("^publisher$", re.I)})
+        if p and p.get("content"):
+            publisher = clean(p.get("content"))
+
+    scripts = soup.find_all("script", attrs={"type": re.compile(r"ld\+json", re.I)})
+    for s in scripts:
+        raw = (s.string or s.get_text(" ") or "").strip()
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except Exception:
+            continue
+        if not author:
+            author = _jsonld_find_name(data, "author")
+        if not publisher:
+            publisher = _jsonld_find_name(data, "publisher")
+        if author and publisher:
+            break
+
+    return (author or "Not available", publisher or "Not available")
+
+def _count_images(html: str) -> int:
+    if not html:
+        return 0
+    soup = BeautifulSoup(html, "html.parser")
+    return len(soup.find_all("img"))
+
 def _count_headers(html: str) -> str:
     if not html:
         return "H1:0 / H2:0 / H3:0 / Total:0"
@@ -2270,7 +2368,6 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
     _, outbound_links_count = _count_internal_outbound_links(fr.html or "", url or "")
     media = extract_media_used(fr.html or "")
     schema = _schema_present(fr.html or "")
-    _, robots = _extract_canonical_and_robots(fr.html or "")
     mobile_friendly = is_mobile_friendly(fr.html or "")
 
     return {
@@ -3356,7 +3453,7 @@ def _styling_layout_label(html: str) -> str:
     if not html:
         return "Not available"
     soup = BeautifulSoup(html, "html.parser")
-    root = soup.find("article") or soup.find("main") or soup
+    root = _find_content_root(soup)
     score = 0
     signals = []
 
@@ -3367,18 +3464,27 @@ def _styling_layout_label(html: str) -> str:
         signals.append("tables")
 
     has_ul = any(len(ul.find_all("li")) >= 2 for ul in root.find_all("ul"))
+    if not has_ul:
+        lines = root.get_text("\n").splitlines()
+        bullet_lines = [ln for ln in lines if re.match(r"^\s*[-*•]\s+\S+", ln)]
+        has_ul = len(bullet_lines) >= 2
     if has_ul:
         score += 1
         signals.append("bullet lists")
 
     has_ol = any(len(ol.find_all("li")) >= 2 for ol in root.find_all("ol"))
     step_heading = bool(re.search(r"\bstep\s*\d+", root.get_text(" "), re.I))
+    if not has_ol:
+        lines = root.get_text("\n").splitlines()
+        num_lines = [ln for ln in lines if re.match(r"^\s*\d+[\).:-]\s+\S+", ln)]
+        has_ol = len(num_lines) >= 2
     has_steps = has_ol or step_heading
     if has_steps:
         score += 1
         signals.append("steps/numbered")
 
     has_infographic = False
+    has_visuals = False
     for img in root.find_all("img"):
         alt = (img.get("alt") or "").lower()
         title = (img.get("title") or "").lower()
@@ -3386,11 +3492,24 @@ def _styling_layout_label(html: str) -> str:
             has_infographic = True
             break
     if not has_infographic:
+        for img in root.find_all("img"):
+            cls = " ".join(img.get("class") or []).lower()
+            width = img.get("width")
+            height = img.get("height")
+            try:
+                w = int(width) if width else 0
+                h = int(height) if height else 0
+            except Exception:
+                w, h = 0, 0
+            if "wp-image" in cls or "attachment" in cls or w >= 200 or h >= 200:
+                has_visuals = True
+                break
+    if not has_infographic:
         for fig in root.find_all("figure"):
             if fig.find("img"):
-                has_infographic = True
+                has_visuals = True
                 break
-    if has_infographic:
+    if has_infographic or has_visuals:
         score += 1
         signals.append("infographic/visuals")
 
