@@ -3048,6 +3048,7 @@ PROPERTY_KEYWORDS = {
     "property","properties","apartment","apartments","villa","villas","rent","rental","renting","sale","buy","buying",
     "bedroom","bedrooms","studio","penthouse","townhouse","duplex","freehold","leasehold","mortgage","price","prices",
     "listing","listings","for-sale","for-rent","off-plan","plot","land","invest","investment",
+    "community","neighborhood","neighbourhood","district","suburb","area",
 }
 
 def _intent_tokens_from_html(html: str, page_url: str) -> List[str]:
@@ -3068,9 +3069,26 @@ def _intent_tokens_from_html(html: str, page_url: str) -> List[str]:
             tokens.append(w)
     return tokens[:12]
 
+def _looks_like_area_phrase(text: str) -> bool:
+    if not text:
+        return False
+    return bool(re.search(
+        r"\b(in|at|near)\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3}|[A-Z]{2,5})\b",
+        text,
+    ))
+
 def _is_property_related(html: str, page_url: str) -> bool:
     slug = urlparse(page_url).path.strip("/").replace("-", " ").lower()
     if any(x in slug for x in ["for-sale", "for-rent", "/s/"]):
+        return True
+    soup = BeautifulSoup(html, "html.parser")
+    h1 = soup.find("h1")
+    h1_text = clean(h1.get_text(" ")) if h1 else ""
+    title = ""
+    title_tag = soup.find("title")
+    if title_tag:
+        title = clean(title_tag.get_text(" "))
+    if _looks_like_area_phrase(" ".join([h1_text, title])):
         return True
     tokens = set(_intent_tokens_from_html(html, page_url))
     return any(t in PROPERTY_KEYWORDS for t in tokens)
@@ -3710,6 +3728,7 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
             "+1 if most links point to relevant internal pages.",
             "+1 if anchor texts are descriptive (not generic).",
             "+1 if links support the page's main intent (property pages: LPV/LTP links count).",
+            "Property-related = area name, property type, or sale/rent/buy intent.",
             "Strong = score >= 2, Medium = score = 1, Weak = score = 0.",
         ]
         rule_html = "".join(f"<li>{html_lib.escape(item)}</li>" for item in rule_lines)
