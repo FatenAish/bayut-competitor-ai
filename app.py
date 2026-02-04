@@ -2140,6 +2140,31 @@ def _count_headers(html: str) -> str:
     total = h1 + h2 + h3
     return f"H1:{h1} / H2:{h2} / H3:{h3} / Total:{total}"
 
+def _heading_structure_label(nodes: List[dict], html: str) -> str:
+    levels: List[int] = []
+    if nodes:
+        for x in flatten(nodes):
+            lvl = x.get("level")
+            h = clean(x.get("header", ""))
+            if not h or is_noise_header(h) or header_is_faq(h):
+                continue
+            if isinstance(lvl, int):
+                levels.append(lvl)
+    if not levels and html:
+        soup = BeautifulSoup(html, "html.parser")
+        for t in soup.find_all(list(IGNORE_TAGS)):
+            t.decompose()
+        for tag in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
+            levels.append(int(tag.name[1]))
+    if not levels:
+        return "Weak"
+    if levels[0] != 1:
+        return "Weak"
+    for prev, cur in zip(levels, levels[1:]):
+        if cur - prev > 1:
+            return "Weak"
+    return "OK"
+
 from urllib.parse import urljoin
 
 def _count_internal_outbound_links(html: str, page_url: str) -> Tuple[int, int]:
@@ -2225,7 +2250,7 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
     seo_title, meta_desc = extract_head_seo(fr.html or "")
     slug = url_slug(url) if url and url != "Not applicable" else "Not applicable"
     h_blob = headings_blob(nodes)
-    h_counts = _count_headers(fr.html or fr.text or "")
+    h_counts = _heading_structure_label(nodes, fr.html or fr.text or "")
     fkw = pick_fkw_only(seo_title, get_first_h1(nodes), h_blob, fr.text or "", manual_fkw=manual_fkw)
     kw_usage = kw_usage_summary(seo_title, get_first_h1(nodes), h_blob, fr.text or "", fkw)
     _, outbound_links_count = _count_internal_outbound_links(fr.html or "", url or "")
