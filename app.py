@@ -790,12 +790,15 @@ class FetchAgent:
         if not url:
             return FetchResult(False, None, None, "", "", "empty_url")
 
+        html_fallback = ""
+
         # 1) direct HTML
         code, html = self._http_get(url)
         if code == 200 and html:
             text = self._extract_article_text_from_html(html)
             if self._validate_text(text, min_len=500):
                 return FetchResult(True, "direct", code, html, text, None)
+            html_fallback = html
 
         # 2) JS-rendered HTML
         ok, html2 = self._fetch_playwright_html(url)
@@ -803,6 +806,7 @@ class FetchAgent:
             text2 = self._extract_article_text_from_html(html2)
             if self._validate_text(text2, min_len=500):
                 return FetchResult(True, "playwright", 200, html2, text2, None)
+            html_fallback = html2 or html_fallback
 
         # 3) Jina reader
         jurl = self._jina_url(url)
@@ -810,7 +814,7 @@ class FetchAgent:
         if code3 == 200 and txt3:
             text3 = self.clean(txt3)
             if self._validate_text(text3, min_len=500):
-                return FetchResult(True, "jina", code3, "", text3, None)
+                return FetchResult(True, "jina", code3, html_fallback, text3, None)
 
         # 4) Textise
         turl = self._textise_url(url)
@@ -819,7 +823,8 @@ class FetchAgent:
             soup = BeautifulSoup(html4, "html.parser")
             text4 = self.clean(soup.get_text(" "))
             if self._validate_text(text4, min_len=350):
-                return FetchResult(True, "textise", code4, "", text4, None)
+                html_out = html4 or html_fallback
+                return FetchResult(True, "textise", code4, html_out, text4, None)
 
         return FetchResult(False, None, code or None, "", "", "blocked_or_no_content")
 
