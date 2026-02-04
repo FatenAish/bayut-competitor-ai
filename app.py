@@ -2092,6 +2092,26 @@ def content_text_from_plaintext(text: str, include_headings: bool = False) -> st
         keep.append(s)
     return clean(" ".join(keep))
 
+def content_text_from_plaintext_lenient(text: str) -> str:
+    if not text:
+        return ""
+    keep = []
+    for raw in text.splitlines():
+        s = clean(raw)
+        if not s:
+            continue
+        s_low = s.lower()
+        if s_low.startswith(("title:", "url source:", "published time:", "updated:", "last updated:", "markdown content:")):
+            continue
+        if s_low.endswith("min read"):
+            continue
+        if s.startswith("!["):
+            continue
+        if s == "|" or re.fullmatch(r"[-_=]{3,}", s):
+            continue
+        keep.append(s)
+    return clean(" ".join(keep))
+
 def _tokenize_words(text: str) -> List[str]:
     return re.findall(r"[A-Za-z0-9]+", (text or "").lower())
 
@@ -3914,7 +3934,7 @@ def build_content_quality_table_from_seo(
         if not content_text:
             content_text = content_text_from_plaintext(text, include_headings=False)
         if word_count_from_text(content_text) < 120 and text:
-            fallback_text = content_text_from_plaintext(text, include_headings=False)
+            fallback_text = content_text_from_plaintext_lenient(text)
             if word_count_from_text(fallback_text) > word_count_from_text(content_text):
                 content_text = fallback_text
         if word_count_from_text(content_text) < 120 and text:
