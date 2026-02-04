@@ -2133,6 +2133,104 @@ def _extract_canonical_and_robots(html: str) -> Tuple[str, str]:
 
     return (canonical or "Not available", robots or "Not available")
 
+def _extract_lang(html: str) -> str:
+    if not html:
+        return "Not available"
+    soup = BeautifulSoup(html, "html.parser")
+    html_tag = soup.find("html")
+    if html_tag and html_tag.get("lang"):
+        return clean(html_tag.get("lang"))
+    meta = soup.find("meta", attrs={"http-equiv": re.compile("content-language", re.I)})
+    if meta and meta.get("content"):
+        return clean(meta.get("content"))
+    meta = soup.find("meta", attrs={"name": re.compile("^language$", re.I)})
+    if meta and meta.get("content"):
+        return clean(meta.get("content"))
+    meta = soup.find("meta", attrs={"property": re.compile("og:locale", re.I)})
+    if meta and meta.get("content"):
+        return clean(meta.get("content"))
+    return "Not available"
+
+def _jsonld_find_name(data, key: str) -> str:
+    if isinstance(data, dict):
+        if key in data:
+            val = data.get(key)
+            if isinstance(val, str) and val.strip():
+                return clean(val)
+            if isinstance(val, dict):
+                name = val.get("name") or val.get("@id") or val.get("url")
+                if isinstance(name, str) and name.strip():
+                    return clean(name)
+            if isinstance(val, list):
+                for item in val:
+                    name = _jsonld_find_name({key: item}, key)
+                    if name:
+                        return name
+        for v in data.values():
+            out = _jsonld_find_name(v, key)
+            if out:
+                return out
+    elif isinstance(data, list):
+        for v in data:
+            out = _jsonld_find_name(v, key)
+            if out:
+                return out
+    return ""
+
+def _extract_author_publisher(html: str) -> Tuple[str, str]:
+    if not html:
+        return ("Not available", "Not available")
+    soup = BeautifulSoup(html, "html.parser")
+    author = ""
+    publisher = ""
+    a = soup.find("meta", attrs={"name": re.compile("^author$", re.I)})
+    if a and a.get("content"):
+        author = clean(a.get("content"))
+    if not author:
+        a = soup.find("meta", attrs={"property": re.compile("article:author", re.I)})
+        if a and a.get("content"):
+            author = clean(a.get("content"))
+    if not author:
+        a = soup.find(attrs={"itemprop": re.compile("^author$", re.I)})
+        if a and a.get("content"):
+            author = clean(a.get("content"))
+
+    p = soup.find("meta", attrs={"name": re.compile("^publisher$", re.I)})
+    if p and p.get("content"):
+        publisher = clean(p.get("content"))
+    if not publisher:
+        p = soup.find("meta", attrs={"property": re.compile("article:publisher", re.I)})
+        if p and p.get("content"):
+            publisher = clean(p.get("content"))
+    if not publisher:
+        p = soup.find(attrs={"itemprop": re.compile("^publisher$", re.I)})
+        if p and p.get("content"):
+            publisher = clean(p.get("content"))
+
+    scripts = soup.find_all("script", attrs={"type": re.compile(r"ld\+json", re.I)})
+    for s in scripts:
+        raw = (s.string or s.get_text(" ") or "").strip()
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except Exception:
+            continue
+        if not author:
+            author = _jsonld_find_name(data, "author")
+        if not publisher:
+            publisher = _jsonld_find_name(data, "publisher")
+        if author and publisher:
+            break
+
+    return (author or "Not available", publisher or "Not available")
+
+def _count_images(html: str) -> int:
+    if not html:
+        return 0
+    soup = BeautifulSoup(html, "html.parser")
+    return len(soup.find_all("img"))
+
 def _count_headers(html: str) -> str:
     if not html:
         return "H1:0 / H2:0 / H3:0 / Total:0"
@@ -2267,10 +2365,14 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
     h_counts = _heading_structure_label(nodes, fr.html or fr.text or "")
     fkw = pick_fkw_only(seo_title, get_first_h1(nodes), h_blob, fr.text or "", manual_fkw=manual_fkw)
     kw_usage = kw_usage_summary(seo_title, get_first_h1(nodes), h_blob, fr.text or "", fkw)
-    _, outbound_links_count = _count_internal_outbound_links(fr.html or "", url or "")
+    internal_links_count, outbound_links_count = _count_internal_outbound_links(fr.html or "", url or "")
+    links_count = internal_links_count + outbound_links_count
+    canonical, robots = _extract_canonical_and_robots(fr.html or "")
+    author, publisher = _extract_author_publisher(fr.html or "")
+    lang = _extract_lang(fr.html or "")
+    images_count = _count_images(fr.html or "")
     media = extract_media_used(fr.html or "")
     schema = _schema_present(fr.html or "")
-    _, robots = _extract_canonical_and_robots(fr.html or "")
     mobile_friendly = is_mobile_friendly(fr.html or "")
 
     return {
@@ -2279,10 +2381,17 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
         "SEO Title": seo_title,
         "Meta Description": meta_desc,
         "URL Slug": slug,
+        "Canonical": canonical,
+        "Robots Tag": robots,
+        "Author": author,
+        "Publisher": publisher,
+        "Lang": lang,
         "Headers": h_counts,
         "FKW Usage": kw_usage,
         "Mobile Friendly": mobile_friendly,
         "Outbound Links Count": str(outbound_links_count),
+        "Links Count": str(links_count),
+        "Images Count": str(images_count),
         "Media (Images/Video/Tables)": media,
         "Schema Present": schema,
         "__fkw": fkw,
@@ -2307,8 +2416,9 @@ def build_seo_analysis_update(
     df = pd.DataFrame(rows)
     cols = [
         "Page","UAE Rank (Mobile)","Mobile Friendly","SEO Title","Meta Description","URL Slug",
+        "Canonical","Robots Tag","Author","Publisher","Lang",
         "Headers","FKW Usage",
-        "Outbound Links Count","Media (Images/Video/Tables)",
+        "Outbound Links Count","Links Count","Images Count","Media (Images/Video/Tables)",
         "Schema Present","__fkw","__url"
     ]
     for c in cols:
@@ -2331,8 +2441,9 @@ def build_seo_analysis_newpost(
     df = pd.DataFrame(rows)
     cols = [
         "Page","UAE Rank (Mobile)","Mobile Friendly","SEO Title","Meta Description","URL Slug",
+        "Canonical","Robots Tag","Author","Publisher","Lang",
         "Headers","FKW Usage",
-        "Outbound Links Count","Media (Images/Video/Tables)",
+        "Outbound Links Count","Links Count","Images Count","Media (Images/Video/Tables)",
         "Schema Present","__fkw","__url"
     ]
     for c in cols:
