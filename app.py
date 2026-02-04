@@ -678,6 +678,7 @@ CONTENT_CLASS_HINTS = {
     "post-body",
     "blog-content",
     "content-body",
+    "blog_post_container",
 }
 
 
@@ -1988,6 +1989,13 @@ def _safe_tag_attr(el, key: str):
         return None
     return None
 
+def _remove_noncontent_elements(soup: BeautifulSoup) -> None:
+    for el in soup.find_all(True):
+        cls = " ".join(_safe_tag_attr(el, "class") or []).lower()
+        el_id = (_safe_tag_attr(el, "id") or "").lower()
+        if any(tok in cls or tok in el_id for tok in NONCONTENT_TOKENS):
+            el.decompose()
+
 def _find_content_root(soup: BeautifulSoup):
     candidates = []
     for tag in soup.find_all(attrs={"itemprop": re.compile(r"articleBody", re.I)}):
@@ -2001,13 +2009,26 @@ def _find_content_root(soup: BeautifulSoup):
             candidates.append(el)
     if not candidates:
         return soup
-    def score(el) -> int:
+
+    def hint_score(el) -> int:
+        score = 0
+        if getattr(el, "name", "") == "article":
+            score += 3
+        cls = " ".join(_safe_tag_attr(el, "class") or []).lower()
+        if any(hint in cls for hint in CONTENT_CLASS_HINTS):
+            score += 2
+        if el.get("itemprop") and re.search(r"articleBody", str(el.get("itemprop")), re.I):
+            score += 3
+        return score
+
+    def word_score(el) -> int:
         try:
             text = clean(el.get_text(" "))
         except Exception:
             return 0
         return len(re.findall(r"\b\w+\b", text))
-    return max(candidates, key=score)
+
+    return max(candidates, key=lambda el: (hint_score(el), word_score(el)))
 
 def _looks_like_heading_line(line: str) -> bool:
     words = re.findall(r"[A-Za-z]{2,}", line)
@@ -2025,11 +2046,7 @@ def content_text_from_html(html: str, include_headings: bool = False) -> str:
     soup = BeautifulSoup(html, "html.parser")
     for t in soup.find_all(list(IGNORE_TAGS) + list(LIST_TAGS)):
         t.decompose()
-    for el in soup.find_all(True):
-        cls = " ".join(_safe_tag_attr(el, "class") or []).lower()
-        el_id = (_safe_tag_attr(el, "id") or "").lower()
-        if any(tok in cls or tok in el_id for tok in NONCONTENT_TOKENS):
-            el.decompose()
+    _remove_noncontent_elements(soup)
     root = _find_content_root(soup)
     chunks = []
     tags = ["p"]
@@ -2250,7 +2267,9 @@ def _heading_counts(nodes: List[dict], html: str) -> Dict[int, int]:
         soup = BeautifulSoup(html, "html.parser")
         for t in soup.find_all(list(IGNORE_TAGS)):
             t.decompose()
-        for tag in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
+        _remove_noncontent_elements(soup)
+        root = _find_content_root(soup)
+        for tag in root.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
             counts[int(tag.name[1])] += 1
         used = True
     if not used and nodes:
@@ -2269,7 +2288,18 @@ def _heading_counts(nodes: List[dict], html: str) -> Dict[int, int]:
 
 def _heading_structure_label(nodes: List[dict], html: str) -> str:
     levels: List[int] = []
-    if nodes:
+    html_levels: List[int] = []
+    if html and "<h" in html.lower():
+        soup = BeautifulSoup(html, "html.parser")
+        for t in soup.find_all(list(IGNORE_TAGS)):
+            t.decompose()
+        _remove_noncontent_elements(soup)
+        root = _find_content_root(soup)
+        for tag in root.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
+            html_levels.append(int(tag.name[1]))
+    if html_levels:
+        levels = html_levels
+    if not levels and nodes:
         for x in flatten(nodes):
             lvl = x.get("level")
             h = clean(x.get("header", ""))
@@ -2277,16 +2307,6 @@ def _heading_structure_label(nodes: List[dict], html: str) -> str:
                 continue
             if isinstance(lvl, int):
                 levels.append(lvl)
-    html_levels: List[int] = []
-    if html and "<h" in html.lower():
-        soup = BeautifulSoup(html, "html.parser")
-        for t in soup.find_all(list(IGNORE_TAGS)):
-            t.decompose()
-        for tag in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
-            html_levels.append(int(tag.name[1]))
-    if html_levels:
-        if (1 in html_levels) or (not levels):
-            levels = html_levels
     has_title_line = bool(re.search(r"(?m)^Title:\s*.+$", html or ""))
     if levels and 1 not in levels and has_title_line:
         levels = [1] + levels
