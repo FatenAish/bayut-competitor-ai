@@ -2314,6 +2314,14 @@ def _heading_structure_label(nodes: List[dict], html: str) -> str:
         levels = [1]
 
     counts = _heading_counts(nodes, html)
+    if sum(counts.values()) == 0 and nodes:
+        for x in flatten(nodes):
+            lvl = x.get("level")
+            h = clean(x.get("header", ""))
+            if not h or is_noise_header(h) or header_is_faq(h):
+                continue
+            if isinstance(lvl, int) and 1 <= lvl <= 6:
+                counts[lvl] += 1
     counts_text = ", ".join(f"H{i}:{counts[i]}" for i in range(1, 7))
     if sum(counts.values()) == 0:
         return f"Weak (no headings; {counts_text})"
