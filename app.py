@@ -2272,6 +2272,10 @@ def _heading_counts(nodes: List[dict], html: str) -> Dict[int, int]:
         for tag in root.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
             counts[int(tag.name[1])] += 1
         used = True
+        if counts[1] == 0:
+            h1_tag = soup.find("h1")
+            if h1_tag and clean(h1_tag.get_text(" ")):
+                counts[1] = 1
     if not used and nodes:
         for x in flatten(nodes):
             lvl = x.get("level")
@@ -2288,6 +2292,7 @@ def _heading_counts(nodes: List[dict], html: str) -> Dict[int, int]:
 
 def _heading_structure_label(nodes: List[dict], html: str) -> str:
     levels: List[int] = []
+    h1_fallback = False
     html_levels: List[int] = []
     if html and "<h" in html.lower():
         soup = BeautifulSoup(html, "html.parser")
@@ -2297,6 +2302,10 @@ def _heading_structure_label(nodes: List[dict], html: str) -> str:
         root = _find_content_root(soup)
         for tag in root.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
             html_levels.append(int(tag.name[1]))
+        if 1 not in html_levels:
+            h1_tag = soup.find("h1")
+            if h1_tag and clean(h1_tag.get_text(" ")):
+                h1_fallback = True
     if html_levels:
         levels = html_levels
     if not levels and nodes:
@@ -2312,6 +2321,8 @@ def _heading_structure_label(nodes: List[dict], html: str) -> str:
         levels = [1] + levels
     if not levels and has_title_line:
         levels = [1]
+    if levels and 1 not in levels and h1_fallback:
+        levels = [1] + levels
 
     counts = _heading_counts(nodes, html)
     if sum(counts.values()) == 0 and nodes:
