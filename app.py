@@ -2242,7 +2242,6 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
         "URL Slug": slug,
         "Headers": h_counts,
         "FKW Usage": kw_usage,
-        "Robots Meta (index/follow)": robots,
         "Mobile Friendly": mobile_friendly,
         "Outbound Links Count": str(outbound_links_count),
         "Media (Images/Video/Tables)": media,
@@ -2269,7 +2268,7 @@ def build_seo_analysis_update(
     df = pd.DataFrame(rows)
     cols = [
         "Page","UAE Rank (Mobile)","Mobile Friendly","SEO Title","Meta Description","URL Slug",
-        "Headers","FKW Usage","Robots Meta (index/follow)",
+        "Headers","FKW Usage",
         "Outbound Links Count","Media (Images/Video/Tables)",
         "Schema Present","__fkw","__url"
     ]
@@ -2293,7 +2292,7 @@ def build_seo_analysis_newpost(
     df = pd.DataFrame(rows)
     cols = [
         "Page","UAE Rank (Mobile)","Mobile Friendly","SEO Title","Meta Description","URL Slug",
-        "Headers","FKW Usage","Robots Meta (index/follow)",
+        "Headers","FKW Usage",
         "Outbound Links Count","Media (Images/Video/Tables)",
         "Schema Present","__fkw","__url"
     ]
