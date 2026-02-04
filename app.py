@@ -2150,12 +2150,21 @@ def _heading_structure_label(nodes: List[dict], html: str) -> str:
                 continue
             if isinstance(lvl, int):
                 levels.append(lvl)
-    if not levels and html:
+    html_levels: List[int] = []
+    if html and "<h" in html.lower():
         soup = BeautifulSoup(html, "html.parser")
         for t in soup.find_all(list(IGNORE_TAGS)):
             t.decompose()
         for tag in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
-            levels.append(int(tag.name[1]))
+            html_levels.append(int(tag.name[1]))
+    if html_levels:
+        if (1 in html_levels) or (not levels):
+            levels = html_levels
+    has_title_line = bool(re.search(r"(?m)^Title:\s*.+$", html or ""))
+    if levels and 1 not in levels and has_title_line:
+        levels = [1] + levels
+    if not levels and has_title_line:
+        levels = [1]
     if not levels:
         return "Weak (no headings)"
     if levels[0] != 1:
