@@ -3356,7 +3356,7 @@ def _styling_layout_label(html: str) -> str:
     if not html:
         return "Not available"
     soup = BeautifulSoup(html, "html.parser")
-    root = soup.find("article") or soup.find("main") or soup
+    root = _find_content_root(soup)
     score = 0
     signals = []
 
@@ -3367,18 +3367,27 @@ def _styling_layout_label(html: str) -> str:
         signals.append("tables")
 
     has_ul = any(len(ul.find_all("li")) >= 2 for ul in root.find_all("ul"))
+    if not has_ul:
+        lines = root.get_text("\n").splitlines()
+        bullet_lines = [ln for ln in lines if re.match(r"^\s*[-*•]\s+\S+", ln)]
+        has_ul = len(bullet_lines) >= 2
     if has_ul:
         score += 1
         signals.append("bullet lists")
 
     has_ol = any(len(ol.find_all("li")) >= 2 for ol in root.find_all("ol"))
     step_heading = bool(re.search(r"\bstep\s*\d+", root.get_text(" "), re.I))
+    if not has_ol:
+        lines = root.get_text("\n").splitlines()
+        num_lines = [ln for ln in lines if re.match(r"^\s*\d+[\).:-]\s+\S+", ln)]
+        has_ol = len(num_lines) >= 2
     has_steps = has_ol or step_heading
     if has_steps:
         score += 1
         signals.append("steps/numbered")
 
     has_infographic = False
+    has_visuals = False
     for img in root.find_all("img"):
         alt = (img.get("alt") or "").lower()
         title = (img.get("title") or "").lower()
@@ -3386,11 +3395,24 @@ def _styling_layout_label(html: str) -> str:
             has_infographic = True
             break
     if not has_infographic:
+        for img in root.find_all("img"):
+            cls = " ".join(img.get("class") or []).lower()
+            width = img.get("width")
+            height = img.get("height")
+            try:
+                w = int(width) if width else 0
+                h = int(height) if height else 0
+            except Exception:
+                w, h = 0, 0
+            if "wp-image" in cls or "attachment" in cls or w >= 200 or h >= 200:
+                has_visuals = True
+                break
+    if not has_infographic:
         for fig in root.find_all("figure"):
             if fig.find("img"):
-                has_infographic = True
+                has_visuals = True
                 break
-    if has_infographic:
+    if has_infographic or has_visuals:
         score += 1
         signals.append("infographic/visuals")
 
