@@ -2365,12 +2365,7 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
     h_counts = _heading_structure_label(nodes, fr.html or fr.text or "")
     fkw = pick_fkw_only(seo_title, get_first_h1(nodes), h_blob, fr.text or "", manual_fkw=manual_fkw)
     kw_usage = kw_usage_summary(seo_title, get_first_h1(nodes), h_blob, fr.text or "", fkw)
-    internal_links_count, outbound_links_count = _count_internal_outbound_links(fr.html or "", url or "")
-    links_count = internal_links_count + outbound_links_count
-    canonical, robots = _extract_canonical_and_robots(fr.html or "")
-    author, publisher = _extract_author_publisher(fr.html or "")
-    lang = _extract_lang(fr.html or "")
-    images_count = _count_images(fr.html or "")
+    _, outbound_links_count = _count_internal_outbound_links(fr.html or "", url or "")
     media = extract_media_used(fr.html or "")
     schema = _schema_present(fr.html or "")
     mobile_friendly = is_mobile_friendly(fr.html or "")
@@ -2381,17 +2376,10 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
         "SEO Title": seo_title,
         "Meta Description": meta_desc,
         "URL Slug": slug,
-        "Canonical": canonical,
-        "Robots Tag": robots,
-        "Author": author,
-        "Publisher": publisher,
-        "Lang": lang,
         "Headers": h_counts,
         "FKW Usage": kw_usage,
         "Mobile Friendly": mobile_friendly,
         "Outbound Links Count": str(outbound_links_count),
-        "Links Count": str(links_count),
-        "Images Count": str(images_count),
         "Media (Images/Video/Tables)": media,
         "Schema Present": schema,
         "__fkw": fkw,
@@ -2416,9 +2404,8 @@ def build_seo_analysis_update(
     df = pd.DataFrame(rows)
     cols = [
         "Page","UAE Rank (Mobile)","Mobile Friendly","SEO Title","Meta Description","URL Slug",
-        "Canonical","Robots Tag","Author","Publisher","Lang",
         "Headers","FKW Usage",
-        "Outbound Links Count","Links Count","Images Count","Media (Images/Video/Tables)",
+        "Outbound Links Count","Media (Images/Video/Tables)",
         "Schema Present","__fkw","__url"
     ]
     for c in cols:
@@ -2441,9 +2428,8 @@ def build_seo_analysis_newpost(
     df = pd.DataFrame(rows)
     cols = [
         "Page","UAE Rank (Mobile)","Mobile Friendly","SEO Title","Meta Description","URL Slug",
-        "Canonical","Robots Tag","Author","Publisher","Lang",
         "Headers","FKW Usage",
-        "Outbound Links Count","Links Count","Images Count","Media (Images/Video/Tables)",
+        "Outbound Links Count","Media (Images/Video/Tables)",
         "Schema Present","__fkw","__url"
     ]
     for c in cols:
