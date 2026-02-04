@@ -2157,12 +2157,12 @@ def _heading_structure_label(nodes: List[dict], html: str) -> str:
         for tag in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
             levels.append(int(tag.name[1]))
     if not levels:
-        return "Weak"
+        return "Weak (no headings)"
     if levels[0] != 1:
-        return "Weak"
+        return "Weak (missing H1)"
     for prev, cur in zip(levels, levels[1:]):
         if cur - prev > 1:
-            return "Weak"
+            return f"Weak (H{prev}→H{cur} jump)"
     return "OK"
 
 from urllib.parse import urljoin
