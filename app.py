@@ -3897,7 +3897,7 @@ def build_content_quality_table_from_seo(
 
     cols = [
         "Page","Last Updated / Modified","Topic Cannibalization","Keyword Stuffing",
-        "Brief Summary","FAQs","References Section",
+        "FAQs","References Section",
         "Internal linking","Misspelling & Wrong Words","Latest Information Score",
         "Outdated / Misleading Info","Styling / Layout",
     ]
@@ -3966,7 +3966,6 @@ def build_content_quality_table_from_seo(
                 kw_stuff_secondary = "Not available"
             kw_stuff = f"Primary: {kw_stuff} | Secondary: {kw_stuff_secondary}"
 
-        brief = _has_brief_summary(nodes, text)
         faqs = "Yes" if (fr and page_has_real_faq(fr, nodes)) else "No"
         refs = _references_section_present(nodes, html)
         internal_quality = _internal_linking_quality(html, page_url, wc_body)
@@ -3980,7 +3979,6 @@ def build_content_quality_table_from_seo(
             "Last Updated / Modified": lm,
             "Topic Cannibalization": topic_cann,
             "Keyword Stuffing": kw_stuff,
-            "Brief Summary": brief,
             "FAQs": faqs,
             "References Section": refs,
             "Internal linking": internal_quality,
@@ -4484,6 +4482,18 @@ if (st.session_state.seo_update_df is not None and not st.session_state.seo_upda
             "Note: Add DATAFORSEO_LOGIN/DATAFORSEO_PASSWORD (or DATAFORSEO_API_LOGIN/DATAFORSEO_API_PASSWORD)"
             " or SERPAPI_API_KEY to enable Topic Cannibalization and AI Visibility."
         )
+
+st.markdown(
+    """
+<div class="footer-note">
+  Download full updated app.py:
+  <a href="https://raw.githubusercontent.com/FatenAish/bayut-competitor-ai/cursor/internal-linking-score-rules-094/app.py" target="_blank" rel="noopener">
+    https://raw.githubusercontent.com/FatenAish/bayut-competitor-ai/cursor/internal-linking-score-rules-094/app.py
+  </a>
+</div>
+""",
+    unsafe_allow_html=True,
+)
 
 st.markdown(
     "<div class='footer-note'>Bayut Competitor Gap Analysis Tool - Built for content optimization</div>",
