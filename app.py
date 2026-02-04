@@ -3913,16 +3913,22 @@ def build_content_quality_table_from_seo(
         content_text = content_text_from_html(html, include_headings=False) if html else ""
         if not content_text:
             content_text = content_text_from_plaintext(text, include_headings=False)
+        if word_count_from_text(content_text) < 120 and text:
+            fallback_text = content_text_from_plaintext(text, include_headings=False)
+            if word_count_from_text(fallback_text) > word_count_from_text(content_text):
+                content_text = fallback_text
+        if word_count_from_text(content_text) < 120 and text:
+            content_text = clean(text)
         wc_text = content_text_from_html(html, include_headings=True) if html else ""
         if not wc_text:
             wc_text = content_text_from_plaintext(text, include_headings=True)
 
-        wc = word_count_from_text(wc_text)
+        wc_body = word_count_from_text(content_text)
         lm = get_last_modified(page_url, html, text)
 
         fkw = clean(manual_query) if clean(manual_query) else str(r.get("__fkw", ""))
         fkw_secondary = clean(manual_query_secondary) if clean(manual_query_secondary) else ""
-        rep_s = compute_kw_repetition(wc_text, fkw) if fkw and fkw != "Not available" else "0"
+        rep_s = compute_kw_repetition(content_text, fkw) if fkw and fkw != "Not available" else "0"
         try:
             rep_i = int(rep_s)
         except Exception:
@@ -3930,12 +3936,12 @@ def build_content_quality_table_from_seo(
 
         is_bayut = page.strip().lower() == "bayut" or domain_of(page_url).endswith("bayut.com")
         topic_cann = _domain_topic_cannibalization_label(page_url, domain_nodes_map)
-        kw_stuff = _kw_stuffing_label(wc, rep_i)
+        kw_stuff = _kw_stuffing_label(wc_body, rep_i)
         if fkw_secondary and fkw_secondary != fkw:
-            rep2_s = compute_kw_repetition(wc_text, fkw_secondary)
+            rep2_s = compute_kw_repetition(content_text, fkw_secondary)
             try:
                 rep2_i = int(rep2_s)
-                kw_stuff_secondary = _kw_stuffing_label(wc, rep2_i)
+                kw_stuff_secondary = _kw_stuffing_label(wc_body, rep2_i)
             except Exception:
                 kw_stuff_secondary = "Not available"
             kw_stuff = f"Primary: {kw_stuff} | Secondary: {kw_stuff_secondary}"
@@ -3943,7 +3949,7 @@ def build_content_quality_table_from_seo(
         brief = _has_brief_summary(nodes, text)
         faqs = "Yes" if (fr and page_has_real_faq(fr, nodes)) else "No"
         refs = _references_section_present(nodes, html)
-        internal_quality = _internal_linking_quality(html, page_url, wc)
+        internal_quality = _internal_linking_quality(html, page_url, wc_body)
         misspell = _misspelling_and_wrong_words(content_text if content_text else text) if is_bayut else "-"
         latest_score = _latest_information_label(lm, text)
         outdated = _outdated_misleading_cell(lm, text)
