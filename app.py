@@ -3044,6 +3044,11 @@ INTENT_STOPWORDS = {
     "the","and","for","with","from","that","this","these","those","your","you","our","their","them","they","into",
     "of","in","on","to","a","an","is","are","was","were","be","as","at","by","or","it","its","about","near","vs",
 }
+PROPERTY_KEYWORDS = {
+    "property","properties","apartment","apartments","villa","villas","rent","rental","renting","sale","buy","buying",
+    "bedroom","bedrooms","studio","penthouse","townhouse","duplex","freehold","leasehold","mortgage","price","prices",
+    "listing","listings","for-sale","for-rent","off-plan","plot","land","invest","investment",
+}
 
 def _intent_tokens_from_html(html: str, page_url: str) -> List[str]:
     soup = BeautifulSoup(html, "html.parser")
@@ -3063,6 +3068,31 @@ def _intent_tokens_from_html(html: str, page_url: str) -> List[str]:
             tokens.append(w)
     return tokens[:12]
 
+def _is_property_related(html: str, page_url: str) -> bool:
+    slug = urlparse(page_url).path.strip("/").replace("-", " ").lower()
+    if any(x in slug for x in ["for-sale", "for-rent", "/s/"]):
+        return True
+    tokens = set(_intent_tokens_from_html(html, page_url))
+    return any(t in PROPERTY_KEYWORDS for t in tokens)
+
+def _is_lpv_or_ltp_link(href: str, base_dom: str) -> Tuple[bool, bool]:
+    if not href:
+        return (False, False)
+    path = href
+    if href.startswith("http"):
+        dom = urlparse(href).netloc.lower().replace("www.", "")
+        if base_dom and dom != base_dom:
+            return (False, False)
+        path = urlparse(href).path
+    if href.startswith("//"):
+        dom = urlparse("http:" + href).netloc.lower().replace("www.", "")
+        if base_dom and dom != base_dom:
+            return (False, False)
+        path = urlparse("http:" + href).path
+    lpv = "/for-sale/property/" in path or "/for-rent/property/" in path
+    ltp = path.startswith("/s/")
+    return (lpv, ltp)
+
 def _internal_linking_quality(html: str, page_url: str, word_count: int) -> str:
     if not html:
         return "Not available"
@@ -3076,6 +3106,9 @@ def _internal_linking_quality(html: str, page_url: str, word_count: int) -> str:
     internal = 0
     contextual = 0
     intent_support = 0
+    has_lpv = False
+    has_ltp = False
+    is_property = _is_property_related(html, page_url)
     intent_tokens = _intent_tokens_from_html(html, page_url)
     for a in links:
         href = (a.get("href") or "").strip()
@@ -3107,6 +3140,10 @@ def _internal_linking_quality(html: str, page_url: str, word_count: int) -> str:
         if intent_tokens and anchor_text:
             if any(tok in anchor_low for tok in intent_tokens):
                 intent_support += 1
+        if is_property:
+            lpv, ltp = _is_lpv_or_ltp_link(href, base_dom)
+            has_lpv = has_lpv or lpv
+            has_ltp = has_ltp or ltp
     if internal == 0:
         return "Weak"
     score = 0
@@ -3117,7 +3154,10 @@ def _internal_linking_quality(html: str, page_url: str, word_count: int) -> str:
     ratio = contextual / internal
     if ratio >= 0.6:
         score += 1
-    if intent_support >= 2 or (intent_support / internal) >= 0.4:
+    intent_ok = intent_support >= 2 or (intent_support / internal) >= 0.4
+    if is_property and (has_lpv or has_ltp):
+        intent_ok = True
+    if intent_ok:
         score += 1
     if score >= 2:
         return "Strong"
@@ -3669,7 +3709,7 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
         rule_lines = [
             "+1 if most links point to relevant internal pages.",
             "+1 if anchor texts are descriptive (not generic).",
-            "+1 if links support the page's main intent.",
+            "+1 if links support the page's main intent (property pages: LPV/LTP links count).",
             "Strong = score >= 2, Medium = score = 1, Weak = score = 0.",
         ]
         rule_html = "".join(f"<li>{html_lib.escape(item)}</li>" for item in rule_lines)
