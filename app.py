@@ -2243,6 +2243,30 @@ def _count_headers(html: str) -> str:
     total = h1 + h2 + h3
     return f"H1:{h1} / H2:{h2} / H3:{h3} / Total:{total}"
 
+def _heading_counts(nodes: List[dict], html: str) -> Dict[int, int]:
+    counts = {i: 0 for i in range(1, 7)}
+    used = False
+    if html and "<h" in html.lower():
+        soup = BeautifulSoup(html, "html.parser")
+        for t in soup.find_all(list(IGNORE_TAGS)):
+            t.decompose()
+        for tag in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
+            counts[int(tag.name[1])] += 1
+        used = True
+    if not used and nodes:
+        for x in flatten(nodes):
+            lvl = x.get("level")
+            h = clean(x.get("header", ""))
+            if not h or is_noise_header(h) or header_is_faq(h):
+                continue
+            if isinstance(lvl, int) and 1 <= lvl <= 6:
+                counts[lvl] += 1
+                used = True
+    has_title_line = bool(re.search(r"(?m)^Title:\s*.+$", html or ""))
+    if not used and has_title_line:
+        counts[1] = 1
+    return counts
+
 def _heading_structure_label(nodes: List[dict], html: str) -> str:
     levels: List[int] = []
     if nodes:
@@ -2268,14 +2292,20 @@ def _heading_structure_label(nodes: List[dict], html: str) -> str:
         levels = [1] + levels
     if not levels and has_title_line:
         levels = [1]
-    if not levels:
-        return "Weak (no headings)"
-    if levels[0] != 1:
-        return "Weak (missing H1)"
+
+    counts = _heading_counts(nodes, html)
+    counts_text = ", ".join(f"H{i}:{counts[i]}" for i in range(1, 7))
+    if sum(counts.values()) == 0:
+        return f"Weak (no headings; {counts_text})"
+    if counts[1] == 0:
+        return f"Weak (missing H1; {counts_text})"
     for prev, cur in zip(levels, levels[1:]):
         if cur - prev > 1:
-            return f"Weak (H{prev}→H{cur} jump)"
-    return "OK"
+            return f"Weak (H{prev}→H{cur} jump; {counts_text})"
+    for lvl in range(2, 6):
+        if counts[lvl] == 0 and any(counts[x] > 0 for x in range(lvl + 1, 7)):
+            return f"Weak (missing H{lvl}; {counts_text})"
+    return f"OK ({counts_text})"
 
 from urllib.parse import urljoin
 
