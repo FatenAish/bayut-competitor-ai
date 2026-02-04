@@ -21,25 +21,6 @@ try:
     WORDFREQ_OK = True
 except Exception:
     WORDFREQ_OK = False
-    import re
-from difflib import SequenceMatcher
-# ADD THIS too (if not already imported)
-from difflib import get_close_matches
-
-try:
-    from wordfreq import zipf_frequency
-    WORDFREQ_OK = True
-except Exception:
-    WORDFREQ_OK = False
-
-# >>> PASTE HELPERS HERE <<<
-TOKEN_RE = ...
-DOMAIN_ALLOW = ...
-...
-def find_misspellings(...):
-    ...
-# <<< END HELPERS >>>
-
 
 def _env_or_secret(key: str, default=None):
     v = os.getenv(key)
@@ -130,7 +111,7 @@ section.main > div.block-container{
   padding-bottom: 2.8rem !important;
 }
 
-/* Decorative background “blobs” like Index.tsx */
+/* Decorative background "blobs" like Index.tsx */
 .bg-decor {
   position: fixed;
   inset: 0;
@@ -534,7 +515,7 @@ div[data-testid="stForm"] form{
 
 
 /* ------------------------------
-   Tables (we’ll render with df.to_html(classes="data-table"))
+   Tables (we'll render with df.to_html(classes="data-table"))
 --------------------------------*/
 table.data-table{
   width:100% !important;
@@ -3916,6 +3897,7 @@ def build_content_quality_table_from_seo(
 
     cols = [
         "Page","Last Updated / Modified","Topic Cannibalization","Keyword Stuffing",
+        "Brief Summary","FAQs","References Section",
         "Internal linking","Misspelling & Wrong Words","Latest Information Score",
         "Outdated / Misleading Info","Styling / Layout",
     ]
@@ -3998,6 +3980,7 @@ def build_content_quality_table_from_seo(
             "Last Updated / Modified": lm,
             "Topic Cannibalization": topic_cann,
             "Keyword Stuffing": kw_stuff,
+            "Brief Summary": brief,
             "FAQs": faqs,
             "References Section": refs,
             "Internal linking": internal_quality,
