@@ -3897,7 +3897,6 @@ def build_content_quality_table_from_seo(
 
     cols = [
         "Page","Last Updated / Modified","Topic Cannibalization","Keyword Stuffing",
-        "Brief Summary","FAQs","References Section",
         "Internal linking","Misspelling & Wrong Words","Latest Information Score",
         "Outdated / Misleading Info","Styling / Layout",
     ]
@@ -3980,7 +3979,6 @@ def build_content_quality_table_from_seo(
             "Last Updated / Modified": lm,
             "Topic Cannibalization": topic_cann,
             "Keyword Stuffing": kw_stuff,
-            "Brief Summary": brief,
             "FAQs": faqs,
             "References Section": refs,
             "Internal linking": internal_quality,
