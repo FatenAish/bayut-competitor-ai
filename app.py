@@ -2399,7 +2399,6 @@ def _count_external_links(html: str, page_url: str) -> int:
 
     external = 0
     base_dom = domain_of(page_url)
-    base_root = ".".join(base_dom.split(".")[-2:]) if base_dom else ""
 
     for a in root.find_all("a", href=True):
         href = (a.get("href") or "").strip()
@@ -2416,9 +2415,7 @@ def _count_external_links(html: str, page_url: str) -> int:
         dom = (p.netloc or "").lower().replace("www.", "")
         if not dom:
             continue
-        if base_root and dom.endswith(base_root):
-            continue
-        if base_dom and dom == base_dom:
+        if base_dom and (dom == base_dom or dom.endswith("." + base_dom)):
             continue
         external += 1
 
@@ -3503,11 +3500,11 @@ def _misspelling_and_wrong_words(text: str) -> str:
             continue
         if w in SPELLCHECK_ALLOWLIST:
             continue
-        if _looks_like_misspelling(w):
-            issues.add(w)
-            continue
         if WORDFREQ_OK:
             if zipf_frequency(w, "en") <= 0:
+                issues.add(w)
+        else:
+            if _looks_like_misspelling(w):
                 issues.add(w)
         if len(issues) >= 200:
             break
