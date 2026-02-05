@@ -3360,7 +3360,11 @@ def _is_lpv_or_ltp_link(href: str, base_dom: str) -> Tuple[bool, bool]:
         if base_dom and dom != base_dom:
             return (False, False)
         path = urlparse("http:" + href).path
-    lpv = "/for-sale/property/" in path or "/for-rent/property/" in path
+    lpv = (
+        "/for-sale/property/" in path
+        or "/for-rent/property/" in path
+        or "/to-rent/property/" in path
+    )
     ltp = path.startswith("/s/")
     return (lpv, ltp)
 
@@ -3377,8 +3381,8 @@ def _internal_linking_quality(html: str, page_url: str, word_count: int) -> str:
     internal = 0
     contextual = 0
     intent_support = 0
-    has_lpv = False
-    has_ltp = False
+    lpv_count = 0
+    ltp_count = 0
     is_property = _is_property_related(html, page_url)
     intent_tokens = _intent_tokens_from_html(html, page_url)
     for a in links:
@@ -3413,8 +3417,10 @@ def _internal_linking_quality(html: str, page_url: str, word_count: int) -> str:
                 intent_support += 1
         if is_property:
             lpv, ltp = _is_lpv_or_ltp_link(href, base_dom)
-            has_lpv = has_lpv or lpv
-            has_ltp = has_ltp or ltp
+            if lpv:
+                lpv_count += 1
+            elif ltp:
+                ltp_count += 1
     if internal == 0:
         return "Weak"
     score = 0
@@ -3426,18 +3432,31 @@ def _internal_linking_quality(html: str, page_url: str, word_count: int) -> str:
     if ratio >= 0.6:
         score += 1
     intent_ok = intent_support >= 2 or (intent_support / internal) >= 0.4
-    if is_property and (has_lpv or has_ltp):
-        intent_ok = True
     if intent_ok:
         score += 1
+    bonus = 0
     if is_property:
-        if has_lpv:
-            score += 1
-        if has_ltp:
-            score += 1
-    if score >= 3:
+        lpv_share = lpv_count / max(internal, 1)
+        ltp_share = ltp_count / max(internal, 1)
+        if lpv_count >= 2 or lpv_share >= 0.15:
+            lpv_bonus = 2
+        elif lpv_count == 1:
+            lpv_bonus = 1
+        else:
+            lpv_bonus = 0
+        if ltp_count >= 2 or ltp_share >= 0.15:
+            ltp_bonus = 2
+        elif ltp_count == 1:
+            ltp_bonus = 1
+        else:
+            ltp_bonus = 0
+        bonus = min(4, lpv_bonus + ltp_bonus)
+        if internal >= 3 and lpv_count == 0 and ltp_count == 0:
+            bonus -= 1
+    final_score = score + bonus
+    if final_score >= 3:
         return "Strong"
-    if score == 2:
+    if final_score == 2:
         return "Medium"
     return "Weak"
 
@@ -4073,11 +4092,15 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
     df = _normalize_internal_linking_quality(df)
     if "Internal linking" in df.columns:
         rule_lines = [
+            "Base score:",
             "+1 if most links point to relevant internal pages.",
             "+1 if anchor texts are descriptive (not generic).",
             "+1 if links support the page's main intent.",
-            "+1 if property-related and has LPV (listing/project) links.",
-            "+1 if property-related and has LTP (long-tail) links.",
+            "Bonus (property-related only):",
+            "LPV bonus: 2 if LPV_count>=2 or LPV_share>=0.15; 1 if LPV_count==1; else 0.",
+            "LTP bonus: 2 if LTP_count>=2 or LTP_share>=0.15; 1 if LTP_count==1; else 0.",
+            "bonus = min(4, LPV_bonus + LTP_bonus); if internal>=3 and LPV=LTP=0 then bonus -= 1.",
+            "Final score = base + bonus.",
             "Property-related = area name, property type, or sale/rent/buy intent.",
             "Strong = score >= 3, Medium = score = 2, Weak = score <= 1.",
         ]
