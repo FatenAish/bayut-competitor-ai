@@ -3430,9 +3430,14 @@ def _internal_linking_quality(html: str, page_url: str, word_count: int) -> str:
         intent_ok = True
     if intent_ok:
         score += 1
-    if score >= 2:
+    if is_property:
+        if has_lpv:
+            score += 1
+        if has_ltp:
+            score += 1
+    if score >= 3:
         return "Strong"
-    if score == 1:
+    if score == 2:
         return "Medium"
     return "Weak"
 
@@ -4070,9 +4075,11 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
         rule_lines = [
             "+1 if most links point to relevant internal pages.",
             "+1 if anchor texts are descriptive (not generic).",
-            "+1 if links support the page's main intent (property pages: LPV/LTP links count).",
+            "+1 if links support the page's main intent.",
+            "+1 if property-related and has LPV (listing/project) links.",
+            "+1 if property-related and has LTP (long-tail) links.",
             "Property-related = area name, property type, or sale/rent/buy intent.",
-            "Strong = score >= 2, Medium = score = 1, Weak = score = 0.",
+            "Strong = score >= 3, Medium = score = 2, Weak = score <= 1.",
         ]
         rule_html = "".join(f"<li>{html_lib.escape(item)}</li>" for item in rule_lines)
         header_html = (
