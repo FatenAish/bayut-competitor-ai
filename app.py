@@ -2387,52 +2387,42 @@ def _heading_structure_label(nodes: List[dict], html: str) -> str:
 
 from urllib.parse import urljoin
 
-def _count_internal_outbound_links(html: str, page_url: str) -> Tuple[int, int]:
+def _count_external_links(html: str, page_url: str) -> int:
     if not html:
-        return (0, 0)
+        return 0
 
     soup = BeautifulSoup(html, "html.parser")
-
-    for t in soup.find_all(["nav","footer","header","aside","script","style","noscript","form"]):
+    for t in soup.find_all(list(IGNORE_TAGS)):
         t.decompose()
+    _remove_noncontent_elements(soup)
+    root = _find_content_root(soup)
 
-    root = soup.find("article") or soup.find("main") or soup
-    for bad in root.find_all(["nav","footer","header","aside"]):
-        bad.decompose()
-
-    body_blocks = root.find_all(["p","li","td","th","blockquote","figcaption"])
-
-    internal = 0
-    outbound = 0
-
+    external = 0
     base_dom = domain_of(page_url)
     base_root = ".".join(base_dom.split(".")[-2:]) if base_dom else ""
 
-    for blk in body_blocks:
-        for a in blk.find_all("a", href=True):
-            href = (a.get("href") or "").strip()
-            if not href:
-                continue
-            hlow = href.lower()
-            if hlow.startswith("#") or hlow.startswith("mailto:") or hlow.startswith("tel:") or hlow.startswith("javascript:"):
-                continue
-            full = urljoin(page_url, href)
-            try:
-                p = urlparse(full)
-            except Exception:
-                continue
-            dom = (p.netloc or "").lower().replace("www.", "")
-            if not dom:
-                internal += 1
-                continue
-            if base_root and dom.endswith(base_root):
-                internal += 1
-            elif dom == base_dom:
-                internal += 1
-            else:
-                outbound += 1
+    for a in root.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        if not href:
+            continue
+        hlow = href.lower()
+        if hlow.startswith("#") or hlow.startswith("mailto:") or hlow.startswith("tel:") or hlow.startswith("javascript:"):
+            continue
+        full = urljoin(page_url, href)
+        try:
+            p = urlparse(full)
+        except Exception:
+            continue
+        dom = (p.netloc or "").lower().replace("www.", "")
+        if not dom:
+            continue
+        if base_root and dom.endswith(base_root):
+            continue
+        if base_dom and dom == base_dom:
+            continue
+        external += 1
 
-    return (internal, outbound)
+    return external
 
 def _schema_present(html: str) -> str:
     if not html:
@@ -2473,7 +2463,7 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
     h_counts = _heading_structure_label(nodes, fr.html or fr.text or "")
     fkw = pick_fkw_only(seo_title, get_first_h1(nodes), h_blob, fr.text or "", manual_fkw=manual_fkw)
     kw_usage = kw_usage_summary(seo_title, get_first_h1(nodes), h_blob, fr.text or "", fkw)
-    _, outbound_links_count = _count_internal_outbound_links(fr.html or "", url or "")
+    outbound_links_count = _count_external_links(fr.html or "", url or "")
     media = extract_media_used(fr.html or "")
     schema = _schema_present(fr.html or "")
     mobile_friendly = is_mobile_friendly(fr.html or "")
@@ -3517,10 +3507,7 @@ def _misspelling_and_wrong_words(text: str) -> str:
             issues.add(w)
             continue
         if WORDFREQ_OK:
-            if zipf_frequency(w, "en") < 2.2:
-                issues.add(w)
-        else:
-            if re.search(r"(.)\1\1", w):
+            if zipf_frequency(w, "en") <= 0:
                 issues.add(w)
         if len(issues) >= 200:
             break
