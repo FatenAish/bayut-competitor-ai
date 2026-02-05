@@ -3457,6 +3457,15 @@ def _internal_linking_quality(html: str, page_url: str, word_count: int) -> str:
     final_score = score + bonus
 
     def pick_reason() -> str:
+        if is_property:
+            if lpv_count == 0 and ltp_count == 0:
+                return "missing LPV/LTP"
+            if lpv_count == 0:
+                return "missing LPV"
+            if ltp_count == 0:
+                return "missing LTP"
+            if bonus <= 1 and (lpv_count or ltp_count):
+                return "low LPV/LTP"
         reasons = []
         if internal < 2:
             reasons.append("few internal links")
@@ -3466,11 +3475,6 @@ def _internal_linking_quality(html: str, page_url: str, word_count: int) -> str:
             reasons.append("generic anchors")
         if not intent_ok:
             reasons.append("intent support low")
-        if is_property:
-            if lpv_count == 0 and ltp_count == 0:
-                reasons.append("no LPV/LTP")
-            elif bonus <= 1 and (lpv_count or ltp_count):
-                reasons.append("low LPV/LTP")
         return reasons[0] if reasons else "needs stronger signals"
 
     if final_score >= 3:
@@ -4118,9 +4122,9 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
                 return s
             low = s.lower()
             if low.startswith("medium"):
-                return "Medium (needs stronger signals)"
+                return "Medium (missing LPV/LTP)"
             if low.startswith("weak"):
-                return "Weak (few strong signals)"
+                return "Weak (missing LPV/LTP)"
             return s
         df["Internal linking"] = df["Internal linking"].apply(_ensure_internal_reason)
         rule_lines = [
