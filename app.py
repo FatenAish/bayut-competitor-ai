@@ -1532,8 +1532,11 @@ def missing_faqs_row(
         return None
 
     def as_question_list(items: List[str]) -> str:
-        lis = "".join(f"<li>{html_lib.escape(clean(i))}</li>" for i in items if clean(i))
-        return f"<ul>{lis}</ul>" if lis else ""
+        cleaned = [clean(i) for i in items if clean(i)]
+        if not cleaned:
+            return ""
+        parts = [f"{idx + 1}-{html_lib.escape(q)}" for idx, q in enumerate(cleaned)]
+        return "<div>" + " ".join(parts) + "</div>"
 
     return {
         "Headers": "FAQs",
@@ -3680,6 +3683,17 @@ def _extract_years(s: str) -> List[int]:
             continue
     return years
 
+def _shorten_outdated_snippet(text: str, limit: int = 180) -> str:
+    if not text:
+        return ""
+    txt = re.sub(r"\s+", " ", text).strip()
+    if len(txt) <= limit:
+        return txt
+    cut = txt[:limit].rsplit(" ", 1)[0]
+    if not cut:
+        cut = txt[:limit]
+    return cut + "..."
+
 def _outdated_snippets(text: str, max_year: int = 2023, limit: int = 6) -> List[str]:
     if not text:
         return []
@@ -3693,7 +3707,7 @@ def _outdated_snippets(text: str, max_year: int = 2023, limit: int = 6) -> List[
             key = norm_header(s)
             if key and key not in seen:
                 seen.add(key)
-                out.append(s)
+                out.append(_shorten_outdated_snippet(s))
         if len(out) >= limit:
             break
     return out
