@@ -3422,14 +3422,15 @@ def _internal_linking_quality(html: str, page_url: str, word_count: int) -> str:
             elif ltp:
                 ltp_count += 1
     if internal == 0:
-        return "Weak"
+        return "Weak (no internal links)"
     score = 0
+    internal_ratio = 0.0
     if total_links > 0:
         internal_ratio = internal / max(total_links, 1)
         if internal_ratio >= 0.6 and internal >= 2:
             score += 1
-    ratio = contextual / internal
-    if ratio >= 0.6:
+    contextual_ratio = contextual / internal
+    if contextual_ratio >= 0.6:
         score += 1
     intent_ok = intent_support >= 2 or (intent_support / internal) >= 0.4
     if intent_ok:
@@ -3454,11 +3455,30 @@ def _internal_linking_quality(html: str, page_url: str, word_count: int) -> str:
         if internal >= 3 and lpv_count == 0 and ltp_count == 0:
             bonus -= 1
     final_score = score + bonus
+
+    def pick_reason() -> str:
+        reasons = []
+        if internal < 2:
+            reasons.append("few internal links")
+        if total_links > 0 and internal_ratio < 0.6:
+            reasons.append("low internal share")
+        if contextual_ratio < 0.6:
+            reasons.append("generic anchors")
+        if not intent_ok:
+            reasons.append("intent support low")
+        if is_property:
+            if lpv_count == 0 and ltp_count == 0:
+                reasons.append("no LPV/LTP")
+            elif bonus <= 1 and (lpv_count or ltp_count):
+                reasons.append("low LPV/LTP")
+        return reasons[0] if reasons else "needs stronger signals"
+
     if final_score >= 3:
         return "Strong"
+    reason = pick_reason()
     if final_score == 2:
-        return "Medium"
-    return "Weak"
+        return f"Medium ({reason})"
+    return f"Weak ({reason})"
 
 def _normalize_internal_linking_quality(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
@@ -4091,18 +4111,24 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
             df = df.drop(columns=drop_cols)
     df = _normalize_internal_linking_quality(df)
     if "Internal linking" in df.columns:
+        df = df.copy()
+        def _ensure_internal_reason(val):
+            s = "" if val is None else str(val).strip()
+            if "(" in s:
+                return s
+            low = s.lower()
+            if low.startswith("medium"):
+                return "Medium (needs stronger signals)"
+            if low.startswith("weak"):
+                return "Weak (few strong signals)"
+            return s
+        df["Internal linking"] = df["Internal linking"].apply(_ensure_internal_reason)
         rule_lines = [
-            "Base score:",
-            "+1 if most links point to relevant internal pages.",
-            "+1 if anchor texts are descriptive (not generic).",
-            "+1 if links support the page's main intent.",
-            "Bonus (property-related only):",
-            "LPV bonus: 2 if LPV_count>=2 or LPV_share>=0.15; 1 if LPV_count==1; else 0.",
-            "LTP bonus: 2 if LTP_count>=2 or LTP_share>=0.15; 1 if LTP_count==1; else 0.",
-            "bonus = min(4, LPV_bonus + LTP_bonus); if internal>=3 and LPV=LTP=0 then bonus -= 1.",
-            "Final score = base + bonus.",
-            "Property-related = area name, property type, or sale/rent/buy intent.",
-            "Strong = score >= 3, Medium = score = 2, Weak = score <= 1.",
+            "Base: +1 internal share, +1 descriptive anchors, +1 intent support.",
+            "Property bonus: LPV/LTP (count>=2 or share>=0.15 → +2; count=1 → +1).",
+            "Bonus cap 4; if internal>=3 and no LPV/LTP, bonus -1.",
+            "Final = base + bonus. Strong≥3, Medium=2, Weak≤1.",
+            "Property-related = area or sale/rent/buy intent.",
         ]
         rule_html = "".join(f"<li>{html_lib.escape(item)}</li>" for item in rule_lines)
         header_html = (
