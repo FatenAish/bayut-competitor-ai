@@ -2474,7 +2474,7 @@ def seo_row_for_page_extended(label: str, url: str, fr: FetchResult, nodes: List
         "Headers": h_counts,
         "FKW Usage": kw_usage,
         "Mobile Friendly": mobile_friendly,
-        "Outbound Links Count": str(outbound_links_count),
+        "External Links": str(outbound_links_count),
         "Media (Images/Video/Tables)": media,
         "Schema Present": schema,
         "__fkw": fkw,
@@ -2500,7 +2500,7 @@ def build_seo_analysis_update(
     cols = [
         "Page","UAE Rank (Mobile)","Mobile Friendly","SEO Title","Meta Description","URL Slug",
         "Headers","FKW Usage",
-        "Outbound Links Count","Media (Images/Video/Tables)",
+        "External Links","Media (Images/Video/Tables)",
         "Schema Present","__fkw","__url"
     ]
     for c in cols:
@@ -2524,7 +2524,7 @@ def build_seo_analysis_newpost(
     cols = [
         "Page","UAE Rank (Mobile)","Mobile Friendly","SEO Title","Meta Description","URL Slug",
         "Headers","FKW Usage",
-        "Outbound Links Count","Media (Images/Video/Tables)",
+        "External Links","Media (Images/Video/Tables)",
         "Schema Present","__fkw","__url"
     ]
     for c in cols:
@@ -3719,30 +3719,16 @@ def _outdated_misleading_cell(last_modified: str, text: str) -> str:
     outdated_items = _outdated_snippets(text, max_year=2023, limit=6)
     if lm_years and max(lm_years) <= 2023:
         outdated_items.insert(0, f"Last modified date: {lm}")
-
-    wrong_items = _strong_claim_snippets(text, limit=6)
-
-    if not outdated_items and not wrong_items:
+    if not outdated_items:
         return "No obvious issues"
 
-    if outdated_items and wrong_items:
-        label = "Outdated + Wrong info"
-    elif outdated_items:
-        label = "Outdated info"
-    else:
-        label = "Wrong info"
+    label = "Outdated info"
 
     def as_list(items: List[str]) -> str:
         lis = "".join(f"<li>{html_lib.escape(i)}</li>" for i in items)
         return f"<ul>{lis}</ul>" if lis else ""
 
-    details = []
-    if outdated_items:
-        details.append("<div><strong>Outdated signals</strong>" + as_list(outdated_items) + "</div>")
-    if wrong_items:
-        details.append("<div><strong>Potentially wrong or unsupported claims</strong>" + as_list(wrong_items) + "</div>")
-
-    detail_html = "".join(details)
+    detail_html = "<div><strong>Outdated signals</strong>" + as_list(outdated_items) + "</div>"
     return (
         "<details class='details-link'>"
         f"<summary><span class='link-like'>{html_lib.escape(label)}</span></summary>"
