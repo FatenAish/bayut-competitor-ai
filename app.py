@@ -1532,14 +1532,37 @@ def missing_faqs_row(
         return None
 
     def as_question_list(items: List[str]) -> str:
-        lis = "".join(f"<li>{html_lib.escape(clean(i))}</li>" for i in items if clean(i))
-        return f"<ul>{lis}</ul>" if lis else ""
+        cleaned = [clean(i) for i in items if clean(i)]
+        if not cleaned:
+            return ""
+        parts = [f"{idx + 1}-{html_lib.escape(q)}" for idx, q in enumerate(cleaned)]
+        return "<div>" + " ".join(parts) + "</div>"
 
     return {
         "Headers": "FAQs",
         "Description": as_question_list(missing_qs),
         "Source": source_link(comp_url),
     }
+
+def _inline_numbered_from_html_list(html_text: str) -> str:
+    if html_text is None:
+        return ""
+    if not isinstance(html_text, str):
+        html_text = str(html_text)
+    if html_text.lower() == "nan":
+        return ""
+    items = re.findall(r"<li>(.*?)</li>", html_text, flags=re.I | re.S)
+    if not items:
+        return html_text
+    cleaned = []
+    for it in items:
+        txt = clean(html_lib.unescape(re.sub(r"<[^>]+>", "", it)))
+        if txt:
+            cleaned.append(txt)
+    if not cleaned:
+        return html_text
+    parts = [f"{idx + 1}-{html_lib.escape(q)}" for idx, q in enumerate(cleaned)]
+    return "<div>" + " ".join(parts) + "</div>"
 
 
 # =====================================================
@@ -3680,6 +3703,17 @@ def _extract_years(s: str) -> List[int]:
             continue
     return years
 
+def _shorten_outdated_snippet(text: str, limit: int = 120) -> str:
+    if not text:
+        return ""
+    txt = re.sub(r"\s+", " ", text).strip()
+    if len(txt) <= limit:
+        return txt
+    cut = txt[:limit].rsplit(" ", 1)[0]
+    if not cut:
+        cut = txt[:limit]
+    return cut + "..."
+
 def _outdated_snippets(text: str, max_year: int = 2023, limit: int = 6) -> List[str]:
     if not text:
         return []
@@ -3693,7 +3727,7 @@ def _outdated_snippets(text: str, max_year: int = 2023, limit: int = 6) -> List[
             key = norm_header(s)
             if key and key not in seen:
                 seen.add(key)
-                out.append(s)
+                out.append(_shorten_outdated_snippet(s))
         if len(out) >= limit:
             break
     return out
@@ -4019,6 +4053,14 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
     if df is None or df.empty:
         st.info("No results to show.")
         return
+    if "Headers" in df.columns and "Description" in df.columns:
+        df = df.copy()
+        def _normalize_faq_desc(row):
+            header = str(row.get("Headers", "")).strip().lower()
+            if header == "faqs":
+                return _inline_numbered_from_html_list(row.get("Description", ""))
+            return row.get("Description", "")
+        df["Description"] = df.apply(_normalize_faq_desc, axis=1)
     if drop_internal_url:
         drop_cols = [c for c in df.columns if c.startswith("__")]
         if drop_cols:
