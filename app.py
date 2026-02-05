@@ -4111,13 +4111,24 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
             df = df.drop(columns=drop_cols)
     df = _normalize_internal_linking_quality(df)
     if "Internal linking" in df.columns:
+        df = df.copy()
+        def _ensure_internal_reason(val):
+            s = "" if val is None else str(val).strip()
+            if "(" in s:
+                return s
+            low = s.lower()
+            if low.startswith("medium"):
+                return "Medium (needs stronger signals)"
+            if low.startswith("weak"):
+                return "Weak (few strong signals)"
+            return s
+        df["Internal linking"] = df["Internal linking"].apply(_ensure_internal_reason)
         rule_lines = [
-            "Base: +1 internal relevance, +1 descriptive anchors, +1 intent support.",
-            "Property bonus: LPV 2/1, LTP 2/1 (count>=2 or share>=0.15 → 2; count=1 → 1).",
-            "Bonus cap 4; if internal>=3 and no LPV/LTP, bonus -= 1.",
-            "Final = base + bonus.",
-            "Property-related = area name, property type, or sale/rent/buy intent.",
-            "Strong >=3, Medium =2, Weak <=1.",
+            "Base: +1 internal share, +1 descriptive anchors, +1 intent support.",
+            "Property bonus: LPV/LTP (count>=2 or share>=0.15 → +2; count=1 → +1).",
+            "Bonus cap 4; if internal>=3 and no LPV/LTP, bonus -1.",
+            "Final = base + bonus. Strong≥3, Medium=2, Weak≤1.",
+            "Property-related = area or sale/rent/buy intent.",
         ]
         rule_html = "".join(f"<li>{html_lib.escape(item)}</li>" for item in rule_lines)
         header_html = (
