@@ -1544,6 +1544,26 @@ def missing_faqs_row(
         "Source": source_link(comp_url),
     }
 
+def _inline_numbered_from_html_list(html_text: str) -> str:
+    if html_text is None:
+        return ""
+    if not isinstance(html_text, str):
+        html_text = str(html_text)
+    if html_text.lower() == "nan":
+        return ""
+    items = re.findall(r"<li>(.*?)</li>", html_text, flags=re.I | re.S)
+    if not items:
+        return html_text
+    cleaned = []
+    for it in items:
+        txt = clean(html_lib.unescape(re.sub(r"<[^>]+>", "", it)))
+        if txt:
+            cleaned.append(txt)
+    if not cleaned:
+        return html_text
+    parts = [f"{idx + 1}-{html_lib.escape(q)}" for idx, q in enumerate(cleaned)]
+    return "<div>" + " ".join(parts) + "</div>"
+
 
 # =====================================================
 # SECTION EXTRACTION (HEADER-FIRST COMPARISON)
@@ -3683,7 +3703,7 @@ def _extract_years(s: str) -> List[int]:
             continue
     return years
 
-def _shorten_outdated_snippet(text: str, limit: int = 180) -> str:
+def _shorten_outdated_snippet(text: str, limit: int = 120) -> str:
     if not text:
         return ""
     txt = re.sub(r"\s+", " ", text).strip()
@@ -4033,6 +4053,14 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
     if df is None or df.empty:
         st.info("No results to show.")
         return
+    if "Headers" in df.columns and "Description" in df.columns:
+        df = df.copy()
+        def _normalize_faq_desc(row):
+            header = str(row.get("Headers", "")).strip().lower()
+            if header == "faqs":
+                return _inline_numbered_from_html_list(row.get("Description", ""))
+            return row.get("Description", "")
+        df["Description"] = df.apply(_normalize_faq_desc, axis=1)
     if drop_internal_url:
         drop_cols = [c for c in df.columns if c.startswith("__")]
         if drop_cols:
