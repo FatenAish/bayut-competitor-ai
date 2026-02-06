@@ -478,6 +478,13 @@ div[data-testid="stForm"] form{
   color: hsl(var(--muted-foreground));
   font-size: 13px;
 }
+.rule-list{
+  margin: 6px 0 0 18px;
+  padding: 0;
+}
+.rule-list li{
+  margin: 2px 0;
+}
 .rule-close{
   position: absolute;
   top: 10px;
@@ -3480,6 +3487,14 @@ def _internal_linking_quality(html: str, page_url: str, word_count: int) -> str:
         return f"Medium ({reason})"
     return f"Weak ({reason})"
 
+INTERNAL_LINKING_RULE_LINES = [
+    "Base: +1 internal share, +1 descriptive anchors, +1 intent support.",
+    "Property bonus: LPV/LTP (count>=2 or share>=0.15 → +2; count=1 → +1).",
+    "Bonus cap 4; if internal>=3 and no LPV/LTP, bonus -1.",
+    "Final = base + bonus. Strong≥3, Medium=2, Weak≤1.",
+    "Property-related = area or sale/rent/buy intent.",
+]
+
 def _normalize_internal_linking_quality(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return df
@@ -4040,6 +4055,115 @@ def build_content_quality_table_from_seo(
 
     return pd.DataFrame(rows, columns=cols)
 
+def _rule_text(text: str) -> str:
+    return html_lib.escape(text or "")
+
+def _rule_list(lines: List[str]) -> str:
+    if not lines:
+        return ""
+    items = "".join(f"<li>{html_lib.escape(item)}</li>" for item in lines)
+    return f"<ul class='rule-list'>{items}</ul>"
+
+def build_content_quality_rules_table() -> pd.DataFrame:
+    rows = [
+        {
+            "Type": "System",
+            "Feature": "Content Quality",
+            "Rule": _rule_text(
+                "Signals are computed per page from fetched HTML/text and heading tree. "
+                "Missing URL -> Not applicable; missing inputs -> Not available."
+            ),
+        },
+        {
+            "Type": "Feature",
+            "Feature": "Last Updated / Modified",
+            "Rule": _rule_text(
+                "Extract from HTML meta/time/schema or visible date text; "
+                "fallback to HTTP Last-Modified header."
+            ),
+        },
+        {
+            "Type": "Feature",
+            "Feature": "Topic Cannibalization",
+            "Rule": _rule_text(
+                "Compare target H1 and top H2 tokens with other pages from the same domain "
+                "in the current analysis. Similarity >= 0.7 counts as overlap; High risk "
+                "if overlaps >= 2, Medium if 1, Low otherwise."
+            ),
+        },
+        {
+            "Type": "Feature",
+            "Feature": "Keyword Stuffing",
+            "Rule": _rule_text(
+                "Focus keyword repeats per 1k words. High >= 18, Moderate >= 10, Low < 10."
+            ),
+        },
+        {
+            "Type": "Feature",
+            "Feature": "Brief Summary",
+            "Rule": _rule_text(
+                "Yes if headings or first ~1400 chars include summary cues "
+                "(tl;dr, key takeaways, summary, at a glance)."
+            ),
+        },
+        {
+            "Type": "Feature",
+            "Feature": "FAQs",
+            "Rule": _rule_text(
+                "Yes if FAQ schema is present or FAQ section headings are detected "
+                "(>= 2 questions or FAQ block)."
+            ),
+        },
+        {
+            "Type": "Feature",
+            "Feature": "References Section",
+            "Rule": _rule_text(
+                "Yes if headings include references/sources/further reading/bibliography, "
+                "or footer/section text mentions references/sources."
+            ),
+        },
+        {
+            "Type": "Feature",
+            "Feature": "Internal linking",
+            "Rule": _rule_list(INTERNAL_LINKING_RULE_LINES),
+        },
+        {
+            "Type": "Feature",
+            "Feature": "Misspelling & Wrong Words",
+            "Rule": _rule_text(
+                "Only evaluated for Bayut pages; others show '-'. Scans up to 4000 words, "
+                "skips capitalized words and allowlist; flags low-frequency words "
+                "(wordfreq) or misspelling heuristics; returns unique count and examples."
+            ),
+        },
+        {
+            "Type": "Feature",
+            "Feature": "Latest Information Score",
+            "Rule": _rule_text(
+                "Likely up-to-date if last modified includes 2025/2026 or text mentions "
+                "year >= 2025; Somewhat recent if latest year mention is 2024; "
+                "otherwise Unclear/Older."
+            ),
+        },
+        {
+            "Type": "Feature",
+            "Feature": "Outdated / Misleading Info",
+            "Rule": _rule_text(
+                "Flags sentences mentioning years <= 2023 or last modified year <= 2023; "
+                "shows snippets; otherwise 'No obvious issues'."
+            ),
+        },
+        {
+            "Type": "Feature",
+            "Feature": "Styling / Layout",
+            "Rule": _rule_text(
+                "Score 1 each for tables, bullet lists, steps/numbered lists, and visuals/infographics. "
+                "Good >= 3, OK = 2, Weak <= 1 (signals are listed)."
+            ),
+        },
+    ]
+    return pd.DataFrame(rows, columns=["Type", "Feature", "Rule"])
+
 
 # =====================================================
 # NEW POST MODE helpers
@@ -4123,14 +4247,7 @@ def render_table(df: pd.DataFrame, drop_internal_url: bool = True):
                 return "Weak (few strong signals)"
             return s
         df["Internal linking"] = df["Internal linking"].apply(_ensure_internal_reason)
-        rule_lines = [
-            "Base: +1 internal share, +1 descriptive anchors, +1 intent support.",
-            "Property bonus: LPV/LTP (count>=2 or share>=0.15 → +2; count=1 → +1).",
-            "Bonus cap 4; if internal>=3 and no LPV/LTP, bonus -1.",
-            "Final = base + bonus. Strong≥3, Medium=2, Weak≤1.",
-            "Property-related = area or sale/rent/buy intent.",
-        ]
-        rule_html = "".join(f"<li>{html_lib.escape(item)}</li>" for item in rule_lines)
+        rule_html = "".join(f"<li>{html_lib.escape(item)}</li>" for item in INTERNAL_LINKING_RULE_LINES)
         header_html = (
             "Internal linking "
             "<input type='checkbox' id='internal-linking-rule-toggle' class='rule-toggle'/>"
@@ -4398,6 +4515,8 @@ if st.session_state.mode == "update":
             st.info("Run analysis to see Content Quality signals.")
         else:
             render_table(st.session_state.cq_update_df, drop_internal_url=True)
+        section_header_pill("Content Quality Rules")
+        render_table(build_content_quality_rules_table(), drop_internal_url=True)
 
         section_header_pill("SEO Analysis")
         if st.session_state.seo_update_df is None or st.session_state.seo_update_df.empty:
@@ -4536,6 +4655,8 @@ else:
             st.info("Generate competitor coverage to see Content Quality signals.")
         else:
             render_table(st.session_state.cq_new_df, drop_internal_url=True)
+        section_header_pill("Content Quality Rules")
+        render_table(build_content_quality_rules_table(), drop_internal_url=True)
 
         section_header_pill("SEO Analysis")
         if st.session_state.seo_new_df is None or st.session_state.seo_new_df.empty:
